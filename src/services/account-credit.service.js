@@ -145,6 +145,41 @@ function promotionIsActive(setting, now = new Date()) {
   return roundCurrency(setting.amount) > 0;
 }
 
+function normalizePromotionSnapshot(setting = {}) {
+  return {
+    is_enabled: Boolean(setting.is_enabled),
+    amount: roundCurrency(setting.amount),
+    start_date: setting.start_date ? String(setting.start_date).slice(0, 10) : null,
+    end_date: setting.end_date ? String(setting.end_date).slice(0, 10) : null
+  };
+}
+
+function buildPromotionChangeDetails(before = null, after = null) {
+  const previous = before ? normalizePromotionSnapshot(before) : null;
+  const next = after ? normalizePromotionSnapshot(after) : null;
+  const changes = [];
+
+  if (!previous && next) {
+    changes.push({ field: 'setting', before: null, after: next });
+  } else if (previous && next) {
+    ['is_enabled', 'amount', 'start_date', 'end_date'].forEach((field) => {
+      if (String(previous[field] ?? '') !== String(next[field] ?? '')) {
+        changes.push({
+          field,
+          before: previous[field],
+          after: next[field]
+        });
+      }
+    });
+  }
+
+  return {
+    before: previous,
+    after: next,
+    changes
+  };
+}
+
 async function getSignupCreditPromotionSetting({ transaction = null } = {}) {
   if (!db.signup_credit_promotion_settings) {
     return {
@@ -196,7 +231,7 @@ async function updateSignupCreditPromotionSetting(payload = {}, { updatedByUserI
     throw error;
   }
 
-  await db.signup_credit_promotion_settings.upsert({
+  const nextSetting = {
     signup_credit_promotion_setting_id: 1,
     is_enabled: Boolean(payload.is_enabled),
     amount,
@@ -204,9 +239,109 @@ async function updateSignupCreditPromotionSetting(payload = {}, { updatedByUserI
     end_date: endDate,
     updated_by_user_id: updatedByUserId || null,
     updated_at: new Date()
+  };
+
+  await db.sequelize.transaction(async (transaction) => {
+    const current = await db.signup_credit_promotion_settings.findByPk(1, { transaction });
+    const currentPlain = current ? toPlain(current) : null;
+    const currentSnapshot = currentPlain ? normalizePromotionSnapshot(currentPlain) : null;
+    const nextSnapshot = normalizePromotionSnapshot(nextSetting);
+    const hasChanges = !currentSnapshot || ['is_enabled', 'amount', 'start_date', 'end_date'].some((field) => {
+      return String(currentSnapshot[field] ?? '') !== String(nextSnapshot[field] ?? '');
+    });
+
+    if (!current) {
+      await db.signup_credit_promotion_settings.create(nextSetting, { transaction });
+    } else if (hasChanges) {
+      await current.update(nextSetting, { transaction });
+    }
+
+    if (hasChanges) {
+      await db.signup_credit_promo_history.create({
+        signup_credit_promotion_setting_id: 1,
+        ...nextSnapshot,
+        changed_by_user_id: updatedByUserId || null,
+        changed_at: nextSetting.updated_at,
+        change_reason: current ? 'update' : 'initial_create',
+        change_details_json: buildPromotionChangeDetails(currentSnapshot, nextSnapshot)
+      }, { transaction });
+    }
   });
 
   return getSignupCreditPromotionSetting();
+}
+
+async function getSignupCreditPromotionHistory(filters = {}) {
+  if (!db.signup_credit_promo_history) {
+    return {
+      rows: [],
+      pagination: { page: 1, limit: 20, total: 0, total_pages: 0 }
+    };
+  }
+
+  const { page, limit, offset } = parsePageParams(filters);
+  const { count, rows } = await db.signup_credit_promo_history.findAndCountAll({
+    include: [
+      {
+        model: db.users.unscoped ? db.users.unscoped() : db.users,
+        as: 'changed_by',
+        required: false,
+        attributes: ['id', 'name', 'email', 'role']
+      }
+    ],
+    order: [['changed_at', 'DESC'], ['signup_credit_promo_history_id', 'DESC']],
+    limit,
+    offset
+  });
+
+  return {
+    rows: rows.map((row) => {
+      const plain = toPlain(row);
+      const details = safeParseJsonObject(plain.change_details_json) || plain.change_details_json || {};
+      const snapshot = normalizePromotionSnapshot(plain);
+      const before = details.before || null;
+      const after = details.after || snapshot;
+      const changes = Array.isArray(details.changes) && details.changes.length > 0
+        ? details.changes
+        : before
+          ? ['is_enabled', 'amount', 'start_date', 'end_date']
+            .filter((field) => String(before[field] ?? '') !== String(after[field] ?? ''))
+            .map((field) => ({
+              field,
+              before: before[field],
+              after: after[field]
+            }))
+          : [
+            {
+              field: 'setting',
+              before: null,
+              after
+            }
+          ];
+      return {
+        signup_credit_promo_history_id: plain.signup_credit_promo_history_id,
+        signup_credit_promotion_setting_id: plain.signup_credit_promotion_setting_id,
+        is_enabled: Boolean(plain.is_enabled),
+        amount: roundCurrency(plain.amount),
+        start_date: plain.start_date || null,
+        end_date: plain.end_date || null,
+        changed_at: plain.changed_at || null,
+        change_reason: plain.change_reason || null,
+        changed_by_user_id: plain.changed_by_user_id || null,
+        changed_by: plain.changed_by ? toPlain(plain.changed_by) : null,
+        change_details_json: details,
+        changes,
+        before,
+        after
+      };
+    }),
+    pagination: {
+      page,
+      limit,
+      total: count,
+      total_pages: Math.ceil(count / limit)
+    }
+  };
 }
 
 async function grantSignupCreditIfEligible({ userId, email = null, createdByUserId = null, transaction = null } = {}) {
@@ -431,6 +566,63 @@ function applyEntryToTotals(totals, entry) {
   return totals;
 }
 
+function compareCreditEntriesAscending(a = {}, b = {}) {
+  const aDate = new Date(a.created_at || 0).getTime() || 0;
+  const bDate = new Date(b.created_at || 0).getTime() || 0;
+  if (aDate !== bDate) return aDate - bDate;
+  return Number(a.account_credit_ledger_id || 0) - Number(b.account_credit_ledger_id || 0);
+}
+
+function calculateCreditTotals(entries = [], options = {}) {
+  const totals = entries.reduce((acc, entry) => {
+    const amount = roundCurrency(entry.amount);
+    const isExpired = entryIsExpired(entry);
+
+    if (entry.entry_type === 'credit_created' && ['pending', 'available', 'expired'].includes(entry.status)) {
+      acc.total_credit_amount = roundCurrency(acc.total_credit_amount + amount);
+      acc.issued_credit_amount = roundCurrency((acc.issued_credit_amount || 0) + amount);
+      if (entry.status === 'pending') acc.pending_credit_amount = roundCurrency(acc.pending_credit_amount + amount);
+      if (entry.status === 'expired' || isExpired) {
+        acc.expired_credit_amount = roundCurrency((acc.expired_credit_amount || 0) + amount);
+      }
+    }
+
+    if (entry.entry_type === 'credit_used') {
+      acc.used_credit_amount = roundCurrency(acc.used_credit_amount + amount);
+    }
+
+    if (entry.entry_type === 'credit_reversed') {
+      acc.reversed_credit_amount = roundCurrency(acc.reversed_credit_amount + amount);
+    }
+
+    return acc;
+  }, emptyCreditTotals());
+
+  totals.available_credit_amount = [...entries]
+    .sort(compareCreditEntriesAscending)
+    .reduce((balance, entry) => {
+      const amount = roundCurrency(entry.amount);
+      const isExpired = entryIsExpired(entry);
+
+      if (
+        entry.entry_type === 'credit_created' &&
+        entry.status === 'available' &&
+        !isExpired &&
+        creditMatchesUsageRestrictions(entry, options.usageContext || null)
+      ) {
+        return roundCurrency(balance + amount);
+      }
+
+      if (entry.entry_type === 'credit_used' || entry.entry_type === 'credit_reversed') {
+        return Math.max(0, roundCurrency(balance - amount));
+      }
+
+      return balance;
+    }, 0);
+
+  return finalizeCreditTotals(totals);
+}
+
 function finalizeCreditTotals(totals = emptyCreditTotals()) {
   return {
     ...totals,
@@ -463,6 +655,12 @@ function buildLedgerIncludes() {
       as: 'user',
       required: false,
       attributes: ['id', 'name', 'email', 'user_type', 'role']
+    },
+    {
+      model: db.users,
+      as: 'created_by',
+      required: false,
+      attributes: ['id', 'name', 'email']
     },
     {
       model: db.stream_project_booking,
@@ -545,6 +743,9 @@ function formatLedgerEntry(row) {
     restrictions: safeParseJsonObject(entry.restrictions_json),
     restrictions_json: entry.restrictions_json || null,
     created_by_admin: Boolean(entry.created_by_admin),
+    added_by_name: entry.entry_type === 'credit_created'
+      ? (entry.created_by?.name || entry.created_by?.email || null)
+      : null,
     notification_status: entry.notification_status || 'not_requested',
     notes: entry.notes || null,
     reason: entry.notes || null
@@ -754,53 +955,9 @@ async function getAccountCreditBalance({
     };
   }
 
-  const totals = entries.reduce((acc, entry) => {
-    const amount = roundCurrency(entry.amount);
-
-    const isExpired = entryIsExpired(entry);
-    const usableForContext = creditMatchesUsageRestrictions(entry, usageContext);
-
-    if (entry.entry_type === 'credit_created' && ['pending', 'available', 'expired'].includes(entry.status)) {
-      acc.total_credit_amount = roundCurrency(acc.total_credit_amount + amount);
-
-      if (entry.status === 'pending') {
-        acc.pending_credit_amount = roundCurrency(acc.pending_credit_amount + amount);
-      }
-
-      if (entry.status === 'available' && !isExpired && usableForContext) {
-        acc.available_credit_amount = roundCurrency(acc.available_credit_amount + amount);
-      }
-
-      if (entry.status === 'expired' || isExpired) {
-        acc.expired_credit_amount = roundCurrency((acc.expired_credit_amount || 0) + amount);
-      }
-    }
-
-    if (entry.entry_type === 'credit_used') {
-      acc.used_credit_amount = roundCurrency(acc.used_credit_amount + amount);
-      acc.available_credit_amount = roundCurrency(acc.available_credit_amount - amount);
-    }
-
-    if (entry.entry_type === 'credit_reversed') {
-      acc.reversed_credit_amount = roundCurrency(acc.reversed_credit_amount + amount);
-      acc.available_credit_amount = roundCurrency(acc.available_credit_amount - amount);
-    }
-
-    return acc;
-  }, {
-    total_credit_amount: 0,
-    pending_credit_amount: 0,
-    used_credit_amount: 0,
-    reversed_credit_amount: 0,
-    expired_credit_amount: 0,
-    available_credit_amount: 0
-  });
-
-  if (totals.available_credit_amount < 0) {
-    totals.available_credit_amount = 0;
-  }
-
-  const latestEntry = entries[0];
+  const plainEntries = entries.map(toPlain);
+  const totals = calculateCreditTotals(plainEntries, { usageContext });
+  const latestEntry = plainEntries[0];
 
   return {
     ...totals,
@@ -1663,10 +1820,7 @@ async function getClientCreditDashboard({
   ]);
 
   const plainRows = (allRows || []).map(toPlain);
-  const totals = finalizeCreditTotals(plainRows.reduce((acc, row) => {
-    applyEntryToTotals(acc, row);
-    return acc;
-  }, emptyCreditTotals()));
+  const totals = calculateCreditTotals(plainRows);
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1826,20 +1980,20 @@ async function getAdminCreditSummary(filters = {}) {
     order: [['created_at', 'DESC'], ['account_credit_ledger_id', 'DESC']]
   });
 
-  const globalTotals = emptyCreditTotals();
   const identityTotals = new Map();
   const resolveCreditIdentity = await buildCreditIdentityResolver(entries);
 
   entries.forEach((row) => {
     const entry = toPlain(row);
-    applyEntryToTotals(globalTotals, entry);
     const { key } = resolveCreditIdentity(entry);
     if (!key) return;
-    if (!identityTotals.has(key)) identityTotals.set(key, emptyCreditTotals());
-    applyEntryToTotals(identityTotals.get(key), entry);
+    if (!identityTotals.has(key)) identityTotals.set(key, []);
+    identityTotals.get(key).push(entry);
   });
 
-  const finalizedIdentityTotals = [...identityTotals.values()].map(finalizeCreditTotals);
+  const finalizedIdentityTotals = [...identityTotals.values()].map((identityEntries) =>
+    calculateCreditTotals(identityEntries),
+  );
   const dashboardTotals = finalizedIdentityTotals.reduce((acc, totals) => ({
     available_credit_amount: roundCurrency(acc.available_credit_amount + totals.available_credit_amount),
     used_credit_amount: roundCurrency(acc.used_credit_amount + totals.used_credit_amount),
@@ -1899,14 +2053,14 @@ async function getAdminCreditUsers(filters = {}) {
         guest_email: identityEmail,
         name: identityUser?.name || entry.user?.name || entry.sales_quote?.client_name || null,
         email: identityUser?.email || identityEmail || entry.user?.email || entry.guest_email || entry.sales_quote?.client_email || null,
-        totals: emptyCreditTotals(),
+        entries: [],
         last_activity_at: entry.created_at || null,
         last_activity: null
       });
     }
 
     const item = usersMap.get(key);
-    applyEntryToTotals(item.totals, entry);
+    item.entries.push(entry);
     if (!item.last_activity || new Date(entry.created_at) > new Date(item.last_activity_at || 0)) {
       item.last_activity_at = entry.created_at || null;
       item.last_activity = formatLedgerEntry(entry);
@@ -1914,7 +2068,7 @@ async function getAdminCreditUsers(filters = {}) {
   });
 
   let rows = [...usersMap.values()].map((item) => {
-    const totals = finalizeCreditTotals(item.totals);
+    const totals = calculateCreditTotals(item.entries);
     return {
       identity_key: item.identity_key,
       user_segment: item.user_segment,
@@ -2056,5 +2210,6 @@ module.exports = {
   getAdminCreditTransactions,
   getSignupCreditPromotionSetting,
   updateSignupCreditPromotionSetting,
+  getSignupCreditPromotionHistory,
   grantSignupCreditIfEligible
 };

@@ -132,6 +132,14 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 0
     },
+    application_submitted_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    application_submission_email_sent_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     created_from: {
       type: DataTypes.INTEGER,
       allowNull: true

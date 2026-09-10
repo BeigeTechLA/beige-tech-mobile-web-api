@@ -46,6 +46,21 @@ exports.listTransactions = async (req, res) => {
   }
 };
 
+exports.exportTransactions = async (req, res) => {
+  try {
+    const csv = await financeService.exportTransactionsCsv(req.query);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="transactions-export.csv"');
+    return res.status(200).send(csv);
+  } catch (error) {
+    console.error('Export transactions error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to export transactions'
+    });
+  }
+};
+
 exports.listShootBreakdowns = async (req, res) => {
   try {
     const data = await financeService.listShootBreakdowns(req.query);
@@ -363,6 +378,19 @@ exports.updateSignupCreditPromotionSetting = async (req, res) => {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to update signup credit promotion setting'
+    });
+  }
+};
+
+exports.getSignupCreditPromotionHistory = async (req, res) => {
+  try {
+    const data = await accountCreditService.getSignupCreditPromotionHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get signup credit promotion history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch signup credit promotion history'
     });
   }
 };

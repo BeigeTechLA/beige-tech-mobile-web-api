@@ -11,7 +11,8 @@ const {
   sendTaskAssignmentEmail,
   sendCPNewBookingRequestEmail,
   sendPostProductionAssignmentEmail,
-  sendOnboardingFormCriticalEmail
+  sendOnboardingFormCriticalEmail,
+  sendCreativePartnerProfileReminderEmail
 } = require('../utils/emailService');
 const pushNotificationService = require('../services/push-notification.service');
 const { Parser } = require('json2csv');
@@ -49,6 +50,7 @@ const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
 const userExportService = require('../services/user-export.service');
+const detailsPendingCpService = require('../services/details-pending-cp.service');
 const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
@@ -87,7 +89,7 @@ const getAuthAdminUser = async (req) => {
       {
         model: db.user_type,
         as: 'userType',
-        attributes: ['user_role'],
+        attributes: ['user_role', 'is_internal_member'],
         required: false
       }
     ]
@@ -104,7 +106,7 @@ const findAdminProfileById = async (id) => users.findOne({
     {
       model: db.user_type,
       as: 'userType',
-      attributes: ['user_role'],
+      attributes: ['user_role', 'is_internal_member'],
       required: false
     }
   ]
@@ -122,7 +124,7 @@ const ensureAuthenticatedAdmin = async (req, res) => {
     return null;
   }
 
-  if (!isAdminProfileRole(authRole)) {
+  if (!isAdminProfileRole(authRole) && Number(authUser.userType?.is_internal_member || 0) !== 1) {
     res.status(403).json({
       success: false,
       message: 'Admin access required'
@@ -135,7 +137,7 @@ const ensureAuthenticatedAdmin = async (req, res) => {
 
 const isUserAdminProfile = (user) => {
   const role = user?.userType?.user_role || user?.role;
-  return isAdminProfileRole(role);
+  return isAdminProfileRole(role) || Number(user?.userType?.is_internal_member || 0) === 1;
 };
 
 exports.getAdminProfile = async (req, res) => {
@@ -605,16 +607,73 @@ const formatProjectEventTypeLabels = (eventType, allEventMasterTypes = [], lineI
   }
 
   const serviceText = (lineItems || [])
-    .filter((item) => String(item?.section_type || '').toLowerCase() === 'service')
-    .map((item) => `${item?.item_name || ''} ${item?.catalog_item?.name || ''}`)
+    .filter((item) => ['service', 'custom'].includes(String(item?.section_type || '').toLowerCase()))
+    .map((item) => `${item?.item_name || ''} ${item?.catalog_item?.name || ''} ${item?.catalog_name || ''} ${item?.description || ''}`)
     .join(' ')
     .toLowerCase();
 
   const inferredTypes = [];
-  if (serviceText.includes('video')) inferredTypes.push('Videography');
-  if (serviceText.includes('photo')) inferredTypes.push('Photography');
+  if (/\b(video|videography|camera|cinematography|cinematographer|operator|b-roll|footage)\b/.test(serviceText)) {
+    inferredTypes.push('Videography');
+  }
+  if (/\b(photo|photography|photographer|portrait|headshot)\b/.test(serviceText)) {
+    inferredTypes.push('Photography');
+  }
+  if (/\b(edit|editing|editor|post-production|post production|reel|highlight)\b/.test(serviceText)) {
+    inferredTypes.push(serviceText.includes('photo') ? 'Photo Editing' : 'Video Editing');
+  }
 
   return Array.from(new Set(inferredTypes)).join(', ');
+};
+
+const fetchSalesQuoteLineItemsByBookingId = async (bookingIds = []) => {
+  const normalizedBookingIds = Array.from(new Set(
+    bookingIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  ));
+
+  if (!normalizedBookingIds.length) return new Map();
+
+  const rows = await db.sequelize.query(
+    `
+      SELECT
+        linked_leads.booking_id,
+        sq.sales_quote_id,
+        sq.video_shoot_type,
+        li.section_type,
+        li.item_name,
+        li.description,
+        qci.name AS catalog_name
+      FROM (
+        SELECT booking_id, lead_id FROM sales_leads
+        WHERE is_active = 1 AND booking_id IN (:bookingIds)
+        UNION ALL
+        SELECT booking_id, lead_id FROM client_leads
+        WHERE is_active = 1 AND booking_id IN (:bookingIds)
+      ) AS linked_leads
+      INNER JOIN sales_quotes sq
+        ON sq.lead_id = linked_leads.lead_id
+      INNER JOIN sales_quote_line_items li
+        ON li.sales_quote_id = sq.sales_quote_id
+       AND li.is_active = 1
+      LEFT JOIN quote_catalog_items qci
+        ON qci.catalog_item_id = li.catalog_item_id
+      ORDER BY linked_leads.booking_id, sq.sales_quote_id DESC, li.sort_order ASC, li.line_item_id ASC
+    `,
+    {
+      replacements: { bookingIds: normalizedBookingIds },
+      type: QueryTypes.SELECT,
+    }
+  );
+
+  return rows.reduce((map, row) => {
+    const bookingId = Number(row.booking_id);
+    if (!Number.isInteger(bookingId) || bookingId <= 0) return map;
+    if (!map.has(bookingId)) map.set(bookingId, []);
+    map.get(bookingId).push(row);
+    return map;
+  }, new Map());
 };
 
 const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
@@ -2266,6 +2325,12 @@ exports.getProjectDetails = async (req, res) => {
           model: db.stream_project_booking_days,
           as: "booking_days",
           required: false
+        },
+        {
+          model: users,
+          as: "updated_by_user",
+          required: false,
+          attributes: ["id", "name", "email"]
         }
       ]
     });
@@ -2876,6 +2941,8 @@ exports.updateProjectDateLocation = async (req, res) => {
       duration_hours,
       time_zone
     } = req.body || {};
+    const authUser = await getAuthAdminUser(req);
+    const updatedByUserId = Number(authUser?.id || req.user?.userId || req.user?.id || req.userId || 0);
 
     if (!project_id) {
       return res.status(400).json({ error: true, message: 'Project ID is required' });
@@ -3052,6 +3119,9 @@ exports.updateProjectDateLocation = async (req, res) => {
     }
 
     if (Object.keys(updatePayload).length > 0) {
+      if (Number.isInteger(updatedByUserId) && updatedByUserId > 0) {
+        updatePayload.updated_by = updatedByUserId;
+      }
       await project.update(updatePayload, { transaction });
     }
 
@@ -3109,6 +3179,10 @@ exports.updateProjectDateLocation = async (req, res) => {
       message: 'Project date/location updated successfully',
       data: {
         project_id: refreshedProject.stream_project_booking_id,
+        updated_by: refreshedProject.updated_by || null,
+        updated_by_user: authUser
+          ? formatAdminProfile(authUser)
+          : refreshedProject.updated_by_user || null,
         booking_type: resolvedBookingType,
         event_date: refreshedProject.event_date,
         start_time: refreshedProject.start_time,
@@ -3835,8 +3909,13 @@ exports.updateProjectName = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only, board_view } = req.query;
     const today = new Date();
+    const isBoardView = String(board_view || '').toLowerCase() === 'true' || String(board_view) === '1';
+    if (isBoardView) {
+      limit = undefined;
+      page = undefined;
+    }
     const noPagination = !limit && !page;
     const hasPostFetchFilters = Boolean(
       (cp_assignment && cp_assignment !== 'all') ||
@@ -3885,6 +3964,8 @@ exports.getAllProjectDetails = async (req, res) => {
       ]};
     } else if (rangeLower === 'today') {
       dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'));
+      } else if (rangeLower === 'tbd') {
+      dateFilter = { event_date: { [Sequelize.Op.is]: null } }; 
     } else if (rangeLower === 'upcoming') {
       dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gte]: Sequelize.fn('CURDATE') });
     } else if (rangeLower === 'next_7_days') {
@@ -3950,7 +4031,7 @@ exports.getAllProjectDetails = async (req, res) => {
           Sequelize.fn('CURDATE')
         ]
       });
-    } else if (rangeLower === 'all' || !rangeLower || rangeLower === 'custom') {
+    } else {
       dateFilter = {};
     }
 
@@ -4129,7 +4210,7 @@ exports.getAllProjectDetails = async (req, res) => {
         },
         revision: { status: 3 },
         completed: { status: 4 },
-        assetsdelivered: { status: 4 },
+        assetsdelivered: { status: 4 }, 
         cancelled: {
           [Sequelize.Op.or]: [
             { status: 5 },
@@ -4232,6 +4313,31 @@ exports.getAllProjectDetails = async (req, res) => {
     const shootNotesCountMap = await countActiveShootNotesByBookingIds(
       projectRows.map((project) => project.stream_project_booking_id)
     );
+    const projectBookingIds = projectRows
+      .map((project) => Number(project.stream_project_booking_id))
+      .filter((bookingId) => Number.isInteger(bookingId) && bookingId > 0);
+    const [salesLeadRows, clientLeadRows] = await Promise.all([
+      sales_leads.findAll({
+        where: { booking_id: { [Op.in]: projectBookingIds } },
+        attributes: ['booking_id', 'lead_source', 'client_name'],
+        raw: true,
+      }),
+      client_leads.findAll({
+        where: { booking_id: { [Op.in]: projectBookingIds } },
+        attributes: ['booking_id', 'lead_source', 'client_name'],
+        raw: true,
+      }),
+    ]);
+    const leadByBookingId = new Map();
+    [...clientLeadRows, ...salesLeadRows].forEach((lead) => {
+      const bookingId = Number(lead.booking_id);
+      if (Number.isInteger(bookingId) && bookingId > 0) {
+        leadByBookingId.set(bookingId, lead);
+      }
+    });
+    const salesQuoteLineItemsByBookingId = await fetchSalesQuoteLineItemsByBookingId(
+      projectRows.map((project) => project.stream_project_booking_id)
+    );
 
     let projectDetails = await Promise.all(projectRows.map(async (project) => {
       const shootNotesCount = shootNotesCountMap.get(Number(project.stream_project_booking_id)) || 0;
@@ -4331,7 +4437,11 @@ exports.getAllProjectDetails = async (req, res) => {
         if (masterMatch) return masterMatch.event_type_name;
         const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
         return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
-      });
+      }).filter(Boolean);
+      const quoteLineItems = salesQuoteLineItemsByBookingId.get(Number(project.stream_project_booking_id)) || [];
+      const eventTypeLabels = formattedTypes.length
+        ? Array.from(new Set(formattedTypes)).join(', ')
+        : formatProjectEventTypeLabels(project.event_type, allEventMasterTypes, quoteLineItems);
 
       const timelineStatus = bookingTimelineService.getTimelineStage(project);
       const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
@@ -4339,10 +4449,13 @@ exports.getAllProjectDetails = async (req, res) => {
         ...project.toJSON(),
         booking_days: bookingDaysData
       };
+      const linkedLead = leadByBookingId.get(Number(project.stream_project_booking_id));
 
       return {
         project: {
           ...projectJson,
+          lead_source: linkedLead?.lead_source || null,
+          client_name: linkedLead?.client_name || null,
           total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
           paid_amount: totalPaidAmount,
@@ -4351,7 +4464,7 @@ exports.getAllProjectDetails = async (req, res) => {
           credit_used_amount: summaryCreditUsedAmount || 0,
           payment_status: paymentStatus,
           notes_count: shootNotesCount,
-          event_type_labels: formattedTypes.join(', '),
+          event_type_labels: eventTypeLabels,
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
           needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
@@ -4491,6 +4604,12 @@ exports.getAllProjectDetails = async (req, res) => {
     console.error('Error fetching project details:', error);
     return res.status(500).json({ error: true, message: 'Internal server error' });
   }
+};
+
+// Board/Kanban view - no pagination, saare matching records ek j call ma
+exports.getAllProjectDetailsBoard = async (req, res) => {
+  req.query = { ...req.query, board_view: 'true', limit: undefined, page: undefined };
+  return exports.getAllProjectDetails(req, res);
 };
 
 exports.getUpcomingEvents = async (req, res) => {
@@ -6134,21 +6253,18 @@ exports.getCrewMembers = async (req, res) => {
             status,
             range,
             start_date,
-            end_date
+            end_date,
+            fetch_all
         } = payload;
 
         page = parseInt(page);
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
+        const shouldFetchAll = String(fetch_all).toLowerCase() === 'true' || String(fetch_all) === '1';
 
         let conditions = [
             { is_active: 1 },
-            {
-                [Sequelize.Op.or]: [
-                    { is_crew_verified: 1 },
-                    { is_registration_complete: 1 }
-                ]
-            }
+            { application_submitted_at: { [Sequelize.Op.ne]: null } }
         ];
 
         if (status) {
@@ -6224,8 +6340,7 @@ exports.getCrewMembers = async (req, res) => {
                     ['is_beige_member', 'ASC'],
                     ['crew_member_id', 'DESC'],
                 ],
-                limit,
-                offset,
+                ...(shouldFetchAll ? {} : { limit, offset }),
             }),
             crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
         ]);
@@ -6295,8 +6410,8 @@ exports.getCrewMembers = async (req, res) => {
             pagination: {
                 total_records: count,
                 current_page: page,
-                per_page: limit,
-                total_pages: Math.ceil(count / limit),
+                per_page: shouldFetchAll ? count : limit,
+                total_pages: shouldFetchAll ? 1 : Math.ceil(count / limit),
             },
             data: processedMembers,
         });
@@ -6322,7 +6437,7 @@ exports.exportCrewMembersCsv = async (req, res) => {
         is_active: 1
       },
       {
-        is_registration_complete: 1
+        application_submitted_at: { [Op.ne]: null }
       }
     ];
 
@@ -6853,17 +6968,17 @@ exports.verifyCrewMember = async (req, res) => {
 
     const member = await crew_members.findOne({
       where: { crew_member_id },
-      attributes: ['crew_member_id', 'is_registration_complete']
+      attributes: ['crew_member_id', 'application_submitted_at']
     });
 
     if (!member) {
       return res.status(404).json({ error: true, message: "Crew member not found." });
     }
 
-    if (Number(member.is_registration_complete) !== 1) {
+    if (!member.application_submitted_at) {
       return res.status(400).json({
         error: true,
-        message: "Creator onboarding is incomplete. Complete all required fields before approval review.",
+        message: "Creator application has not been submitted for approval review yet.",
       });
     }
 
@@ -7521,11 +7636,16 @@ exports.updateCrewMemberProfile = async (req, res) => {
       is_crew_verified
     } = req.body;
 
+    const normalizedPhoneNumber =
+      phone_number === undefined
+        ? undefined
+        : String(phone_number).trim() || null;
+
     const updateData = {};
     assignIfProvided(updateData, 'first_name', first_name);
     assignIfProvided(updateData, 'last_name', last_name);
     assignIfProvided(updateData, 'email', email);
-    assignIfProvided(updateData, 'phone_number', phone_number);
+    assignIfProvided(updateData, 'phone_number', normalizedPhoneNumber);
     assignIfProvided(updateData, 'location', location);
     assignIfProvided(updateData, 'latitude', latitude ?? lat);
     assignIfProvided(updateData, 'longitude', longitude ?? lng);
@@ -7563,28 +7683,64 @@ exports.updateCrewMemberProfile = async (req, res) => {
         : [equipmentOwnershipArr].filter(Boolean);
 
       if (equipmentOwnershipArr.length > 0) {
-        const equipmentNames = await equipment.findAll({
+        const equipmentValues = equipmentOwnershipArr
+          .map((item) => String(item).trim())
+          .filter(Boolean);
+        const numericEquipmentIds = equipmentValues
+          .map((item) => Number(item))
+          .filter((item) => Number.isInteger(item) && item > 0);
+        const textEquipmentNames = equipmentValues
+          .filter((item) => !numericEquipmentIds.includes(Number(item)));
+
+        const equipmentRows = await equipment.findAll({
           where: {
-            equipment_name: { [Sequelize.Op.in]: equipmentOwnershipArr }
+            [Sequelize.Op.or]: [
+              ...(numericEquipmentIds.length > 0
+                ? [{ equipment_id: { [Sequelize.Op.in]: numericEquipmentIds } }]
+                : []),
+              ...(textEquipmentNames.length > 0
+                ? [{ equipment_name: { [Sequelize.Op.in]: textEquipmentNames } }]
+                : []),
+            ],
           },
-          attributes: ['equipment_name'],
+          attributes: ['equipment_id', 'equipment_name'],
           raw: true
         });
 
-        const validEquipmentNames = equipmentNames.map(item => item.equipment_name);
-        const invalidEquipmentNames = equipmentOwnershipArr.filter(name => !validEquipmentNames.includes(name));
+        const validEquipmentIds = new Set(equipmentRows.map(item => Number(item.equipment_id)));
+        const validEquipmentNames = new Set(equipmentRows.map(item => item.equipment_name));
+        const invalidEquipmentValues = equipmentValues.filter((value) => {
+          const numericValue = Number(value);
+          if (Number.isInteger(numericValue) && numericValue > 0) {
+            return !validEquipmentIds.has(numericValue);
+          }
 
-        if (invalidEquipmentNames.length > 0) {
+          return !validEquipmentNames.has(value);
+        });
+
+        if (invalidEquipmentValues.length > 0) {
           return res.status(constants.BAD_REQUEST.code).json({
             error: true,
             code: constants.BAD_REQUEST.code,
-            message: `The following equipment names are invalid: ${invalidEquipmentNames.join(', ')}`,
+            message: `The following equipment values are invalid: ${invalidEquipmentValues.join(', ')}`,
             data: null
           });
         }
+
+        equipmentOwnershipArr = equipmentValues
+          .map((value) => {
+            const numericValue = Number(value);
+            if (Number.isInteger(numericValue) && numericValue > 0) {
+              return numericValue;
+            }
+
+            const matchedEquipment = equipmentRows.find((item) => item.equipment_name === value);
+            return matchedEquipment ? Number(matchedEquipment.equipment_id) : null;
+          })
+          .filter((item) => Number.isInteger(item) && item > 0);
       }
 
-      updateData.equipment_ownership = JSON.stringify(equipmentOwnershipArr);
+      updateData.equipment_ownership = JSON.stringify([...new Set(equipmentOwnershipArr)]);
     }
 
     if (Object.keys(updateData).length === 0) {
@@ -7607,7 +7763,7 @@ exports.updateCrewMemberProfile = async (req, res) => {
           .trim();
       }
       assignIfProvided(userUpdateData, 'email', email);
-      assignIfProvided(userUpdateData, 'phone_number', phone_number);
+      assignIfProvided(userUpdateData, 'phone_number', normalizedPhoneNumber);
       assignIfProvided(userUpdateData, 'location', location);
       assignIfProvided(userUpdateData, 'latitude', latitude ?? lat);
       assignIfProvided(userUpdateData, 'longitude', longitude ?? lng);
@@ -9379,7 +9535,12 @@ exports.getDashboardSummary = async (req, res) => {
       }),
 
       crew_members.count({
-        where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter }
+        where: {
+          is_active: 1,
+          is_crew_verified: 0,
+          application_submitted_at: { [Op.ne]: null },
+          ...standardDateFilter
+        }
       }),
 
       crew_members.count({
@@ -9450,7 +9611,14 @@ exports.getDashboardChartData = async (req, res) => {
             clients.count({ where: { is_active: 1, ...standardDateFilter } }),
             crew_members.count({ where: { is_active: 1, ...standardDateFilter } }),
             crew_members.count({ where: { is_active: 1, is_crew_verified: 1, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter } }),
+            crew_members.count({
+                where: {
+                    is_active: 1,
+                    is_crew_verified: 0,
+                    application_submitted_at: { [Op.ne]: null },
+                    ...standardDateFilter
+                }
+            }),
             crew_members.count({ where: { is_active: 1, is_crew_verified: 2, ...standardDateFilter } }),
 
             sales_leads.count({ where: { ...standardDateFilter } }),
@@ -10646,11 +10814,12 @@ const buildClientArchiveFields = (client) => ({
 
 exports.getClients = async (req, res) => {
   try {
-    let { page = 1, limit = 20, search, range, start_date, end_date, include_archived, archived_only } = req.query;
+    let { page = 1, limit = 20, search, range, start_date, end_date, include_archived, archived_only, fetch_all } = req.query;
 
     page = parseInt(page);
     limit = parseInt(limit);
     const offset = (page - 1) * limit;
+    const shouldFetchAll = String(fetch_all).toLowerCase() === 'true' || String(fetch_all) === '1';
 
     const whereConditions = {};
     const shouldIncludeArchived = isTruthyQuery(include_archived);
@@ -10707,8 +10876,7 @@ exports.getClients = async (req, res) => {
 
     const { count, rows } = await clients.findAndCountAll({
       where: whereConditions,
-      limit,
-      offset,
+      ...(shouldFetchAll ? {} : { limit, offset }),
       order: [['created_at', 'DESC']],
       include: [
         {
@@ -10782,8 +10950,8 @@ exports.getClients = async (req, res) => {
       pagination: {
         total_records: count,
         current_page: page,
-        per_page: limit,
-        total_pages: Math.ceil(count / limit)
+        per_page: shouldFetchAll ? count : limit,
+        total_pages: shouldFetchAll ? 1 : Math.ceil(count / limit)
       }
     });
 
@@ -11807,67 +11975,217 @@ exports.uploadProfilePhoto = [
 
 exports.getAllPendingCrewMembers = async (req, res) => {
   try {
-    // 1. Fetch all pending members (is_crew_verified: 0) and ALL roles in parallel
-    const [members, allRoles] = await Promise.all([
-      crew_members.findAll({
-        where: { 
-          is_active: 1, 
-          is_crew_verified: 0  // Hardcoded for Pending
-        },
-        include: [
-          {
-            model: crew_member_files,
-            as: 'crew_member_files',
-            attributes: ['crew_files_id', 'file_type', 'file_path'],
-          }
-        ],
-        order: [['created_at', 'DESC']], // Newest applications at the top
-      }),
-      crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
-    ]);
+    const isIncompleteOnboarding =
+      req.query.onboarding_status === 'incomplete';
 
-    // 2. DATA PROCESSING
-    const processedMembers = members.map((member) => {
-      const memberData = member.toJSON();
-      
-      // Handle Location Parsing
-      const loc = member.location;
-      let finalLocation = loc;
-      if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
-        try {
-          const parsed = JSON.parse(loc);
-          finalLocation = parsed.address || parsed || loc;
-        } catch { finalLocation = loc; }
+    const shouldFetchAll =
+      String(req.query.fetch_all).toLowerCase() === 'true' ||
+      String(req.query.fetch_all) === '1';
+
+    /**
+     * Current behavior:
+     *
+     * onboarding_status=incomplete
+     *   -> pagination enabled
+     *
+     * onboarding_status=incomplete&fetch_all=true
+     *   -> return all records
+     *
+     * normal pending CPs
+     *   -> return all records
+     *
+     * This matches the behavior from the previous controller.
+     */
+    const pendingMembers =
+      await detailsPendingCpService.getDetailsPendingCreativePartners(
+        req.query,
+        {
+          paginate: isIncompleteOnboarding && !shouldFetchAll,
+        }
+      );
+
+    const totalRecords = Number(pendingMembers.total || 0);
+    const currentPage = Number(pendingMembers.page || 1);
+
+    /**
+     * When fetch_all=true, service still returns its configured
+     * limit value, but API response should represent that all
+     * returned records are part of the same response.
+     */
+    const perPage = shouldFetchAll
+      ? totalRecords
+      : Number(
+          pendingMembers.limit ||
+          req.query.limit ||
+          20
+        );
+
+    let totalPages = 0;
+
+    if (totalRecords > 0) {
+      if (shouldFetchAll || !isIncompleteOnboarding) {
+        totalPages = 1;
+      } else {
+        totalPages = Math.ceil(
+          totalRecords / Math.max(perPage, 1)
+        );
       }
-
-      // Handle Role Mapping from JSON string to Names
-      let roleNames = [];
-      try {
-        const roleIds = JSON.parse(memberData.primary_role || "[]");
-        roleNames = allRoles
-            .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
-            .map(r => r.role_name);
-      } catch (e) {
-        console.error("Role parsing error", e);
-      }
-
-      return { 
-        ...memberData, 
-        location: finalLocation, 
-        status: 'pending',
-        role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null 
-      };
-    });
+    }
 
     return res.status(200).json({
       error: false,
-      message: "All pending crew members fetched successfully",
-      total_pending: processedMembers.length,
-      data: processedMembers,
+
+      message: isIncompleteOnboarding
+        ? 'All details pending crew members fetched successfully'
+        : 'All pending crew members fetched successfully',
+
+      total_pending: totalRecords,
+
+      pagination: {
+        total_records: totalRecords,
+
+        current_page:
+          shouldFetchAll || !isIncompleteOnboarding
+            ? 1
+            : currentPage,
+
+        per_page:
+          shouldFetchAll || !isIncompleteOnboarding
+            ? totalRecords
+            : perPage,
+
+        total_pages: totalPages,
+      },
+
+      data: pendingMembers.rows || [],
     });
   } catch (error) {
-    console.error("Get All Pending Crew Members Error:", error);
-    return res.status(500).json({ error: true, message: "Internal server error" });
+    console.error(
+      'Get All Pending Crew Members Error:',
+      error
+    );
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
+  }
+};
+
+exports.exportDetailsPendingCreativePartnersExcel = async (req, res) => {
+  try {
+    const pendingMembers = await detailsPendingCpService.getDetailsPendingCreativePartners(
+      {
+        ...req.query,
+        onboarding_status: 'incomplete'
+      },
+      { paginate: false }
+    );
+    const buffer = await detailsPendingCpService.generateDetailsPendingCreativePartnersExcel(pendingMembers.rows);
+    const filename = detailsPendingCpService.getDetailsPendingCreativePartnersExportFilename();
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${filename}"`
+    );
+    res.setHeader('Cache-Control', 'no-store');
+
+    return res.status(200).send(buffer);
+  } catch (error) {
+    console.error("Export Details Pending Creative Partners Excel Error:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Failed to export details pending creative partners.",
+      detail: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.sendCreativePartnerProfileReminder = async (req, res) => {
+  try {
+    const crewMemberId = Number(req.params?.crew_member_id || req.body?.crew_member_id);
+
+    if (!Number.isInteger(crewMemberId) || crewMemberId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid crew member ID is required."
+      });
+    }
+
+    const member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({
+      crew_member_id: crewMemberId,
+      is_active: 1
+    });
+
+    if (!member) {
+      return res.status(404).json({
+        success: false,
+        message: "Creative partner not found."
+      });
+    }
+
+    const onboardingSummary = await onboardingCtrl.syncCreatorRegistrationComplete(member);
+
+    if (Number(member.is_crew_verified) === 1) {
+      return res.status(400).json({
+        success: false,
+        message: "This creative partner is already approved."
+      });
+    }
+
+    if (Number(onboardingSummary.is_registration_complete) === 1) {
+      return res.status(400).json({
+        success: false,
+        message: "This creative partner has already completed their profile."
+      });
+    }
+
+    const toEmail = String(member.email || '').trim().toLowerCase();
+    if (!toEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Creative partner email is missing."
+      });
+    }
+
+    const fullName = `${member.first_name || ''} ${member.last_name || ''}`.trim();
+    const frontendUrl = getFrontendBaseUrl();
+    const emailResult = await sendCreativePartnerProfileReminderEmail({
+      to_email: toEmail,
+      cp_name: fullName,
+      first_name: getFirstNameForEmail(fullName, toEmail),
+      dashboard_link: `${frontendUrl}/creator/dashboard/profile`
+    });
+
+    if (!emailResult?.success) {
+      return res.status(502).json({
+        success: false,
+        message: "Failed to send creative partner profile reminder email.",
+        error: emailResult?.error || "Unknown email error"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile reminder email sent successfully.",
+      data: {
+        crew_member_id: crewMemberId,
+        to_email: toEmail,
+        message_id: emailResult.messageId || null,
+        onboarding_status: onboardingSummary
+      }
+    });
+  } catch (error) {
+    console.error("SendCreativePartnerProfileReminder Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
   }
 };
 
@@ -13751,32 +14069,31 @@ exports.getBookingSummaryById = async (req, res) => {
             }
         }
 
-        if (!latestPaymentData && identityOr.length > 0) {
-            latestPaymentData = await db.payment_transactions.findOne({
-                where: {
-                    status: 'succeeded',
-                    payment_source: { [Sequelize.Op.in]: ['quote_invoice', 'additional_invoice', 'booking_checkout'] },
-                    [Sequelize.Op.or]: identityOr
-                },
-                order: [['payment_id', 'DESC']]
-            });
-        }
         if (!paymentData && latestPaymentData?.referral_code) {
             referralCode = latestPaymentData.referral_code;
         }
 
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
+        const hasPaymentCompletionWithoutTransaction = Boolean(
+            !paymentData &&
+            !latestPaymentData &&
+            (bookingJson.payment_completed_at || bookingJson.is_completed == 1)
+        );
         const paidAmountRaw = paymentSummary
             ? parseFloat(paymentSummary.paid_amount || 0)
             : (latestPaymentData
                 ? parseFloat(latestPaymentData.total_amount || 0)
-                : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal));
+                : (paymentData
+                    ? parseFloat(paymentData.total_amount || 0)
+                    : (hasPaymentCompletionWithoutTransaction ? quoteTotal : 0)));
         const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
         const isAdditionalPaymentFlow = String(latestPaymentData?.payment_source || '').toLowerCase() === 'additional_invoice';
         const creditApplied = paymentSummary
             ? parseFloat(paymentSummary.credit_used_amount || 0)
-            : (isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount));
+            : (latestPaymentData || paymentData || hasPaymentCompletionWithoutTransaction
+                ? (isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount))
+                : 0);
         const totalAfterCredit = paymentSummary
             ? Math.max(0, quoteTotal - creditApplied)
             : (isAdditionalPaymentFlow
@@ -15214,6 +15531,7 @@ const formatUserTypeAsRole = (role, totalUsers = 0) => ({
   role_id: role.user_type_id,
   name: role.user_role,
   description: role.description || null,
+  is_internal_member: Number(role.is_internal_member || 0),
   is_system: 0,
   is_active: role.is_active,
   created_by: role.created_by || null,
@@ -15254,6 +15572,54 @@ const getLegacyModuleKey = (moduleKey, scopeKey) => {
 
 const formatModuleDisplayName = (moduleKey, scopeKey) => formatPermissionLabel(getLegacyModuleKey(moduleKey, scopeKey));
 
+const INTERNAL_PERMISSION_MODULE_TO_ADMIN = {
+  sales_admin_dashboard: 'admin_dashboard',
+  sales_admin_file_manager: 'admin_file_manager',
+  sales_admin_invoices: 'admin_invoices',
+  sales_admin_meetings: 'admin_meetings',
+  sales_admin_messages: 'admin_messages',
+  sales_admin_quotes: 'admin_quotes',
+  sales_admin_sales_people: 'admin_sales_representative',
+  sales_admin_shoots: 'admin_shoots',
+  sales_rep_availability: 'admin_availability',
+  sales_rep_file_manager: 'admin_file_manager',
+  sales_rep_meetings: 'admin_meetings',
+  sales_rep_messages: 'admin_messages',
+  sales_rep_quotes: 'admin_quotes',
+  sales_rep_sales: 'admin_sales_representative',
+  sales_rep_shoots: 'admin_shoots',
+  production_manager_availability: 'admin_availability',
+  production_manager_creative_partner: 'admin_users_creative_partners',
+  production_manager_dashboard: 'admin_dashboard',
+  production_manager_file_manager: 'admin_file_manager',
+  production_manager_meetings: 'admin_meetings',
+  production_manager_messages: 'admin_messages',
+  production_manager_shoots: 'admin_shoots'
+};
+
+const normalizePermissionsToAdminScope = (permissions = {}) => {
+  const normalizedPermissions = {};
+
+  Object.entries(permissions || {}).forEach(([module, actions]) => {
+    const normalizedModule = INTERNAL_PERMISSION_MODULE_TO_ADMIN[module] || module;
+
+    if (!normalizedPermissions[normalizedModule]) {
+      normalizedPermissions[normalizedModule] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    Object.keys(actions || {}).forEach(action => {
+      normalizedPermissions[normalizedModule][action] = Boolean(actions[action]);
+    });
+  });
+
+  return normalizedPermissions;
+};
+
 const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
   const permissionEntries = [];
 
@@ -15290,12 +15656,13 @@ const buildPermissionKeys = (permissions = {}) => {
   return buildPermissionEntries(permissions).map(entry => entry.permission_key);
 };
 
-const syncRolePermissions = async (roleId, permissions = {}) => {
+const syncRolePermissions = async (roleId, permissions = {}, transaction = null) => {
+  const queryOptions = transaction ? { transaction } : {};
   const permissionKeys = buildPermissionKeys(permissions);
 
   await db.role_permissions.update(
     { is_active: 0 },
-    { where: { role_id: roleId } }
+    { where: { role_id: roleId }, ...queryOptions }
   );
 
   if (!permissionKeys.length) {
@@ -15308,7 +15675,8 @@ const syncRolePermissions = async (roleId, permissions = {}) => {
         [Op.in]: permissionKeys
       },
       is_active: 1
-    }
+    },
+    ...queryOptions
   });
 
   const rolePermissionData = permissionRecords.map(permission => ({
@@ -15318,11 +15686,11 @@ const syncRolePermissions = async (roleId, permissions = {}) => {
   }));
 
   if (rolePermissionData.length) {
-    await db.role_permissions.bulkCreate(rolePermissionData);
+    await db.role_permissions.bulkCreate(rolePermissionData, queryOptions);
   }
 };
 
-const formatRolePermissions = async (roleId) => {
+const formatRolePermissions = async (roleId, options = {}) => {
   const rolePermissions = await db.role_permissions.findAll({
     where: {
       role_id: roleId,
@@ -15361,7 +15729,9 @@ const formatRolePermissions = async (roleId) => {
     formattedPermissions[module][action] = true;
   });
 
-  return formattedPermissions;
+  return options.normalizeToAdminScope
+    ? normalizePermissionsToAdminScope(formattedPermissions)
+    : formattedPermissions;
 };
 
 const syncUserPermissions = async (userId, permissions = {}) => {
@@ -15454,7 +15824,7 @@ const syncUserPermissionsFromRole = async (userId, roleId, transaction = null) =
   return userPermissionData.length;
 };
 
-const formatUserPermissions = async (userId) => {
+const formatUserPermissions = async (userId, options = {}) => {
   const userPermissions = await db.user_permissions.findAll({
     where: {
       user_id: userId,
@@ -15489,12 +15859,14 @@ const formatUserPermissions = async (userId) => {
     formattedPermissions[module][action] = item.is_allowed === 1;
   });
 
-  return formattedPermissions;
+  return options.normalizeToAdminScope
+    ? normalizePermissionsToAdminScope(formattedPermissions)
+    : formattedPermissions;
 };
 
-const getCombinedUserPermissions = async (userId, roleId) => {
-  const rolePermissions = await formatRolePermissions(roleId);
-  const userPermissions = await formatUserPermissions(userId);
+const getCombinedUserPermissions = async (userId, roleId, options = {}) => {
+  const rolePermissions = await formatRolePermissions(roleId, options);
+  const userPermissions = await formatUserPermissions(userId, options);
 
   Object.keys(userPermissions).forEach(module => {
     if (!rolePermissions[module]) {
@@ -15549,6 +15921,7 @@ exports.createRole = async (req, res) => {
     const newRole = await db.user_type.create({
       user_role: name,
       description,
+      is_internal_member: 1,
       is_active: 1
     });
 
@@ -15590,9 +15963,7 @@ exports.getRoles = async (req, res) => {
 
     const whereCondition = {
       is_active: 1,
-      user_type_id: {
-        [Op.notIn]: [2, 3]
-      }
+      is_internal_member: 1
     };
 
     // Search filter
@@ -15777,6 +16148,8 @@ exports.assignRoleToUser = async (req, res) => {
 };
 
 exports.updateRole = async (req, res) => {
+  let transaction;
+
   try {
     const { role_id, name, description, permissions } = req.body;
 
@@ -15811,28 +16184,56 @@ exports.updateRole = async (req, res) => {
       roleUpdateData.description = description;
     }
 
-    if (Object.keys(roleUpdateData).length) {
-      await db.user_type.update(roleUpdateData, {
-        where: { user_type_id: role_id }
+    const hasPermissionsUpdate = Object.prototype.hasOwnProperty.call(req.body, 'permissions');
+
+    if (!Object.keys(roleUpdateData).length && !hasPermissionsUpdate) {
+      return res.status(200).json({
+        success: true,
+        message: 'Role updated successfully'
       });
     }
 
-    if (Object.prototype.hasOwnProperty.call(req.body, 'permissions')) {
-      await syncRolePermissions(role_id, permissions);
+    transaction = await db.sequelize.transaction();
 
-      // Enable this when role permission updates should force logout for all users on the role.
-      // await db.users.update(
-      //   {
-      //     permissions_version: Sequelize.literal('permissions_version + 1')
-      //   },
-      //   {
-      //     where: {
-      //       user_type: role_id,
-      //       is_active: 1
-      //     }
-      //   }
-      // );
+    if (Object.keys(roleUpdateData).length) {
+      await db.user_type.update(roleUpdateData, {
+        where: { user_type_id: role_id },
+        transaction
+      });
     }
+
+    if (hasPermissionsUpdate) {
+      await syncRolePermissions(role_id, permissions, transaction);
+
+      const roleUsers = await db.users.findAll({
+        where: {
+          user_type: role_id,
+          is_active: 1
+        },
+        attributes: ['id'],
+        transaction
+      });
+
+      await Promise.all(
+        roleUsers.map((user) => syncUserPermissionsFromRole(user.id, role_id, transaction))
+      );
+
+      // Force affected users to log in again so their token cannot retain old permissions.
+      await db.users.update(
+        {
+          permissions_version: Sequelize.literal('permissions_version + 1')
+        },
+        {
+          where: {
+            user_type: role_id,
+            is_active: 1
+          },
+          transaction
+        }
+      );
+    }
+
+    await transaction.commit();
 
     return res.status(200).json({
       success: true,
@@ -15840,6 +16241,10 @@ exports.updateRole = async (req, res) => {
     });
 
   } catch (error) {
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
+
     console.error('Update Role Error:', error);
     return res.status(500).json({
       success: false,
@@ -15937,7 +16342,9 @@ exports.getRoleById = async (req, res) => {
       }
     });
 
-    const formattedPermissions = await formatRolePermissions(role_id);
+    const formattedPermissions = await formatRolePermissions(role_id, {
+      normalizeToAdminScope: Number(role.is_internal_member || 0) === 1
+    });
 
     return res.status(200).json({
       success: true,
@@ -16017,8 +16424,17 @@ exports.getUsersWithRoles = async (req, res) => {
     if (role_id) {
       userWhereCondition.user_type = role_id;
     } else {
+      const internalRoles = await db.user_type.findAll({
+        where: {
+          is_active: 1,
+          is_internal_member: 1
+        },
+        attributes: ['user_type_id'],
+        raw: true
+      });
+
       userWhereCondition.user_type = {
-        [Op.notIn]: [2, 3]
+        [Op.in]: internalRoles.map((role) => role.user_type_id)
       };
     }
 
@@ -16237,11 +16653,24 @@ exports.getUserRoleDetails = async (req, res) => {
     });
 
     let formattedPermissions = {};
+    let formattedRolePermissions = {};
+    let formattedUserPermissions = {};
 
     if (role) {
+      const shouldNormalizeToAdminScope = Number(role.is_internal_member || 0) === 1;
+
+      formattedRolePermissions = await formatRolePermissions(role.user_type_id, {
+        normalizeToAdminScope: shouldNormalizeToAdminScope
+      });
+      formattedUserPermissions = await formatUserPermissions(user.id, {
+        normalizeToAdminScope: shouldNormalizeToAdminScope
+      });
       formattedPermissions = await getCombinedUserPermissions(
         user.id,
-        role.user_type_id
+        role.user_type_id,
+        {
+          normalizeToAdminScope: shouldNormalizeToAdminScope
+        }
       );
     }
 
@@ -16256,6 +16685,7 @@ exports.getUserRoleDetails = async (req, res) => {
           email: user.email,
           user_type: user.user_type,
           user_type_name: role ? role.user_role : null,
+          is_internal_member: role ? Number(role.is_internal_member || 0) : 0,
           is_active: user.is_active,
           status_label: user.is_active ? 'Active' : 'In-Active',
           created_at: user.created_at,
@@ -16267,6 +16697,7 @@ exports.getUserRoleDetails = async (req, res) => {
               role_id: role.user_type_id,
               name: role.user_role,
               description: role.description || null,
+              is_internal_member: Number(role.is_internal_member || 0),
               is_active: role.is_active,
               created_at: role.created_at,
               updated_at: role.updated_at
@@ -16277,7 +16708,9 @@ exports.getUserRoleDetails = async (req, res) => {
 
         archive_history: archiveHistory,
 
-        permissions: formattedPermissions
+        permissions: formattedPermissions,
+        role_permissions: formattedRolePermissions,
+        user_permissions: formattedUserPermissions
       }
     });
 
@@ -17535,6 +17968,8 @@ exports.getOnboardingStatusById = async (req, res) => {
         ...empty,
         message: "No member found with this ID",
         is_crew_verified: 0,
+        application_submitted_at: null,
+        application_submission_email_sent_at: null,
         can_access_dashboard: false,
         profile_onboarding_status: empty,
       });
@@ -17552,6 +17987,8 @@ exports.getOnboardingStatusById = async (req, res) => {
       success: true,
       ...effectiveOnboardingSummary,
       is_crew_verified: Number(member.is_crew_verified || 0),
+      application_submitted_at: member.application_submitted_at || null,
+      application_submission_email_sent_at: member.application_submission_email_sent_at || null,
       can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
       should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
       profile_onboarding_status: onboardingSummary,

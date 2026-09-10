@@ -260,6 +260,9 @@ function initModels(sequelize) {
   stream_project_booking.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "booking_id" });
   creator_earnings.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
   crew_members.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "creator_id" });
+  creator_earnings.belongsTo(users, { as: "submitted_by", foreignKey: "submitted_by_user_id" });
+  creator_earnings.belongsTo(users, { as: "approved_by", foreignKey: "approved_by_user_id" });
+  creator_earnings.belongsTo(users, { as: "rejected_by", foreignKey: "rejected_by_user_id" });
   creator_earnings.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
   payment_transactions.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "payment_id" });
   creator_earnings.belongsTo(finance_transactions, { as: "finance_transaction", foreignKey: "finance_transaction_id" });
@@ -698,6 +701,8 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   // Add these lines near the other relationship definitions
 stream_project_booking.belongsTo(users, { as: "user", foreignKey: "user_id"});
 users.hasMany(stream_project_booking, { as: "bookings", foreignKey: "user_id"});
+stream_project_booking.belongsTo(users, { as: "updated_by_user", foreignKey: "updated_by"});
+users.hasMany(stream_project_booking, { as: "updated_stream_project_bookings", foreignKey: "updated_by"});
 
 // Add these if they are missing
 assigned_post_production_member.belongsTo(stream_project_booking, { as: "project", foreignKey: "project_id"});

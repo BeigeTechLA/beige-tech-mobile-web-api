@@ -28,6 +28,9 @@ let fileShareTableReadyPromise = null;
 let fileShareOtpTableReadyPromise = null;
 let fileShareAccessLogsTableReadyPromise = null;
 let workspaceAccessTableReadyPromise = null;
+let fileManagerSettingsTableReadyPromise = null;
+let creatorFoldersTableReadyPromise = null;
+let workspaceDisplayNamesTableReadyPromise = null;
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -164,7 +167,9 @@ const proxyZipResponse = async ({ res, externalPath, method = 'GET', body }) => 
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
 const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
-const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
+const isAdminRole = (req) =>
+  Boolean(req.isInternalMember || req.user?.isInternalMember) ||
+  ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
 const isClientRole = (req) => getNormalizedRequestUserRole(req) === 'client';
 const isCreatorRole = (req) => {
   const role = getNormalizedRequestUserRole(req);
@@ -173,6 +178,8 @@ const isCreatorRole = (req) => {
 const isCommonEventVisibilityLimitedRole = (req) => ['client', 'creator', 'creative'].includes(getNormalizedRequestUserRole(req));
 const isCommonEventExternalId = (value) =>
   String(value || '').trim().toLowerCase().startsWith(COMMON_EVENT_ID_PREFIX);
+
+const DEFAULT_CP_DELETE_LOCK_DAYS = 7;
 
 const extractCommonEventExternalIdFromPath = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -612,7 +619,9 @@ const sendClientFilePush = async ({
   title,
   body,
   data = {},
+  dedupeWindowSeconds = 0,
 }) => {
+  /*
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const userId = await resolveClientPushUserId(plainBooking);
@@ -640,6 +649,7 @@ const sendClientFilePush = async ({
       referenceType: 'booking',
       payload,
       actionLabel: 'Review files',
+      dedupeWindowSeconds,
     });
   } catch (error) {
     console.error('[PushNotification] Client file push failed:', {
@@ -648,6 +658,7 @@ const sendClientFilePush = async ({
       message: error.message || error,
     });
   }
+    */
 };
 
 const sendAssignedCpFilePush = async ({
@@ -656,7 +667,9 @@ const sendAssignedCpFilePush = async ({
   title,
   body,
   data = {},
+  dedupeWindowSeconds = 0,
 }) => {
+  /*
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const assignedCrews = Array.isArray(plainBooking?.assigned_crews) ? plainBooking.assigned_crews : [];
@@ -689,6 +702,7 @@ const sendAssignedCpFilePush = async ({
         referenceType: 'booking',
         payload,
         actionLabel: 'Review files',
+        dedupeWindowSeconds,
       });
     }
   } catch (error) {
@@ -698,6 +712,7 @@ const sendAssignedCpFilePush = async ({
       message: error.message || error,
     });
   }
+    */
 };
 
 const sendFilesForEditingInternalEmailForCopy = async ({
@@ -1214,6 +1229,7 @@ const sendEditsDeliveredEmailsForUploadedItems = async ({ items = [], deliveredB
           filepath: String(entry.items[0]?.filepath || ''),
           total_files: String(entry.items.length || 1),
         },
+        dedupeWindowSeconds: 120,
       });
 
       const adminRecipients = getAdminNotificationRecipients();
@@ -1439,10 +1455,11 @@ const sendFileApprovedInternalEmailsForReviews = async ({
         seenEmails.add(email);
         return true;
       });
-      if (!uniqueRecipients.length) continue;
 
       const approvedAt = new Date().toISOString();
       const approvalTime = formatEditingSubmissionTime(approvedAt);
+      const approvedFilesForPush = [];
+      let approvedVersionForPush = '';
 
       for (const item of entry.items) {
         const responseData = item?.result?.data || {};
@@ -1458,43 +1475,53 @@ const sendFileApprovedInternalEmailsForReviews = async ({
             ? `Version${versionNumber}`
             : getEditedRevisionVersionLabel(item?.filepath);
 
-        const emailResult = await emailService.sendFileApprovedInternalEmail({
-          recipients: uniqueRecipients,
-          data: {
-            shoot_name: projectName,
-            project_name: projectName,
-            booking_id: bookingReference,
-            order_id: bookingReference,
-            file_name: fileName,
-            version,
-            current_version: version,
-            approved_by: approvedByName || 'Client',
-            approval_time: approvalTime,
-            approved_at: approvedAt,
-            final_deliverable_path: finalDeliverable?.path || '',
-            final_deliverable_name: finalDeliverable?.name || fileName,
-            dashboard_link: buildAdminDashboardUrl(),
-            frontend_url: buildAdminDashboardUrl(),
-          },
-        });
+        approvedFilesForPush.push(fileName);
+        if (!approvedVersionForPush && version) approvedVersionForPush = version;
 
-        if (!emailResult?.success) {
-          console.error(
-            'File approved internal email failed:',
-            emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
-          );
+        if (uniqueRecipients.length) {
+          const emailResult = await emailService.sendFileApprovedInternalEmail({
+            recipients: uniqueRecipients,
+            data: {
+              shoot_name: projectName,
+              project_name: projectName,
+              booking_id: bookingReference,
+              order_id: bookingReference,
+              file_name: fileName,
+              version,
+              current_version: version,
+              approved_by: approvedByName || 'Client',
+              approval_time: approvalTime,
+              approved_at: approvedAt,
+              final_deliverable_path: finalDeliverable?.path || '',
+              final_deliverable_name: finalDeliverable?.name || fileName,
+              dashboard_link: buildAdminDashboardUrl(),
+              frontend_url: buildAdminDashboardUrl(),
+            },
+          });
+
+          if (!emailResult?.success) {
+            console.error(
+              'File approved internal email failed:',
+              emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
+            );
+          }
         }
+      }
 
+      if (approvedFilesForPush.length) {
         await sendAssignedCpFilePush({
           booking: plainBooking,
           type: 'final_files_approved',
           title: 'Files approved',
-          body: `${approvedByName || 'Client'} approved the final files.`,
+          body: `${approvedByName || 'Client'} approved ${approvedFilesForPush.length === 1 ? 'the final file' : `${approvedFilesForPush.length} final files`}.`,
           data: {
             booking_id: bookingReference,
-            file_name: fileName,
-            version,
+            file_count: String(approvedFilesForPush.length),
+            file_names: approvedFilesForPush,
+            ...(approvedFilesForPush.length === 1 ? { file_name: approvedFilesForPush[0] } : {}),
+            ...(approvedVersionForPush ? { version: approvedVersionForPush } : {}),
           },
+          dedupeWindowSeconds: 120,
         });
       }
     }
@@ -1636,6 +1663,59 @@ const ensureCommonEventsTable = async () => {
   `).catch(() => null);
 };
 
+const ensureWorkspaceDisplayNamesTable = async () => {
+  if (!workspaceDisplayNamesTableReadyPromise) {
+    workspaceDisplayNamesTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_workspace_display_names (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        external_id VARCHAR(128) NOT NULL,
+        display_name VARCHAR(255) NOT NULL,
+        updated_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_file_manager_workspace_display_name_external_id (external_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await workspaceDisplayNamesTableReadyPromise;
+};
+
+const getWorkspaceDisplayNameRows = async (externalIds = []) => {
+  const normalizedIds = Array.from(new Set(
+    externalIds.map((id) => String(id || '').trim().toLowerCase()).filter(Boolean)
+  ));
+  if (!normalizedIds.length) return new Map();
+
+  await ensureWorkspaceDisplayNamesTable();
+  const [rows] = await db.sequelize.query(
+    `SELECT external_id, display_name
+     FROM file_manager_workspace_display_names
+     WHERE external_id IN (:externalIds)`,
+    { replacements: { externalIds: normalizedIds } }
+  );
+
+  return new Map(
+    (Array.isArray(rows) ? rows : []).map((row) => [
+      String(row.external_id || '').trim().toLowerCase(),
+      String(row.display_name || '').trim(),
+    ])
+  );
+};
+
+const applyWorkspaceDisplayName = (workspace, displayNameMap = new Map()) => {
+  const externalId = String(workspace?.externalId || workspace?.external_id || '').trim().toLowerCase();
+  const displayName = displayNameMap.get(externalId);
+  if (!displayName) return workspace;
+  return {
+    ...workspace,
+    folderName: displayName,
+    displayName,
+    storageFolderName: workspace?.storageFolderName || workspace?.folderName || null,
+  };
+};
+
 const ensureFileShareTable = async () => {
   if (!fileShareTableReadyPromise) {
     fileShareTableReadyPromise = db.sequelize.query(`
@@ -1694,6 +1774,158 @@ const ensureFileShareOtpTable = async () => {
 
   await fileShareOtpTableReadyPromise;
 };
+
+const normalizeCpDeleteLockDays = (value, fallback = DEFAULT_CP_DELETE_LOCK_DAYS) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(365, Math.floor(parsed)));
+};
+
+const ensureFileManagerSettingsTable = async () => {
+  if (!fileManagerSettingsTableReadyPromise) {
+    fileManagerSettingsTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_settings (
+        setting_id TINYINT UNSIGNED NOT NULL DEFAULT 1,
+        cp_delete_lock_days INT UNSIGNED NOT NULL DEFAULT 7,
+        updated_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (setting_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await fileManagerSettingsTableReadyPromise;
+};
+
+const getFileManagerSettings = async () => {
+  await ensureFileManagerSettingsTable();
+  await db.sequelize.query(
+    `INSERT IGNORE INTO file_manager_settings (setting_id, cp_delete_lock_days)
+     VALUES (1, :defaultDays)`,
+    { replacements: { defaultDays: DEFAULT_CP_DELETE_LOCK_DAYS } }
+  );
+
+  const [rows] = await db.sequelize.query(
+    `SELECT setting_id, cp_delete_lock_days, updated_by_user_id, created_at, updated_at
+     FROM file_manager_settings
+     WHERE setting_id = 1
+     LIMIT 1`
+  );
+  const row = Array.isArray(rows) && rows.length ? rows[0] : {};
+  return {
+    cpDeleteLockDays: normalizeCpDeleteLockDays(row.cp_delete_lock_days),
+    cp_delete_lock_days: normalizeCpDeleteLockDays(row.cp_delete_lock_days),
+    updatedByUserId: row.updated_by_user_id || null,
+    updatedAt: row.updated_at || null,
+  };
+};
+
+const ensureCreatorFoldersTable = async () => {
+  if (!creatorFoldersTableReadyPromise) {
+    creatorFoldersTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_creator_folders (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        workspace_external_id VARCHAR(128) NOT NULL,
+        phase VARCHAR(16) NOT NULL DEFAULT 'root',
+        folder_path VARCHAR(1024) NOT NULL,
+        folder_path_hash CHAR(64) AS (SHA2(folder_path, 256)) STORED,
+        created_by_user_id BIGINT UNSIGNED NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_file_manager_creator_folder (workspace_external_id, phase, folder_path_hash),
+        KEY idx_file_manager_creator_folder_user (created_by_user_id),
+        KEY idx_file_manager_creator_folder_workspace (workspace_external_id),
+        KEY idx_file_manager_creator_folder_path (folder_path(191))
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await creatorFoldersTableReadyPromise;
+};
+
+const recordCreatorFolderOwnership = async ({ externalId, phase = 'root', folderPath, userId }) => {
+  const normalizedExternalId = String(externalId || '').trim().toLowerCase();
+  const normalizedFolderPath = sanitizeRelativeFolderPath(folderPath);
+  const normalizedUserId = Number(userId || 0);
+  if (!normalizedExternalId || !normalizedFolderPath || !normalizedUserId) return;
+
+  await ensureCreatorFoldersTable();
+  await db.sequelize.query(
+    `
+    INSERT INTO file_manager_creator_folders
+    (workspace_external_id, phase, folder_path, created_by_user_id)
+    VALUES (?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      created_by_user_id = VALUES(created_by_user_id),
+      updated_at = CURRENT_TIMESTAMP
+    `,
+    {
+      replacements: [
+        normalizedExternalId,
+        String(phase || 'root').trim().toLowerCase(),
+        normalizedFolderPath,
+        normalizedUserId,
+      ],
+    }
+  );
+};
+
+const creatorOwnsTrackedFolder = async ({ externalId, phase = 'root', folderPath, userId }) => {
+  const normalizedExternalId = String(externalId || '').trim().toLowerCase();
+  const normalizedFolderPath = sanitizeRelativeFolderPath(folderPath);
+  const normalizedUserId = Number(userId || 0);
+  if (!normalizedExternalId || !normalizedFolderPath || !normalizedUserId) return false;
+
+  await ensureCreatorFoldersTable();
+  const [rows] = await db.sequelize.query(
+    `
+    SELECT id
+    FROM file_manager_creator_folders
+    WHERE workspace_external_id = ?
+      AND phase = ?
+      AND folder_path = ?
+      AND created_by_user_id = ?
+    LIMIT 1
+    `,
+    {
+      replacements: [
+        normalizedExternalId,
+        String(phase || 'root').trim().toLowerCase(),
+        normalizedFolderPath,
+        normalizedUserId,
+      ],
+    }
+  );
+
+  return Array.isArray(rows) && rows.length > 0;
+};
+
+const deleteCreatorFolderOwnershipUnderPath = async ({ externalId, phase = 'root', folderPath }) => {
+  const normalizedExternalId = String(externalId || '').trim().toLowerCase();
+  const normalizedFolderPath = sanitizeRelativeFolderPath(folderPath);
+  if (!normalizedExternalId || !normalizedFolderPath) return;
+
+  await ensureCreatorFoldersTable();
+  await db.sequelize.query(
+    `
+    DELETE FROM file_manager_creator_folders
+    WHERE workspace_external_id = ?
+      AND phase = ?
+      AND (folder_path = ? OR folder_path LIKE ?)
+    `,
+    {
+      replacements: [
+        normalizedExternalId,
+        String(phase || 'root').trim().toLowerCase(),
+        normalizedFolderPath,
+        `${normalizedFolderPath}/%`,
+      ],
+    }
+  );
+};
+
 
 const ensureWorkspaceAccessTable = async () => {
   if (!workspaceAccessTableReadyPromise) {
@@ -1915,21 +2147,66 @@ const findCommonEventByFilepath = async (filepath) => {
   if (!normalizedPath) return null;
 
   const rows = await listCommonEventRows();
+  const displayNameMap = await getWorkspaceDisplayNameRows(
+    rows.map((row) => row.workspace_external_id)
+  ).catch(() => new Map());
   const pathTokens = normalizeForPathMatch(normalizedPath);
 
   return (
     rows.find((row) => {
       const externalId = String(row.workspace_external_id || '').trim().toLowerCase();
+      const rootPath = String(row.root_path || '').trim().toLowerCase();
       const folderName = `event - ${String(row.event_name || '').trim().toLowerCase()}`;
       const folderTokens = normalizeForPathMatch(folderName);
+      const displayName = String(displayNameMap.get(externalId) || '').trim().toLowerCase();
+      const displayTokens = normalizeForPathMatch(displayName);
 
       return (
         (externalId && normalizedPath.includes(externalId)) ||
+        (rootPath && normalizedPath.includes(rootPath)) ||
         (folderName && normalizedPath.includes(folderName)) ||
-        (folderTokens && pathTokens.includes(folderTokens))
+        (folderTokens && pathTokens.includes(folderTokens)) ||
+        (displayName && normalizedPath.includes(displayName)) ||
+        (displayTokens && pathTokens.includes(displayTokens))
       );
     }) || null
   );
+};
+
+const resolveWorkspaceDisplayPathToStoragePath = async (filepath) => {
+  const normalizedPath = normalizePathForAccess(filepath);
+  if (!normalizedPath) return normalizedPath;
+
+  const rows = await listCommonEventRows().catch(() => []);
+  if (!rows.length) return normalizedPath;
+
+  const displayNameMap = await getWorkspaceDisplayNameRows(
+    rows.map((row) => row.workspace_external_id)
+  ).catch(() => new Map());
+
+  for (const row of rows) {
+    const externalId = String(row.workspace_external_id || '').trim().toLowerCase();
+    const rootPath = normalizePathForAccess(row.root_path || '');
+    if (!rootPath) continue;
+
+    const aliases = [
+      displayNameMap.get(externalId),
+      row.event_name ? `Event - ${row.event_name}` : '',
+    ]
+      .map((value) => normalizePathForAccess(value))
+      .filter(Boolean);
+
+    for (const alias of aliases) {
+      const aliasLower = alias.toLowerCase();
+      const pathLower = normalizedPath.toLowerCase();
+      if (pathLower === aliasLower) return rootPath;
+      if (pathLower.startsWith(`${aliasLower}/`)) {
+        return `${rootPath}/${normalizedPath.slice(alias.length + 1)}`.replace(/\/+/g, '/');
+      }
+    }
+  }
+
+  return normalizedPath;
 };
 
 const getUserDisplayName = async (userId) => {
@@ -1981,6 +2258,20 @@ const isWorkspacePhaseRootName = (value) => {
     .replace(/[_\s]+/g, '-');
   return ['pre-production', 'preproduction', 'post-production', 'postproduction'].includes(normalized);
 };
+
+const isWorkflowPhaseFolderName = (value) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+  return ['pre-production', 'preproduction', 'post-production', 'postproduction'].includes(normalized);
+};
+
+const hasFolderVisibleContent = (folder) =>
+  Number(folder?.fileCount || 0) > 0 || Number(folder?.childFolderCount || 0) > 0;
+
+const shouldShowCommonEventRootFolder = (folder) =>
+  !isWorkspacePhaseRootName(folder?.name || folder?.title) || hasFolderVisibleContent(folder);
 
 const extractPhaseAndRelativePath = (value, fallbackPhase = null) => {
   const normalizedPath = normalizePathForAccess(value);
@@ -2280,6 +2571,19 @@ const toPositiveInteger = (value, fallback) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.floor(parsed));
+};
+
+const getWorkspaceUpdatedTimestamp = (workspace = {}) => {
+  const value =
+    workspace.updatedAt ||
+    workspace.updated_at ||
+    workspace.lastModifiedAt ||
+    workspace.lastModified ||
+    workspace.modifiedAt ||
+    workspace.createdAt ||
+    workspace.created_at;
+  const timestamp = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
 };
 
 const limitFaceScanCandidates = (candidates = [], limit = FACE_SCAN_MAX_CANDIDATES) =>
@@ -3146,6 +3450,162 @@ const proxyRequest = async (path, options = {}) => {
   return payload;
 };
 
+const getExternalEntryMetadata = async (filepath) => {
+  const normalizedPath = normalizePathForAccess(filepath);
+  if (!normalizedPath) return null;
+  const query = new URLSearchParams({ filepath: normalizedPath });
+  const result = await proxyRequest(`/entry-metadata?${query.toString()}`);
+  return result?.data || null;
+};
+
+const parseFileManagerMetadataValue = (value) => {
+  if (value == null) return null;
+  if (Array.isArray(value)) return value[0] ?? null;
+  if (typeof value === 'object') return value;
+  const rawValue = String(value || '').trim();
+  if (!rawValue) return null;
+  try {
+    return JSON.parse(rawValue);
+  } catch (error) {
+    return rawValue;
+  }
+};
+
+const getDeleteTargetContext = (metadata, targetPath) => {
+  const normalizedPath = normalizePathForAccess(metadata?.path || targetPath);
+  const commonEventExternalId = extractCommonEventExternalIdFromPath(normalizedPath);
+  const extracted = extractPhaseAndRelativePath(normalizedPath);
+  if (commonEventExternalId) {
+    return {
+      externalId: commonEventExternalId,
+      phase: extracted.phase || 'root',
+      relativePath: extracted.relativePath,
+      isCommonEvent: true,
+    };
+  }
+
+  const metadataOrderId = parseFileManagerMetadataValue(metadata?.metadata?.orderId);
+  return {
+    externalId: metadataOrderId ? String(metadataOrderId).trim().toLowerCase() : null,
+    phase: extracted.phase || 'root',
+    relativePath: extracted.relativePath,
+    isCommonEvent: false,
+  };
+};
+
+const assertCreatorCanDeleteFolder = async (req, metadata, targetPath) => {
+  if (!metadata?.isFolder) return;
+
+  const context = getDeleteTargetContext(metadata, targetPath);
+  let normalizedRelativePath = sanitizeRelativeFolderPath(context.relativePath);
+  if (context.isCommonEvent) {
+    const [eventRows] = await db.sequelize.query(
+      `SELECT event_name, root_path
+       FROM file_manager_common_events
+       WHERE workspace_external_id = ?
+       LIMIT 1`,
+      { replacements: [context.externalId] }
+    );
+    const eventRow = Array.isArray(eventRows) ? eventRows[0] : {};
+    normalizedRelativePath = sanitizeRelativeFolderPath(
+      stripCommonEventRootFromPath(metadata?.path || targetPath, eventRow) || normalizedRelativePath
+    );
+  }
+  const pathSegments = normalizedRelativePath.split('/').filter(Boolean);
+
+  if (!context.externalId || pathSegments.length === 0) {
+    const error = new Error('Creative partners cannot delete root folders. Please request admin support.');
+    error.status = 403;
+    throw error;
+  }
+
+  if (context.isCommonEvent && pathSegments.length <= 1) {
+    const error = new Error('Creative partners cannot delete their common event root folder. Please request admin support.');
+    error.status = 403;
+    throw error;
+  }
+
+  const userId = getRequestUserId(req);
+  let ownsFolder = await creatorOwnsTrackedFolder({
+    externalId: context.externalId,
+    phase: context.phase,
+    folderPath: normalizedRelativePath,
+    userId,
+  });
+
+  if (!ownsFolder) {
+    const error = new Error('Creative partners can delete only folders they created. Please request admin support.');
+    error.status = 403;
+    throw error;
+  }
+};
+
+const cleanupCreatorFolderOwnershipForDeletedFolder = async (metadata, targetPath) => {
+  if (!metadata?.isFolder) return;
+  const context = getDeleteTargetContext(metadata, targetPath);
+  if (!context.externalId) return;
+
+  let normalizedRelativePath = sanitizeRelativeFolderPath(context.relativePath);
+  if (context.isCommonEvent) {
+    const [eventRows] = await db.sequelize.query(
+      `SELECT event_name, root_path
+       FROM file_manager_common_events
+       WHERE workspace_external_id = ?
+       LIMIT 1`,
+      { replacements: [context.externalId] }
+    );
+    const eventRow = Array.isArray(eventRows) ? eventRows[0] : {};
+    normalizedRelativePath = sanitizeRelativeFolderPath(
+      stripCommonEventRootFromPath(metadata?.path || targetPath, eventRow) || normalizedRelativePath
+    );
+  }
+
+  await deleteCreatorFolderOwnershipUnderPath({
+    externalId: context.externalId,
+    phase: context.phase,
+    folderPath: normalizedRelativePath,
+  });
+};
+
+const assertCreatorCanDeleteFileManagerEntry = async (req, targetPath) => {
+  if (!isCreatorRole(req)) return null;
+
+  let metadata;
+  try {
+    metadata = await getExternalEntryMetadata(targetPath);
+  } catch (error) {
+    const protectedError = new Error('This file cannot be deleted by a creative partner. Please request admin support.');
+    protectedError.status = error?.status === 404 ? 404 : 403;
+    throw protectedError;
+  }
+
+  await assertCreatorCanDeleteFolder(req, metadata, targetPath);
+
+  const settings = await getFileManagerSettings();
+  const lockDays = normalizeCpDeleteLockDays(settings.cpDeleteLockDays);
+  if (lockDays <= 0) return metadata;
+
+  const createdAt = metadata?.createdAt;
+  const createdTime = new Date(createdAt || '').getTime();
+  if (!Number.isFinite(createdTime)) {
+    const error = new Error('This file cannot be deleted by a creative partner. Please request admin support.');
+    error.status = 403;
+    throw error;
+  }
+
+  const ageMs = Date.now() - createdTime;
+  const lockMs = lockDays * 24 * 60 * 60 * 1000;
+  if (ageMs > lockMs) {
+    const itemType = metadata?.isFolder ? 'folders' : 'files';
+    const ageLabel = metadata?.isFolder ? 'creation' : 'upload';
+    const error = new Error(`Creative partners can delete ${itemType} only within ${lockDays} day${lockDays === 1 ? '' : 's'} of ${ageLabel}. Please request admin support.`);
+    error.status = 403;
+    throw error;
+  }
+
+  return metadata;
+};
+
 const normalizeSegment = (value) =>
   String(value || '')
     .toLowerCase()
@@ -3276,6 +3736,7 @@ exports.createCommonEvent = async (req, res) => {
       body: JSON.stringify({
         externalId: workspaceExternalId,
         folderName: workspaceFolderName,
+        skipWorkflowSubfolders: true,
       }),
     });
 
@@ -3754,14 +4215,38 @@ exports.listWorkspaces = async (req, res) => {
     const workspaceType = String(req.query.workspaceType || req.query.type || '').trim().toLowerCase();
     const commonEventsOnly = ['common', 'common-event', 'common-events', 'common_event', 'common_events'].includes(workspaceType);
     const expiredCommonEventsOnly = ['visibility-expired', 'expired', 'expired-common-events'].includes(workspaceType);
-    const result = await proxyRequest('/workspaces');
+    const recentOnly = ['recent', 'recently-updated', 'recent-workspaces'].includes(workspaceType);
+    const recentDays = Math.min(30, toPositiveInteger(req.query.recentDays || req.query.days, 5));
+    const creatorRole = isCreatorRole(req);
+    const clientRole = isClientRole(req);
+    const canUseUpstreamPagination =
+      hasPaginationParams &&
+      !creatorRole &&
+      !clientRole &&
+      !commonEventsOnly &&
+      !expiredCommonEventsOnly &&
+      !recentOnly &&
+      !search;
+    const upstreamQuery = new URLSearchParams();
+    if (canUseUpstreamPagination) {
+      upstreamQuery.set('page', String(page));
+      upstreamQuery.set('limit', String(limit));
+    }
+    if (search) upstreamQuery.set('search', search);
+    if (workspaceType) upstreamQuery.set('workspaceType', workspaceType);
+    if (recentOnly) upstreamQuery.set('recentDays', String(recentDays));
+    const result = await proxyRequest(`/workspaces${upstreamQuery.toString() ? `?${upstreamQuery.toString()}` : ''}`);
     const eventRows = await listCommonEventRows().catch(() => []);
+    const displayNameMap = await getWorkspaceDisplayNameRows([
+      ...((result.data?.workspaces || []).map((workspace) => workspace?.externalId)),
+      ...(eventRows.map((row) => row.workspace_external_id)),
+    ]).catch(() => new Map());
     const eventRowByExternalId = new Map(
       eventRows.map((row) => [String(row.workspace_external_id || '').trim().toLowerCase(), row])
     );
     const eventWorkspaces = eventRows.map((row) => ({
       externalId: row.workspace_external_id,
-      folderName: `Event - ${row.event_name}`,
+      folderName: displayNameMap.get(String(row.workspace_external_id || '').trim().toLowerCase()) || `Event - ${row.event_name}`,
       rootPath: row.root_path || null,
       fileCount: 0,
       createdAt: row.created_at,
@@ -3778,16 +4263,18 @@ exports.listWorkspaces = async (req, res) => {
     for (const workspace of result.data?.workspaces || []) {
       const externalId = String(workspace.externalId || '').trim().toLowerCase();
       if (!externalId || mergedWorkspaceByExternalId.has(externalId)) continue;
-      mergedWorkspaceByExternalId.set(externalId, workspace);
+      mergedWorkspaceByExternalId.set(externalId, applyWorkspaceDisplayName(workspace, displayNameMap));
     }
 
-    for (const workspace of eventWorkspaces) {
-      const externalId = String(workspace.externalId || '').trim().toLowerCase();
-      if (!externalId) continue;
-      if (mergedWorkspaceByExternalId.has(externalId)) {
-        continue;
+    if (!canUseUpstreamPagination) {
+      for (const workspace of eventWorkspaces) {
+        const externalId = String(workspace.externalId || '').trim().toLowerCase();
+        if (!externalId) continue;
+        if (mergedWorkspaceByExternalId.has(externalId)) {
+          continue;
+        }
+        mergedWorkspaceByExternalId.set(externalId, workspace);
       }
-      mergedWorkspaceByExternalId.set(externalId, workspace);
     }
 
     for (const workspace of mergedWorkspaceByExternalId.values()) {
@@ -3800,6 +4287,7 @@ exports.listWorkspaces = async (req, res) => {
               isCommonEvent: true,
               eventId: eventRow.event_id,
               eventName: eventRow.event_name,
+              displayName: workspace.folderName,
               visibleUntil: eventRow.visible_until,
             }
           : workspace
@@ -3819,7 +4307,7 @@ exports.listWorkspaces = async (req, res) => {
       });
     }
 
-    if (isCreatorRole(req)) {
+    if (creatorRole) {
       const allowedProjectIds = await getCreatorAssignedProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
       filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
@@ -3827,7 +4315,7 @@ exports.listWorkspaces = async (req, res) => {
       );
     }
 
-    if (isClientRole(req)) {
+    if (clientRole) {
       const allowedProjectIds = await getClientProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
       filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
@@ -3846,6 +4334,13 @@ exports.listWorkspaces = async (req, res) => {
         const eventRow = eventRowByExternalId.get(String(workspace?.externalId || '').trim().toLowerCase());
         return eventRow ? !isCommonEventVisibleForRole(eventRow) : false;
       });
+    }
+
+    if (recentOnly) {
+      const recentCutoff = Date.now() - recentDays * 24 * 60 * 60 * 1000;
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
+        getWorkspaceUpdatedTimestamp(workspace) >= recentCutoff
+      );
     }
 
     if (search) {
@@ -3872,12 +4367,28 @@ exports.listWorkspaces = async (req, res) => {
         );
       });
     }
-    const total = filteredWorkspaces.length;
+    filteredWorkspaces = [...filteredWorkspaces].sort((a, b) => {
+      const diff = getWorkspaceUpdatedTimestamp(b) - getWorkspaceUpdatedTimestamp(a);
+      if (diff !== 0) return diff;
+      return String(a?.folderName || a?.externalId || '').localeCompare(String(b?.folderName || b?.externalId || ''));
+    });
+
+    const upstreamPagination = result.data?.pagination || null;
+    const upstreamAlreadyPaginated =
+      canUseUpstreamPagination &&
+      upstreamPagination &&
+      Number(upstreamPagination.limit) === limit &&
+      Number(upstreamPagination.page || page) === page;
+    const total = upstreamAlreadyPaginated
+      ? Number(upstreamPagination.total || filteredWorkspaces.length)
+      : filteredWorkspaces.length;
     const effectiveLimit = hasPaginationParams ? limit : Math.max(total, 1);
     const totalPages = Math.max(1, Math.ceil(total / effectiveLimit));
     const safePage = hasPaginationParams ? Math.min(page, totalPages) : 1;
     const offset = (safePage - 1) * effectiveLimit;
-    const paginatedWorkspaces = filteredWorkspaces.slice(offset, offset + effectiveLimit);
+    const paginatedWorkspaces = upstreamAlreadyPaginated
+      ? filteredWorkspaces
+      : filteredWorkspaces.slice(offset, offset + effectiveLimit);
 
     return res.status(200).json({
       ...result,
@@ -3921,6 +4432,7 @@ exports.getWorkspace = async (req, res) => {
     if (isCommonEventWorkspace) {
       await ensureCommonEventsTable();
       const normalizedExternalId = String(req.params.bookingId || '').trim().toLowerCase();
+      const displayNameMap = await getWorkspaceDisplayNameRows([normalizedExternalId]).catch(() => new Map());
       const [eventRows] = await db.sequelize.query(
         `
         SELECT event_id, event_name, visible_until
@@ -3931,9 +4443,7 @@ exports.getWorkspace = async (req, res) => {
         { replacements: [normalizedExternalId] }
       );
       const eventRow = Array.isArray(eventRows) ? eventRows[0] : null;
-      const rootFolders = (result?.data?.folders || []).filter(
-        (folder) => !isWorkspacePhaseRootName(folder?.name) || Number(folder?.fileCount || 0) > 0
-      );
+      const rootFolders = (result?.data?.folders || []).filter(shouldShowCommonEventRootFolder);
 
       if (isCreatorRole(req)) {
         const creatorFolders = await listCreatorCommonEventFolders({
@@ -3946,7 +4456,7 @@ exports.getWorkspace = async (req, res) => {
           data: {
             ...(result.data || {}),
             workspace: {
-              ...(result.data?.workspace || {}),
+              ...applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
               isCommonEvent: true,
               eventId: eventRow?.event_id,
               eventName: eventRow?.event_name,
@@ -3964,7 +4474,7 @@ exports.getWorkspace = async (req, res) => {
           data: {
             ...(result.data || {}),
             workspace: {
-              ...(result.data?.workspace || {}),
+              ...applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
               isCommonEvent: true,
               eventId: eventRow?.event_id,
               eventName: eventRow?.event_name,
@@ -3974,6 +4484,15 @@ exports.getWorkspace = async (req, res) => {
           },
         };
       }
+    } else {
+      const displayNameMap = await getWorkspaceDisplayNameRows([req.params.bookingId]).catch(() => new Map());
+      result = {
+        ...result,
+        data: {
+          ...(result.data || {}),
+          workspace: applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
+        },
+      };
     }
 
     return res.status(200).json(result);
@@ -3989,6 +4508,54 @@ exports.getWorkspace = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message,
+    });
+  }
+};
+
+exports.updateWorkspaceDisplayName = async (req, res) => {
+  try {
+    if (!isAdminRole(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can rename file manager folders',
+      });
+    }
+
+    const externalId = String(req.params.bookingId || req.body.externalId || '').trim().toLowerCase();
+    const displayName = sanitizeFolderName(req.body.displayName || req.body.folderName || req.body.eventName, '');
+    if (!externalId || !displayName) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId and displayName are required',
+      });
+    }
+
+    await ensureWorkspaceDisplayNamesTable();
+    await db.sequelize.query(
+      `
+      INSERT INTO file_manager_workspace_display_names
+      (external_id, display_name, updated_by_user_id)
+      VALUES (?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        display_name = VALUES(display_name),
+        updated_by_user_id = VALUES(updated_by_user_id),
+        updated_at = CURRENT_TIMESTAMP
+      `,
+      { replacements: [externalId, displayName, getRequestUserId(req) || null] }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'File manager folder renamed',
+      data: {
+        externalId,
+        displayName,
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to rename file manager folder',
     });
   }
 };
@@ -4044,6 +4611,15 @@ exports.getWorkspaceFiles = async (req, res) => {
       );
     }
 
+    const displayNameMap = await getWorkspaceDisplayNameRows([req.params.bookingId]).catch(() => new Map());
+    result = {
+      ...result,
+      data: {
+        ...(result.data || {}),
+        workspace: applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
+      },
+    };
+
     if (isCreatorRole(req) && isCommonEventExternalId(req.params.bookingId)) {
       const phase = normalizeWorkspacePhase(req.query.phase, null);
       const requestedPath = sanitizeRelativeFolderPath(req.query.path || '');
@@ -4078,6 +4654,7 @@ exports.getWorkspaceFiles = async (req, res) => {
         ...result,
         data: {
           ...(result.data || {}),
+          workspace: result.data?.workspace,
           folders: filteredFolders,
           files: filteredFiles,
         },
@@ -4103,18 +4680,124 @@ exports.getWorkspaceFiles = async (req, res) => {
 
 exports.getUploadPolicy = async (req, res) => {
   try {
-    await validateUploadAccessForPath(req, req.body.filepath);
+    const filepath = await resolveWorkspaceDisplayPathToStoragePath(req.body.filepath);
+    await validateUploadAccessForPath(req, filepath);
 
     const result = await proxyRequest('/upload-policy', {
       method: 'POST',
       body: JSON.stringify({
-        filepath: req.body.filepath,
+        filepath,
         fileContentType: req.body.fileContentType,
         fileSize: req.body.fileSize,
+        conflictMode: req.body.conflictMode,
         userId: getRequestUserId(req),
       }),
     });
     return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.getFolderActivityLogs = async (req, res) => {
+  try {
+    const query = new URLSearchParams();
+    const folderPath = req.query.folderPath || req.query.path;
+    const rootPath = req.query.rootPath;
+    const page = req.query.page;
+    const limit = req.query.limit;
+    const action = req.query.action;
+
+    if (folderPath) query.set('folderPath', String(folderPath));
+    if (rootPath) query.set('rootPath', String(rootPath));
+    if (page) query.set('page', String(page));
+    if (limit) query.set('limit', String(limit));
+    if (action) query.set('action', String(action));
+
+    const result = await proxyRequest(`/folder-activity-logs?${query.toString()}`);
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.detectUploadConflicts = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'items array is required',
+      });
+    }
+
+    const limitedItems = items.slice(0, 500);
+    const results = [];
+
+    for (const item of limitedItems) {
+      const requestedFilepath = String(item?.filepath || '').trim();
+      let resolvedFilepath = requestedFilepath;
+
+      try {
+        resolvedFilepath = await resolveWorkspaceDisplayPathToStoragePath(requestedFilepath);
+        await validateUploadAccessForPath(req, resolvedFilepath);
+
+        let metadata = null;
+        try {
+          metadata = await getExternalEntryMetadata(resolvedFilepath);
+        } catch (metadataError) {
+          if (metadataError.status && metadataError.status !== 404) {
+            throw metadataError;
+          }
+        }
+
+        const exists = Boolean(metadata && metadata.isFolder !== true);
+        results.push({
+          filepath: requestedFilepath,
+          resolvedFilepath,
+          fileName: item?.fileName || resolvedFilepath.split('/').pop() || '',
+          success: true,
+          exists,
+          entry: exists
+            ? {
+                id: metadata.id,
+                name: metadata.name,
+                path: metadata.path,
+                size: metadata.size,
+                contentType: metadata.contentType,
+                createdAt: metadata.createdAt,
+                updatedAt: metadata.updatedAt,
+              }
+            : null,
+        });
+      } catch (error) {
+        results.push({
+          filepath: requestedFilepath,
+          resolvedFilepath,
+          fileName: item?.fileName || requestedFilepath.split('/').pop() || '',
+          success: false,
+          exists: false,
+          error: error.message || 'Unable to check upload conflict',
+          code: error.status || 500,
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total: results.length,
+        conflictCount: results.filter((item) => item.exists).length,
+        failureCount: results.filter((item) => !item.success).length,
+        items: results,
+      },
+    });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -4133,33 +4816,26 @@ exports.getUploadPoliciesBatch = async (req, res) => {
       });
     }
 
+    const normalizedItems = [];
     for (const item of items) {
-      await validateUploadAccessForPath(req, item?.filepath);
+      const filepath = await resolveWorkspaceDisplayPathToStoragePath(item?.filepath);
+      await validateUploadAccessForPath(req, filepath);
+      normalizedItems.push({ ...item, filepath });
     }
 
     const result = await proxyRequest('/upload-policies/batch', {
       method: 'POST',
       body: JSON.stringify({
         userId: getRequestUserId(req),
-        items: items.map((item = {}) => ({
+        items: normalizedItems.map((item = {}) => ({
           filepath: item.filepath,
           fileContentType: item.fileContentType,
           fileSize: item.fileSize,
           userId: getRequestUserId(req),
+          conflictMode: item.conflictMode || req.body.conflictMode,
         })),
       }),
     });
-
-    if (result?.success !== false) {
-      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
-      await sendEditsDeliveredEmailsForUploadedItems({
-        items: items.map((item = {}) => ({
-          filepath: item.filepath,
-          fileName: item.fileName || String(item.filepath || '').split('/').pop() || '',
-        })),
-        deliveredByName: uploaderName || 'Production Team',
-      });
-    }
 
     return res.status(200).json(result);
   } catch (error) {
@@ -4250,6 +4926,7 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
       method: 'POST',
       body: JSON.stringify({
         userId: getRequestUserId(req),
+        authorName: uploaderName || 'Beige User',
         items: items.map((item = {}) => ({
           filepath: item.filepath,
           fileContentType: item.fileContentType,
@@ -4492,12 +5169,13 @@ exports.reindexFaceEmbeddings = async (req, res) => {
 
 exports.getFileViewUrl = async (req, res) => {
   try {
-    await ensureCreatorFileAccess(req, req.body.filepath);
-    await ensureClientFileAccess(req, req.body.filepath);
+    const filepath = await resolveWorkspaceDisplayPathToStoragePath(req.body.filepath);
+    await ensureCreatorFileAccess(req, filepath);
+    await ensureClientFileAccess(req, filepath);
     const result = await proxyRequest('/file-view-url', {
       method: 'POST',
       body: JSON.stringify({
-        filepath: req.body.filepath,
+        filepath,
       }),
     });
     return res.status(200).json(withPublicUrl(result, req));
@@ -4565,6 +5243,21 @@ exports.createFolder = async (req, res) => {
 
     if (result?.success !== false) {
       const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      if (isCreatorRole(req)) {
+        const createdFolderPathFromProvider = result?.data?.folder?.path || result?.data?.folderPath || '';
+        const extractedFromProvider = extractPhaseAndRelativePath(createdFolderPathFromProvider, phase || null);
+        const createdFolderPath = sanitizeRelativeFolderPath(
+          extractedFromProvider.relativePath || [path, folderName].filter(Boolean).join('/')
+        );
+        const createdFolderPhase = extractedFromProvider.phase || phase || 'root';
+        await recordCreatorFolderOwnership({
+          externalId,
+          phase: createdFolderPhase,
+          folderPath: createdFolderPath,
+          userId: getRequestUserId(req),
+        });
+      }
+
       await sendNewVersionUploadedClientEmailForFolder({
         externalId,
         phase: phase || req.body.phase,
@@ -4698,10 +5391,14 @@ exports.deleteEntry = async (req, res) => {
     const targetPath = req.body.filepath || req.body.path;
     await ensureCreatorFileAccess(req, targetPath);
     await ensureClientFileAccess(req, targetPath);
+    const deleteMetadata = await assertCreatorCanDeleteFileManagerEntry(req, targetPath);
+    const deleterName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
     const result = await proxyRequest('/delete', {
       method: 'POST',
       body: JSON.stringify({
         filepath: targetPath,
+        userId: getRequestUserId(req),
+        authorName: deleterName || 'Beige User',
       }),
     });
 
@@ -4711,6 +5408,7 @@ exports.deleteEntry = async (req, res) => {
         console.error('Failed to invalidate deleted file-manager shares:', error);
       });
       await deleteFaceEmbeddingRecordsByPath(deletedPath).catch(() => null);
+      await cleanupCreatorFolderOwnershipForDeletedFolder(deleteMetadata, deletedPath).catch(() => null);
 
       const rows = await listCommonEventRows().catch(() => []);
       const deletedRootRow = rows.find((row) => {
@@ -4948,6 +5646,44 @@ const ensureSharedScopeAccess = (share, requestedPhase, requestedPath) => {
   return true;
 };
 
+const resolveSharedScopeRequestFromFilepath = async (share, filepath, requestedPhase, requestedPath) => {
+  const normalizedFilepath = normalizePathForAccess(filepath);
+  const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedPhase);
+  let scopePhase = extractedFromFilepath.phase || requestedPhase;
+  let scopePath = extractedFromFilepath.relativePath || requestedPath;
+
+  if (!extractedFromFilepath.phase && isCommonEventExternalId(share?.external_id)) {
+    const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
+    if (workspaceRootPath && isPathWithin(workspaceRootPath, normalizedFilepath)) {
+      const relativeToCommonEventRoot =
+        normalizedFilepath.toLowerCase() === workspaceRootPath.toLowerCase()
+          ? ''
+          : normalizePathForAccess(normalizedFilepath.slice(workspaceRootPath.length + 1));
+      scopePhase = null;
+      scopePath = relativeToCommonEventRoot || requestedPath;
+    }
+  }
+
+  return {
+    phase: scopePhase,
+    path: normalizePathForAccess(scopePath || ''),
+  };
+};
+
+const filterSharedCommonEventRootListing = (listing, share, phaseToUse, pathToUse) => {
+  if (!isCommonEventExternalId(share?.external_id) || phaseToUse || pathToUse) {
+    return listing?.data || {};
+  }
+
+  const data = listing?.data || {};
+  return {
+    ...data,
+    folders: Array.isArray(data.folders)
+      ? data.folders.filter((folder) => !isWorkflowPhaseFolderName(folder?.name || folder?.title) || hasFolderVisibleContent(folder))
+      : data.folders,
+  };
+};
+
 const normalizeSharePermission = (value, accessMode = 'email_only') => {
   const normalizedAccessMode = String(accessMode || 'email_only').trim().toLowerCase();
   if (normalizedAccessMode === 'anyone_with_link') return 'view_download';
@@ -4995,7 +5731,7 @@ const hasUnsafePathSegment = (value) =>
     .split('/')
     .some((segment) => segment === '.' || segment === '..');
 
-const ensureSharedUploadAllowedLocation = (phase, path) => {
+const ensureSharedUploadAllowedLocation = (phase, path, options = {}) => {
   const normalizedPhase = normalizeSharedUploadPhase(phase);
   const pathSegments = normalizePathForAccess(path)
     .split('/')
@@ -5007,7 +5743,8 @@ const ensureSharedUploadAllowedLocation = (phase, path) => {
     normalizedPhase === 'pre' ||
     (normalizedPhase === 'post' && pathSegments.length > 0) ||
     (!normalizedPhase && rootSegment === 'preproduction' && pathSegments.length > 0) ||
-    (!normalizedPhase && rootSegment === 'postproduction' && pathSegments.length > 1);
+    (!normalizedPhase && rootSegment === 'postproduction' && pathSegments.length > 1) ||
+    (!normalizedPhase && options.allowCommonEventRoot === true && pathSegments.length > 0);
 
   if (!isAllowed) {
     const error = new Error('Uploads are allowed only inside Pre-Production or Post-Production folders');
@@ -5049,7 +5786,9 @@ const validateSharedResolvedUploadFilepath = async (share, filepath, requestedPh
     : requestedRelativePath;
 
   ensureSharedScopeAccess(share, effectivePhase, effectiveRelativePath);
-  ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath);
+  ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath, {
+    allowCommonEventRoot: isCommonEventExternalId(share?.external_id),
+  });
   return normalizedFilepath;
 };
 
@@ -5070,7 +5809,9 @@ const resolveSharedUploadFilepath = async (share, requestedPhase, requestedPath,
   const phaseToUse = normalizeSharedUploadPhase(requestedPhase) || normalizeSharedUploadPhase(share?.phase);
   const pathToUse = normalizePathForAccess(requestedPath || share?.path || '');
   ensureSharedScopeAccess(share, phaseToUse, pathToUse);
-  ensureSharedUploadAllowedLocation(phaseToUse, pathToUse);
+  ensureSharedUploadAllowedLocation(phaseToUse, pathToUse, {
+    allowCommonEventRoot: isCommonEventExternalId(share?.external_id),
+  });
 
   const phaseFolder = phaseToUse === 'pre' ? 'Pre-Production' : phaseToUse === 'post' ? 'Post-Production' : '';
   const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
@@ -5208,6 +5949,64 @@ exports.searchRegisteredClientsForWorkspaceAccess = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Failed to search registered clients',
+    });
+  }
+};
+
+exports.getFileManagerSettings = async (_req, res) => {
+  try {
+    const settings = await getFileManagerSettings();
+    return res.status(200).json({
+      success: true,
+      data: settings,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to load file manager settings',
+    });
+  }
+};
+
+exports.updateFileManagerSettings = async (req, res) => {
+  try {
+    if (!isAdminRole(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can update file manager settings',
+      });
+    }
+
+    await ensureFileManagerSettingsTable();
+    const cpDeleteLockDays = normalizeCpDeleteLockDays(
+      req.body.cp_delete_lock_days ?? req.body.cpDeleteLockDays
+    );
+
+    await db.sequelize.query(
+      `INSERT INTO file_manager_settings
+       (setting_id, cp_delete_lock_days, updated_by_user_id)
+       VALUES (1, :cpDeleteLockDays, :updatedBy)
+       ON DUPLICATE KEY UPDATE
+         cp_delete_lock_days = VALUES(cp_delete_lock_days),
+         updated_by_user_id = VALUES(updated_by_user_id),
+         updated_at = CURRENT_TIMESTAMP`,
+      {
+        replacements: {
+          cpDeleteLockDays,
+          updatedBy: getRequestUserId(req) || null,
+        },
+      }
+    );
+
+    const settings = await getFileManagerSettings();
+    return res.status(200).json({
+      success: true,
+      data: settings,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to update file manager settings',
     });
   }
 };
@@ -5512,12 +6311,34 @@ exports.verifyShareOtp = async (req, res) => {
     const shareToken = String(req.body.shareToken || '').trim();
     const email = normalizeEmailAddress(req.body.email);
     const otp = String(req.body.otp || '').trim();
-    if (!shareToken || !email || !otp) {
-      return res.status(400).json({ success: false, message: 'shareToken, email and otp are required' });
+    if (!shareToken) {
+      return res.status(400).json({ success: false, message: 'shareToken is required' });
     }
 
     const share = await getShareByToken(shareToken);
     if (!share) return sendSharedResourceUnavailable(res);
+
+    if (String(share.access_mode || 'email_only') === 'anyone_with_link') {
+      const publicEmail = normalizeEmailAddress(share.shared_with_email) || 'anyone@link.local';
+      const accessToken = signShareAccessToken({ shareToken, email: publicEmail });
+      return res.status(200).json({
+        success: true,
+        data: {
+          accessToken,
+          permission: normalizeSharePermission(share.permission, share.access_mode),
+          accessMode: share.access_mode || 'anyone_with_link',
+        },
+      });
+    }
+
+    // Old behavior kept for quick rollback if anyone-with-link needs OTP again:
+    // if (!shareToken || !email || !otp) {
+    //   return res.status(400).json({ success: false, message: 'shareToken, email and otp are required' });
+    // }
+    if (!email || !otp) {
+      return res.status(400).json({ success: false, message: 'email and otp are required' });
+    }
+
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
@@ -5622,9 +6443,11 @@ exports.getSharedContent = async (req, res) => {
       }
       throw error;
     }
+    const listingData = filterSharedCommonEventRootListing(listing, share, phaseToUse, pathToUse);
     return res.status(200).json({
       success: true,
       data: {
+        ...listingData,
         type: share.resource_type === 'workspace' ? 'workspace' : 'folder',
         externalId: share.external_id,
         phase: phaseToUse,
@@ -5633,7 +6456,6 @@ exports.getSharedContent = async (req, res) => {
         rootPath: share.path,
         permission: normalizeSharePermission(share.permission, share.access_mode),
         accessMode: share.access_mode || 'email_only',
-        ...listing.data,
       },
     });
   } catch (error) {
@@ -5843,10 +6665,13 @@ exports.getSharedDownloadUrl = async (req, res) => {
     const normalizedFilepath = normalizePathForAccess(filepath);
     const requestedPhase = normalizeWorkspacePhase(req.query.phase, null);
     const requestedRelativePath = normalizePathForAccess(req.query.path || '');
-    const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedPhase);
-    const scopePhase = extractedFromFilepath.phase || requestedPhase;
-    const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
-    ensureSharedScopeAccess(share, scopePhase, scopePath);
+    const scopeRequest = await resolveSharedScopeRequestFromFilepath(
+      share,
+      normalizedFilepath,
+      requestedPhase,
+      requestedRelativePath
+    );
+    ensureSharedScopeAccess(share, scopeRequest.phase, scopeRequest.path);
 
     const result = await proxyRequest('/file-download-url', {
       method: 'POST',
@@ -5906,10 +6731,13 @@ exports.getSharedViewUrl = async (req, res) => {
     const normalizedFilepath = normalizePathForAccess(filepath);
     const requestedPhase = normalizeWorkspacePhase(req.query.phase, null);
     const requestedRelativePath = normalizePathForAccess(req.query.path || '');
-    const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedPhase);
-    const scopePhase = extractedFromFilepath.phase || requestedPhase;
-    const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
-    ensureSharedScopeAccess(share, scopePhase, scopePath);
+    const scopeRequest = await resolveSharedScopeRequestFromFilepath(
+      share,
+      normalizedFilepath,
+      requestedPhase,
+      requestedRelativePath
+    );
+    ensureSharedScopeAccess(share, scopeRequest.phase, scopeRequest.path);
 
     const result = await proxyRequest('/file-view-url', {
       method: 'POST',
@@ -5973,10 +6801,13 @@ exports.getSharedViewUrlsBatch = async (req, res) => {
 
     const allowedFilepaths = [];
     for (const filepath of filepaths) {
-      const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
-      const scopePhase = extractedFromFilepath.phase || requestedPhase;
-      const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
-      ensureSharedScopeAccess(share, scopePhase, scopePath);
+      const scopeRequest = await resolveSharedScopeRequestFromFilepath(
+        share,
+        filepath,
+        requestedPhase,
+        requestedRelativePath
+      );
+      ensureSharedScopeAccess(share, scopeRequest.phase, scopeRequest.path);
       allowedFilepaths.push(filepath);
     }
 

@@ -2687,3 +2687,11 @@ CREATE TABLE IF NOT EXISTS file_manager_workspace_access (
   KEY idx_workspace_access_external_id (external_id),
   KEY idx_workspace_access_client_user (client_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 27-08-26
+
+ALTER TABLE stream_project_booking 
+ADD COLUMN updated_by INTEGER NULL,
+ADD CONSTRAINT fk_stream_project_updated_by 
+    FOREIGN KEY (updated_by) REFERENCES users(id) 
+    ON DELETE SET NULL;

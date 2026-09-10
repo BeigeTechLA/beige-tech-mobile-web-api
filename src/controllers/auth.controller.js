@@ -545,13 +545,14 @@ async function buildAuthenticatedUserResponse(user) {
       include: [{
         model: UserType,
         as: 'userType',
-        attributes: ['user_type_id', 'user_role']
+        attributes: ['user_type_id', 'user_role', 'is_internal_member']
       }]
     });
   }
 
   const role = user.userType?.user_role || 'client';
   const user_type_id = user.userType?.user_type_id || user.user_type || null;
+  const is_internal_member = Number(user.userType?.is_internal_member || 0) === 1;
 
   let crew_member_id = null;
   let is_crew_verified = null;
@@ -593,6 +594,7 @@ async function buildAuthenticatedUserResponse(user) {
       instagram_handle: user.instagram_handle,
       role,
       user_type_id,
+      is_internal_member,
       email_verified: user.email_verified,
       crew_member_id,
       affiliate_id,
@@ -1180,7 +1182,7 @@ exports.login = async (req, res) => {
           {
             model: UserType,
             as: "userType",
-            attributes: ["user_type_id", "user_role"],
+            attributes: ["user_type_id", "user_role", "is_internal_member"],
           },
         ],
       });
@@ -1231,6 +1233,7 @@ exports.login = async (req, res) => {
       // Get user role
       const role = user.userType?.user_role || "client";
       const user_type_id = user.userType?.user_type_id || null;
+      const is_internal_member = Number(user.userType?.is_internal_member || 0) === 1;
 
       // Get crew_member_id if creator
       let crew_member_id = null;
@@ -1277,6 +1280,7 @@ exports.login = async (req, res) => {
           instagram_handle: user.instagram_handle,
           role,
           user_type_id,
+          is_internal_member,
           email_verified: user.email_verified,
           crew_member_id,
            affiliate_id,
@@ -1339,7 +1343,7 @@ exports.login = async (req, res) => {
         include: [{
           model: UserType,
           as: 'userType',
-          attributes: ['user_type_id', 'user_role']
+          attributes: ['user_type_id', 'user_role', 'is_internal_member']
         }]
       });
 
@@ -1380,6 +1384,7 @@ exports.login = async (req, res) => {
 
       const role = user.userType?.user_role || 'client';
       const user_type_id = user.userType?.user_type_id || null;
+      const is_internal_member = Number(user.userType?.is_internal_member || 0) === 1;
 
       // Get crew_member_id if creator
       let crew_member_id = null;
@@ -1423,6 +1428,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           instagram_handle: user.instagram_handle,
           role,
           user_type_id,
+          is_internal_member,
           email_verified: user.email_verified,
           crew_member_id,
           affiliate_id,
@@ -1508,7 +1514,7 @@ exports.googleLogin = async (req, res) => {
     const includeUserType = [{
       model: UserType,
       as: 'userType',
-      attributes: ['user_type_id', 'user_role']
+      attributes: ['user_type_id', 'user_role', 'is_internal_member']
     }];
     const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
 
@@ -1649,12 +1655,6 @@ exports.googleLogin = async (req, res) => {
         createdCrewMemberId = crewMember.crew_member_id;
       });
 
-      emailService.sendNewCrewSignupNotification({
-        first_name: firstName,
-        last_name: lastName,
-        email,
-        phone_number: normalizedPhone
-      }).catch(err => console.error('Admin Google CP Signup Notification Error:', err));
     } else if (!user) {
       const clientTypeId = await findClientTypeId();
 
@@ -2050,43 +2050,16 @@ exports.resetPassword = async (req, res) => {
  */
 exports.generateUserResetLinkForAdmin = async (req, res) => {
   try {
-    const rawIdentifier =
-      req.body.user_id ??
-      req.body.client_id ??
-      req.body.crew_member_id ??
-      req.body.id;
+    const email = String(req.body.email || "").trim().toLowerCase();
 
-    const identifier = Number.parseInt(String(rawIdentifier), 10);
-    if (!Number.isFinite(identifier)) {
+    if (!email) {
       return res.status(400).json({
         success: false,
-        message: 'user_id, client_id, or crew_member_id is required'
+        message: 'email is required'
       });
     }
 
-    let user = await User.findOne({ where: { id: identifier } });
-
-    if (!user) {
-      const client = await Clients.findOne({
-        where: { client_id: identifier },
-        attributes: ['user_id', 'name', 'email']
-      });
-
-      if (client?.user_id) {
-        user = await User.findOne({ where: { id: client.user_id } });
-      }
-    }
-
-    if (!user) {
-      const crewMember = await CrewMember.findOne({
-        where: { crew_member_id: identifier },
-        attributes: ['user_id', 'first_name', 'last_name', 'email']
-      });
-
-      if (crewMember?.user_id) {
-        user = await User.findOne({ where: { id: crewMember.user_id } });
-      }
-    }
+    const user = await User.findOne({ where: { email } });
 
     if (!user) {
       return res.status(404).json({ success: false, message: 'Linked user account not found' });
@@ -2142,7 +2115,7 @@ exports.getCurrentUser = async (req, res) => {
       include: [{
         model: UserType,
         as: 'userType',
-        attributes: ['user_type_id', 'user_role']
+        attributes: ['user_type_id', 'user_role', 'is_internal_member']
       }]
     });
 
@@ -2161,6 +2134,8 @@ exports.getCurrentUser = async (req, res) => {
     }
 
     const role = user.userType?.user_role || 'client';
+    const user_type_id = user.userType?.user_type_id || user.user_type || null;
+    const is_internal_member = Number(user.userType?.is_internal_member || 0) === 1;
     const permissions = getPermissionsForRole(role);
     const crewMember = await getCreatorCrewMemberForUser(user);
 
@@ -2173,6 +2148,8 @@ exports.getCurrentUser = async (req, res) => {
         phone_number: user.phone_number,
         instagram_handle: user.instagram_handle,
         role: role,
+        user_type_id,
+        is_internal_member,
         email_verified: user.email_verified,
         created_at: user.created_at,
         crew_member_id: crewMember?.crew_member_id || null,
@@ -2255,7 +2232,7 @@ exports.confirmCpEventLocation = async (req, res) => {
       include: [{
         model: UserType,
         as: 'userType',
-        attributes: ['user_type_id', 'user_role']
+        attributes: ['user_type_id', 'user_role', 'is_internal_member']
       }]
     });
 
@@ -2356,7 +2333,7 @@ exports.quickRegister = async (req, res) => {
       include: [{
         model: UserType,
         as: 'userType',
-        attributes: ['user_type_id', 'user_role']
+        attributes: ['user_type_id', 'user_role', 'is_internal_member']
       }]
     });
 
@@ -2707,9 +2684,9 @@ exports.registerCrewMemberStep1 = [
       await transaction.commit();
       transaction = null;
 
-      emailService.sendNewCrewSignupNotification({
-        first_name, last_name, email, phone_number, location, working_distance
-      }).catch(err => console.error('Admin Notification Error:', err));
+      // emailService.sendNewCrewSignupNotification({
+      //   first_name, last_name, email, phone_number, location, working_distance
+      // }).catch(err => console.error('Admin Notification Error:', err));
 
       // await emailService.sendVerificationOTP(
       //   { name: `${first_name} ${last_name}`, email },
@@ -3112,23 +3089,51 @@ exports.registerCrewMemberStep3 = [
 
       const updatedMember = await getCrewMemberWithOnboardingFiles({ crew_member_id });
       const onboardingSummary = await syncCreatorRegistrationComplete(updatedMember);
+      const submittedAt = member.application_submitted_at || (
+        onboardingSummary.is_registration_complete ? new Date() : null
+      );
 
       // Google Sheets sync disabled for now.
       // await updateSheetRow('Crew_data', crew_member_id, {
       //   'N': JSON.stringify(social_media_links),
       // });
 
-      // SEND WELCOME EMAIL
-      const user = await User.findOne({
-        where: { email: member.email },
-        attributes: ['email']
-      });
+      if (submittedAt && !member.application_submitted_at) {
+        await member.update({ application_submitted_at: submittedAt });
+      }
 
-      if (user) {
-        emailService.sendCPSignupWelcomeEmail({
-          first_name: member.first_name,
-          email: user.email
-        }).catch(err => console.error('CP Welcome Email Error:', err));
+      // Notify sales/admin only once, after the creator has completed all required signup details.
+      if (submittedAt && !member.application_submission_email_sent_at) {
+        const user = await User.findOne({
+          where: { email: member.email },
+          attributes: ['email']
+        });
+
+        try {
+          const notificationResult = await emailService.sendNewCrewSignupNotification({
+            first_name: member.first_name,
+            last_name: member.last_name,
+            email: member.email,
+            phone_number: member.phone_number,
+            location: member.location,
+            working_distance: member.working_distance
+          });
+
+          if (notificationResult?.success) {
+            await member.update({ application_submission_email_sent_at: new Date() });
+          } else {
+            console.error('Admin CP Signup Notification Error:', notificationResult?.error);
+          }
+
+          if (user) {
+            await emailService.sendCPSignupWelcomeEmail({
+              first_name: member.first_name,
+              email: user.email
+            });
+          }
+        } catch (err) {
+          console.error('CP Application Submission Email Error:', err);
+        }
       }
 
       return res.status(200).json({
@@ -3137,6 +3142,7 @@ exports.registerCrewMemberStep3 = [
           ? 'Step 3 completed. Registration finished!'
           : 'Step 3 saved. Please complete the remaining required details.',
         is_registration_complete: onboardingSummary.is_registration_complete,
+        application_submitted_at: submittedAt,
         onboardingMissingDetail: onboardingSummary.onboardingMissingDetail,
         missing_fields: onboardingSummary.missing_fields
       });
@@ -3573,13 +3579,20 @@ exports.createInternalCredential = async (req, res) => {
         user_type_id: normalizedUserType,
         is_active: 1
       },
-      attributes: ['user_type_id', 'user_role']
+      attributes: ['user_type_id', 'user_role', 'is_internal_member']
     });
 
     if (!userTypeRecord) {
       return res.status(400).json({
         success: false,
         message: 'Invalid or inactive user_type'
+      });
+    }
+
+    if (Number(userTypeRecord.is_internal_member || 0) !== 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Only internal member roles can be used for internal credentials'
       });
     }
 
@@ -3750,6 +3763,8 @@ exports.getOnboardingStatus = async (req, res) => {
         success: true,
         ...buildEmptyOnboardingSummary(),
         is_crew_verified: 0,
+        application_submitted_at: null,
+        application_submission_email_sent_at: null,
         can_access_dashboard: false,
         should_resume_signup: true,
         profile_onboarding_status: buildEmptyOnboardingSummary(),
@@ -3770,6 +3785,8 @@ exports.getOnboardingStatus = async (req, res) => {
       success: true,
       ...effectiveOnboardingSummary,
       is_crew_verified: Number(member.is_crew_verified || 0),
+      application_submitted_at: member.application_submitted_at || null,
+      application_submission_email_sent_at: member.application_submission_email_sent_at || null,
       can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
       should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
       profile_onboarding_status: onboardingSummary,

@@ -21,12 +21,19 @@ exports.authenticate = async (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    await auth.validatePermissionVersion(decoded);
+    const user = await auth.validatePermissionVersion(decoded);
 
     // Attach user info to request
     req.userId = decoded.userId;
     req.userRole = decoded.userRole;
     req.userType = decoded.userTypeId;
+    req.isInternalMember = Number(user.userType?.is_internal_member || 0) === 1;
+    req.user = {
+      userId: decoded.userId,
+      userTypeId: decoded.userTypeId,
+      userRole: decoded.userRole,
+      isInternalMember: req.isInternalMember
+    };
 
     next();
 
@@ -260,7 +267,7 @@ exports.requireAdmin = async (req, res, next) => {
 
     const userRole = user.userType?.user_role;
 
-    const allowedRoles = ['admin', 'Admin', 'sales_admin'];
+    const allowedRoles = ['admin', 'Admin', 'sales_admin', 'super_admin', 'Super_Admin', 'Super_admin'];
 
     if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({

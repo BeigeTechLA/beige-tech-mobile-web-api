@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const externalFileManagerController = require('../controllers/external-file-manager.controller');
-const { authenticate, authenticateAdmin } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const fileManagerView = requireAnyPermission([
@@ -47,16 +47,19 @@ router.get('/common-events', authenticate, fileManagerView, externalFileManagerC
 router.post('/common-events', authenticate, fileManagerCreate, externalFileManagerController.createCommonEvent);
 router.post('/common-events/:eventExternalId/creator-folder', authenticate, fileManagerCreate, externalFileManagerController.createCreatorEventFolder);
 router.post('/face-scan/query-upload-policy', authenticate, externalFileManagerController.getFaceScanQueryUploadPolicy);
-router.get('/face-scan/queue-status', authenticateAdmin, externalFileManagerController.getFaceScanQueueStatus);
+router.get('/face-scan/queue-status', authenticate, fileManagerView, externalFileManagerController.getFaceScanQueueStatus);
 router.post('/face-scan/jobs', authenticate, externalFileManagerController.createFaceScanJob);
 router.get('/face-scan/jobs/:jobId', authenticate, externalFileManagerController.getFaceScanJob);
 router.post('/face-scan/search', authenticate, fileManagerView, externalFileManagerController.searchFaceMatches);
 router.get('/face-scan/index-status/:externalId', authenticate, fileManagerView, externalFileManagerController.getFaceScanIndexStatus);
 router.post('/face-scan/reindex', authenticate, fileManagerCreate, externalFileManagerController.reindexFaceEmbeddings);
 router.post('/workspace', authenticate, fileManagerCreate, externalFileManagerController.createWorkspace);
+router.patch('/workspace/:bookingId/display-name', authenticate, fileManagerCreate, externalFileManagerController.updateWorkspaceDisplayName);
 router.get('/workspace/:bookingId', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspace);
 router.get('/workspace/:bookingId/files', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspaceFiles);
+router.get('/folder-activity-logs', authenticate, fileManagerView, externalFileManagerController.getFolderActivityLogs);
 router.post('/folder', authenticate, fileManagerCreate, externalFileManagerController.createFolder);
+router.post('/upload-conflicts', authenticate, fileManagerCreate, externalFileManagerController.detectUploadConflicts);
 router.post('/upload-policy', authenticate, fileManagerCreate, externalFileManagerController.getUploadPolicy);
 router.post('/upload-policies/batch', authenticate, fileManagerCreate, externalFileManagerController.getUploadPoliciesBatch);
 router.post('/file-uploaded', authenticate, fileManagerCreate, externalFileManagerController.notifyFileUploaded);
@@ -72,11 +75,13 @@ router.get('/workspace-access', authenticate, fileManagerView, externalFileManag
 router.get('/workspace-access/clients', authenticate, fileManagerCreate, externalFileManagerController.searchRegisteredClientsForWorkspaceAccess);
 router.post('/workspace-access', authenticate, fileManagerCreate, externalFileManagerController.grantWorkspaceAccess);
 router.delete('/workspace-access/:accessId', authenticate, fileManagerDelete, externalFileManagerController.revokeWorkspaceAccess);
+router.get('/settings', authenticate, fileManagerView, externalFileManagerController.getFileManagerSettings);
+router.patch('/settings', authenticate, fileManagerCreate, externalFileManagerController.updateFileManagerSettings);
 router.post('/share', authenticate, fileManagerCreate, externalFileManagerController.createShare);
 router.get('/share', authenticate, fileManagerView, externalFileManagerController.listShares);
 router.get('/share/access-logs', authenticate, fileManagerView, externalFileManagerController.listShareAccessLogs);
 router.delete('/share', authenticate, fileManagerDelete, externalFileManagerController.revokeShare);
-router.patch('/common-events/:eventExternalId', authenticate, externalFileManagerController.updateCommonEvent);
+router.patch('/common-events/:eventExternalId', authenticate, fileManagerCreate, externalFileManagerController.updateCommonEvent);
 router.post('/share/request-otp', externalFileManagerController.requestShareOtp);
 router.post('/share/verify-otp', externalFileManagerController.verifyShareOtp);
 router.get('/share/:shareToken/content', externalFileManagerController.getSharedContent);

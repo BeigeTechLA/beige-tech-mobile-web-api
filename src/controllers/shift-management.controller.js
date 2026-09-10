@@ -82,6 +82,7 @@ function mapLeadRow(row) {
 
   return {
     lead_id: lead.lead_id,
+    booking_id: lead.booking_id,
     client_name: lead.client_name,
     email_id: lead.guest_email,
     date: formatDisplayDate(lead.created_at),
@@ -102,6 +103,7 @@ function mapQuoteRow(row) {
     sales_quote_id: quote.sales_quote_id,
     quote_number: quote.quote_number,
     client_name: quote.client_name,
+    client_email: quote.client_email,
     client_location: quote.client_address || null,
     project: quote.video_shoot_type || quote.project_description || null,
     amount: quote.total,
@@ -329,49 +331,11 @@ exports.updateRoundRobin = async (req, res) => {
 exports.assignmentHistory = async (req, res) => {
   try {
     const { page, limit, offset } = service.pageParams(req.query);
+    const search = String(req.query.search || '').trim().toLowerCase();
     const where = {};
     ['shift_id', 'sales_rep_id', 'status'].forEach((field) => {
       if (req.query[field]) where[field] = req.query[field];
     });
-    if (req.query.search) {
-      const search = String(req.query.search).trim();
-
-      if (search) {
-        const searchLike = { [Op.like]: `%${search}%` };
-
-        const [salesSearchLeads, clientSearchLeads] = await Promise.all([
-          models.sales_leads.findAll({
-            where: {
-              is_active: 1,
-              [Op.or]: [
-                { client_name: searchLike },
-                { guest_email: searchLike }
-              ]
-            },
-            attributes: ['lead_id', 'is_active']
-          }),
-
-          models.client_leads.findAll({
-            where: {
-              [Op.or]: [
-                { client_name: searchLike },
-                { guest_email: searchLike }
-              ]
-            },
-            attributes: ['lead_id']
-          })
-        ]);
-
-        const matchingLeadIds = [
-          ...salesSearchLeads.map((lead) => lead.lead_id),
-          ...clientSearchLeads.map((lead) => lead.lead_id)
-        ];
-
-        where.lead_id = {
-          [Op.in]: [...new Set(matchingLeadIds)]
-        };
-      }
-    }
     if (req.query.date) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date))) {
         return res.status(400).json({ success: false, message: 'date must be in YYYY-MM-DD format' });
@@ -436,6 +400,33 @@ exports.assignmentHistory = async (req, res) => {
       const assignment = row.toJSON ? row.toJSON() : row;
       const lead = leadById.get(assignment.lead_id) || {};
       if (lead._lead_type === 'sales' && Number(lead.is_active ?? 1) !== 1) return false;
+      if (search) {
+        const currentStatus = lead.lead_id
+          ? lead._lead_type === 'client'
+            ? leadAssignmentService.getClientBookingStatus(lead, lead.booking)
+            : leadAssignmentService.getLeadBookingStatus(lead, lead.booking)
+          : assignment.status;
+        const haystack = [
+          assignment.id,
+          assignment.assignment_id,
+          assignment.lead_id,
+          assignment.client_name,
+          lead.client_name,
+          lead.guest_email,
+          assignment.status,
+          currentStatus,
+          assignment.source,
+          assignment.lead_source,
+          assignment.sales_rep?.name,
+          assignment.sales_rep?.email,
+          assignment.shift?.name
+        ]
+          .filter((value) => value !== null && value !== undefined)
+          .join(' ')
+          .toLowerCase();
+
+        return haystack.includes(search);
+      }
       return true;
     });
     const paginatedAssignments = filteredAssignments.slice(offset, offset + limit);
@@ -475,6 +466,16 @@ exports.salesRepLeads = async (req, res) => {
   try {
     const { page, limit, offset } = service.pageParams(req.query);
     const where = { assigned_sales_rep_id: req.params.id, is_active: 1 };
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      const searchLike = { [Op.like]: `%${search}%` };
+      where[Op.or] = [
+        { client_name: searchLike },
+        { guest_email: searchLike },
+        { lead_id: searchLike },
+        { booking_id: searchLike }
+      ];
+    }
     if (req.query.lead_type) {
       const leadType = String(req.query.lead_type).toLowerCase().replace(/[\s-]+/g, '_');
       where.lead_type = leadType === 'self_serve' ? 'self_serve' : leadType === 'sales_assisted' ? 'sales_assisted' : req.query.lead_type;
@@ -536,6 +537,19 @@ exports.salesRepQuotes = async (req, res) => {
   try {
     const { page, limit, offset } = service.pageParams(req.query);
     const where = { assigned_sales_rep_id: req.params.id };
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      const searchLike = { [Op.like]: `%${search}%` };
+      where[Op.or] = [
+        { sales_quote_id: searchLike },
+        { quote_number: searchLike },
+        { client_name: searchLike },
+        { client_email: searchLike },
+        { client_address: searchLike },
+        { project_description: searchLike },
+        { video_shoot_type: searchLike }
+      ];
+    }
     if (req.query.status) where.status = normalizeQuoteStatusFilter(req.query.status);
     if (req.query.booking_type) where.booking_type = req.query.booking_type;
     if (req.query.date) {
@@ -544,7 +558,7 @@ exports.salesRepQuotes = async (req, res) => {
     }
     const result = await models.sales_quotes.findAndCountAll({
       where,
-      attributes: ['sales_quote_id', 'quote_number', 'client_name', 'client_address', 'project_description', 'video_shoot_type', 'total', 'status', 'valid_until', 'booking_type', 'created_at'],
+      attributes: ['sales_quote_id', 'quote_number', 'client_name', 'client_email', 'client_address', 'project_description', 'video_shoot_type', 'total', 'status', 'valid_until', 'booking_type', 'created_at'],
       order: [['created_at', 'DESC']],
       limit,
       offset

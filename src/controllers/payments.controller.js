@@ -40,7 +40,13 @@ function normalizePushText(value) {
   return text || null;
 }
 
+function isMobileAppPaymentMetadata(metadata = {}) {
+  return String(metadata.origin || '').toLowerCase() === 'mobile_app' ||
+    String(metadata.app_source || '').toLowerCase() === 'beige_app';
+}
+
 async function sendBookingConfirmedPush({ booking, bookingId }) {
+  /*
   const clientUserId = Number(booking?.user_id || 0);
   if (!clientUserId) return;
 
@@ -82,6 +88,7 @@ async function sendBookingConfirmedPush({ booking, bookingId }) {
       message: error.message || error
     });
   }
+    */
 }
 
 async function getQuoteCreatorNotificationRecipient({
@@ -1522,11 +1529,18 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       paymentMethod: webhookPaymentMethod,
       transactionId: paymentIntentId
     }).catch(err => console.error('Booking Confirmation Email Error:', err));
-    if (isFullyPaidAfterWebhook) {
+    if (isFullyPaidAfterWebhook && !isMobileAppPaymentMetadata(invoiceMetadata)) {
       sendBookingConfirmedPush({
         booking,
         bookingId: booking_id
       }).catch(err => console.error('Webhook booking confirmed push error:', err));
+    } else if (isFullyPaidAfterWebhook) {
+      console.log('Webhook booking confirmed push skipped for mobile app payment', {
+        booking_id,
+        paymentIntentId,
+        origin: invoiceMetadata?.origin || null,
+        app_source: invoiceMetadata?.app_source || null
+      });
     }
     notifyAssignedCreatorsAfterPayment(booking_id)
       .catch(err => console.error('Assigned Creator Notification Error:', err));
@@ -3126,6 +3140,7 @@ exports.confirmPaymentMulti = async (req, res) => {
     }
 
     // 6. Create Payment Transaction Record
+    const hasScheduledDate = Boolean(booking.shoot_date || booking.event_date);
     const finalShootDate = normalizeDateOnly(booking.shoot_date || booking.event_date || new Date());
     const paymentSource = await resolvePaymentSourceForBooking({
       bookingId: booking_id,
@@ -3133,21 +3148,16 @@ exports.confirmPaymentMulti = async (req, res) => {
       metadata: paymentIntent?.metadata || {},
       transaction
     });
-    const rawHours = booking.shoot_hours || booking.duration_hours || 0;
+    const rawHours = booking.shoot_hours || booking.duration_hours || booking.primary_quote?.shoot_hours || 0;
     const parsedHours = parseFloat(rawHours);
-    const canDeferHours =
-      paymentSource === PAYMENT_SOURCE.QUOTE_INVOICE ||
-      paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE;
-
-    if ((!Number.isFinite(parsedHours) || parsedHours <= 0) && !canDeferHours) {
-      throw new Error(`Cannot process booking ${booking_id}: booking duration is required for ${paymentSource}`);
-    }
-
     const finalHours = Number.isFinite(parsedHours) && parsedHours > 0 ? parsedHours : null;
     const safeLocation = normalizeString(booking.event_location, 255, 'See Booking Details');
     const safeShootType = normalizeString(booking.shoot_type, 100, null);
     const safeNotes = normalizeString([
       booking.special_requests || booking.special_instructions || null,
+      !hasScheduledDate
+        ? 'Payment completed before the shoot date/time was finalized; payment transaction date uses the processing date.'
+        : null,
       finalHours === null
         ? 'Payment completed before schedule/duration was finalized; payment transaction hours left empty.'
         : null

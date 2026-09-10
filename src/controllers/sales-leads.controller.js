@@ -35,6 +35,7 @@ const normalizeString = (value) => {
 };
 
 async function sendCPNewShootRequestPush({ userId, booking, creatorId }) {
+  /*
   const normalizedUserId = Number(userId || 0) || null;
   const baseUrl = normalizeString(process.env.THIRD_PARTY_API_BASE_URL);
   const internalApiKey = normalizeString(process.env.PUSH_NOTIFICATION_INTERNAL_API_KEY);
@@ -80,6 +81,7 @@ async function sendCPNewShootRequestPush({ userId, booking, creatorId }) {
   }
 
   return response.json().catch(() => ({}));
+  */
 }
 
 async function assignSalesLeadViaShiftRoundRobin({ lead, clientName, status, source, transaction = null }) {
@@ -2297,6 +2299,8 @@ exports.getLeads = async (req, res) => {
       booking_id,
       start_date,
       end_date,
+      created_start_date,
+      created_end_date,
       intent,
       booking_status, // Fallback key
       cp_assignment,
@@ -2317,6 +2321,8 @@ exports.getLeads = async (req, res) => {
       has_booking_id: Boolean(booking_id),
       start_date: start_date || null,
       end_date: end_date || null,
+      created_start_date: created_start_date || null,
+      created_end_date: created_end_date || null,
       intent: intent || null,
       cp_assignment: cp_assignment || null,
       production_filter: production_filter || null,
@@ -2369,6 +2375,21 @@ exports.getLeads = async (req, res) => {
       whereClause.booking_id = parseInt(booking_id, 10);
     }
 
+    if (created_start_date || created_end_date) {
+      if (!created_start_date || !created_end_date) {
+        return res.status(400).json({
+          success: false,
+          message: 'created_start_date and created_end_date are required for created date filtering'
+        });
+      }
+      whereClause.created_at = {
+        [Op.between]: [
+          `${created_start_date} 00:00:00`,
+          `${created_end_date} 23:59:59`
+        ]
+      };
+    }
+
     if (booking_id) {
       whereClause[Op.or] = [
         { client_name: { [Op.like]: `%${search}%` } },
@@ -2397,6 +2418,57 @@ exports.getLeads = async (req, res) => {
       start_date,
       end_date
     };
+
+    // Most visits to the sales-representative screen use only database-backed
+    // filters (or no filters at all). Do not build and enrich every lead just
+    // to return one page in that case. Status/production filters remain on
+    // the existing path because they are calculated from related data.
+    const hasDerivedListFilters = (
+      activeStatusFilter !== 'All' ||
+      Boolean(start_date || end_date) ||
+      (cp_assignment && String(cp_assignment).toLowerCase() !== 'all') ||
+      (production_filter && String(production_filter).toLowerCase() !== 'all')
+    );
+
+    if (!hasDerivedListFilters) {
+      const databasePageStartedAt = Date.now();
+      const [total, leads] = await Promise.all([
+        sales_leads.count({ where: whereClause }),
+        sales_leads.findAll({
+          where: whereClause,
+          include: getSalesLeadListIncludes(),
+          order: [['created_at', 'DESC']],
+          limit: pageLimit,
+          offset,
+          distinct: true
+        })
+      ]);
+
+      const processedLeads = await mapWithConcurrency(
+        leads,
+        GET_LEADS_PROCESS_CONCURRENCY,
+        (lead) => processSalesLeadForList(lead, logContext)
+      );
+
+      getLeadsSafeLog('info', 'database-paginated request completed', {
+        request_id: requestId,
+        total,
+        returned_count: processedLeads.length,
+        duration_ms: Date.now() - databasePageStartedAt
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          leads: processedLeads,
+          pagination: {
+            total,
+            page: pageNumber,
+            totalPages: Math.ceil(total / pageLimit)
+          }
+        }
+      });
+    }
 
     const leadIdQueryStartedAt = Date.now();
     const leadIdRows = await sales_leads.findAll({
@@ -2772,7 +2844,7 @@ exports.getClientLeads = async (req, res) => {
           ...leadJson,
           potential_value: pricingData ? pricingData.total : 0,
           event_date: leadJson.booking?.event_date || null,
-          created_at: leadJson.booking?.event_date || leadJson.created_at || null,
+          created_at: leadJson.created_at || null,
           booking_status: computedBookingStatus,
           intent: computedIntent,
           payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
@@ -3544,7 +3616,7 @@ exports.assignLeadToSelf = async (req, res) => {
 
     const role = req.userRole?.toLowerCase();
 
-    if (!['admin', 'sales_admin'].includes(role)) {
+    if (!req.isInternalMember && !req.user?.isInternalMember && !['admin', 'sales_admin'].includes(role)) {
       return res.status(403).json({
         success: false,
         message: 'Only admin or sales admin can assign leads to themselves'
@@ -4131,7 +4203,7 @@ async function processSalesLeadForList(lead, context = {}) {
         ? pricingData.total
         : 0,
       event_date: leadJson.booking?.event_date || null,
-      created_at: leadJson.booking?.event_date || leadJson.created_at || null,
+      created_at: leadJson.created_at || null,
       booking_status:
         computedBookingStatus || 'Unknown',
       intent: computedIntent || '',

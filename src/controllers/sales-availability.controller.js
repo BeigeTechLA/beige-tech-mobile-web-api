@@ -189,7 +189,7 @@ async function getAssignedLeadsSnapshot(salesRepId, filters = {}) {
 function ensureAdminOrSalesAdmin(req) {
   const allowedRoles = ['admin', 'Admin', 'sales_admin'];
 
-  if (!allowedRoles.includes(req.userRole)) {
+  if (!req.isInternalMember && !req.user?.isInternalMember && !allowedRoles.includes(req.userRole)) {
     throw new Error('Only admin or sales admin can access this API');
   }
 }
