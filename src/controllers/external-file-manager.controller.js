@@ -167,7 +167,9 @@ const proxyZipResponse = async ({ res, externalPath, method = 'GET', body }) => 
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
 const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
-const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
+const isAdminRole = (req) =>
+  Boolean(req.isInternalMember || req.user?.isInternalMember) ||
+  ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
 const isClientRole = (req) => getNormalizedRequestUserRole(req) === 'client';
 const isCreatorRole = (req) => {
   const role = getNormalizedRequestUserRole(req);
@@ -619,6 +621,7 @@ const sendClientFilePush = async ({
   data = {},
   dedupeWindowSeconds = 0,
 }) => {
+  /*
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const userId = await resolveClientPushUserId(plainBooking);
@@ -646,6 +649,7 @@ const sendClientFilePush = async ({
       referenceType: 'booking',
       payload,
       actionLabel: 'Review files',
+      dedupeWindowSeconds,
     });
   } catch (error) {
     console.error('[PushNotification] Client file push failed:', {
@@ -654,6 +658,7 @@ const sendClientFilePush = async ({
       message: error.message || error,
     });
   }
+    */
 };
 
 const sendAssignedCpFilePush = async ({
@@ -664,6 +669,7 @@ const sendAssignedCpFilePush = async ({
   data = {},
   dedupeWindowSeconds = 0,
 }) => {
+  /*
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const assignedCrews = Array.isArray(plainBooking?.assigned_crews) ? plainBooking.assigned_crews : [];
@@ -706,6 +712,7 @@ const sendAssignedCpFilePush = async ({
       message: error.message || error,
     });
   }
+    */
 };
 
 const sendFilesForEditingInternalEmailForCopy = async ({
@@ -1222,6 +1229,7 @@ const sendEditsDeliveredEmailsForUploadedItems = async ({ items = [], deliveredB
           filepath: String(entry.items[0]?.filepath || ''),
           total_files: String(entry.items.length || 1),
         },
+        dedupeWindowSeconds: 120,
       });
 
       const adminRecipients = getAdminNotificationRecipients();
@@ -4828,17 +4836,6 @@ exports.getUploadPoliciesBatch = async (req, res) => {
         })),
       }),
     });
-
-    if (result?.success !== false) {
-      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
-      await sendEditsDeliveredEmailsForUploadedItems({
-        items: items.map((item = {}) => ({
-          filepath: item.filepath,
-          fileName: item.fileName || String(item.filepath || '').split('/').pop() || '',
-        })),
-        deliveredByName: uploaderName || 'Production Team',
-      });
-    }
 
     return res.status(200).json(result);
   } catch (error) {

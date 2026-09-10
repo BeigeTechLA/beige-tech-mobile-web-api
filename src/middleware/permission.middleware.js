@@ -31,6 +31,42 @@ const normalizePermission = (permission) => {
   return null;
 };
 
+const PERMISSION_ALIASES = {
+  'admin_availability': ['sales_rep_availability', 'production_manager_availability'],
+  'admin_dashboard': ['sales_rep_sales', 'sales_admin_dashboard', 'production_manager_dashboard'],
+  'admin_file_manager': ['sales_rep_file_manager', 'sales_admin_file_manager', 'production_manager_file_manager'],
+  'admin_invoices': ['sales_admin_invoices'],
+  'admin_meetings': ['sales_rep_meetings', 'sales_admin_meetings', 'production_manager_meetings'],
+  'admin_messages': ['sales_rep_messages', 'sales_admin_messages', 'production_manager_messages'],
+  'admin_quotes': ['sales_rep_quotes', 'sales_admin_quotes'],
+  'admin_sales_representative': ['sales_rep_sales', 'sales_admin_sales_people'],
+  'admin_shoots': ['sales_rep_shoots', 'sales_admin_shoots', 'production_manager_shoots'],
+  'admin_users_creative_partners': ['production_manager_creative_partner']
+};
+
+const expandPermissionAliases = (permissionKeys) => {
+  const expanded = new Set();
+
+  permissionKeys.forEach((permissionKey) => {
+    expanded.add(permissionKey);
+
+    const [module, action] = String(permissionKey || '').split('.');
+    if (!module || !action) return;
+
+    (PERMISSION_ALIASES[module] || []).forEach((aliasModule) => {
+      expanded.add(`${aliasModule}.${action}`);
+    });
+
+    Object.entries(PERMISSION_ALIASES).forEach(([adminModule, aliasModules]) => {
+      if (aliasModules.includes(module)) {
+        expanded.add(`${adminModule}.${action}`);
+      }
+    });
+  });
+
+  return Array.from(expanded);
+};
+
 const getRequestUser = (req) => ({
   userId: req.user?.userId || req.user?.id || req.userId,
   roleId: req.user?.userTypeId || req.userTypeId,
@@ -80,34 +116,6 @@ const getUserAccessContext = async (req) => {
     roleId,
     role: normalizeRole(role)
   };
-};
-
-const hasDeniedPermission = async (userId, permissionKeys) => {
-  if (!permissionKeys.length) return false;
-
-  const permissions = await db.permissions.findAll({
-    where: {
-      permission_key: {
-        [Op.in]: permissionKeys
-      },
-      is_active: 1
-    },
-    attributes: ['permission_id']
-  });
-
-  if (!permissions.length) return false;
-
-  const deniedPermission = await db.user_permissions.findOne({
-    where: {
-      user_id: userId,
-      permission_id: permissions.map((permission) => permission.permission_id),
-      is_allowed: 0,
-      is_active: 1
-    },
-    attributes: ['user_permission_id']
-  });
-
-  return Boolean(deniedPermission);
 };
 
 const hasConfiguredPermissions = async (permissionKeys) => {
@@ -165,7 +173,8 @@ const getAllowedPermissionIds = async ({ userId, roleId }, permissionKeys) => {
     })
   ]);
 
-  const allowedPermissionIds = new Set(rolePermissions.map((item) => Number(item.permission_id)));
+  const roleAllowedPermissionIds = new Set(rolePermissions.map((item) => Number(item.permission_id)));
+  const allowedPermissionIds = new Set(roleAllowedPermissionIds);
 
   userPermissions.forEach((item) => {
     const permissionId = Number(item.permission_id);
@@ -201,6 +210,7 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
   const permissionKeys = permissions
     .map(normalizePermission)
     .filter(Boolean);
+  const expandedPermissionKeys = expandPermissionAliases(permissionKeys);
 
   const allowRoles = new Set((options.allowRoles || []).map(normalizeRole));
   const allowBaseRoles = options.allowBaseRoles === true;
@@ -221,22 +231,15 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
         return next();
       }
 
-      if (await hasDeniedPermission(context.userId, permissionKeys)) {
-        return res.status(403).json({
-          success: false,
-          message: 'Insufficient permissions'
-        });
-      }
-
       const isAllowed = permissionKeys.length
-        ? await checkPermissions(context, permissionKeys)
+        ? await checkPermissions(context, expandedPermissionKeys)
         : false;
 
       if (isAllowed) {
         return next();
       }
 
-      const hasPermissionConfig = await hasConfiguredPermissions(permissionKeys);
+      const hasPermissionConfig = await hasConfiguredPermissions(expandedPermissionKeys);
 
       if (!hasPermissionConfig && allowBaseRoles && BASE_ROLES.has(context.role)) {
         return next();

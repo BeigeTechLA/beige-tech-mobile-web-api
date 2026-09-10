@@ -35,6 +35,7 @@ const normalizeString = (value) => {
 };
 
 async function sendCPNewShootRequestPush({ userId, booking, creatorId }) {
+  /*
   const normalizedUserId = Number(userId || 0) || null;
   const baseUrl = normalizeString(process.env.THIRD_PARTY_API_BASE_URL);
   const internalApiKey = normalizeString(process.env.PUSH_NOTIFICATION_INTERNAL_API_KEY);
@@ -80,6 +81,7 @@ async function sendCPNewShootRequestPush({ userId, booking, creatorId }) {
   }
 
   return response.json().catch(() => ({}));
+  */
 }
 
 async function assignSalesLeadViaShiftRoundRobin({ lead, clientName, status, source, transaction = null }) {
@@ -2417,6 +2419,57 @@ exports.getLeads = async (req, res) => {
       end_date
     };
 
+    // Most visits to the sales-representative screen use only database-backed
+    // filters (or no filters at all). Do not build and enrich every lead just
+    // to return one page in that case. Status/production filters remain on
+    // the existing path because they are calculated from related data.
+    const hasDerivedListFilters = (
+      activeStatusFilter !== 'All' ||
+      Boolean(start_date || end_date) ||
+      (cp_assignment && String(cp_assignment).toLowerCase() !== 'all') ||
+      (production_filter && String(production_filter).toLowerCase() !== 'all')
+    );
+
+    if (!hasDerivedListFilters) {
+      const databasePageStartedAt = Date.now();
+      const [total, leads] = await Promise.all([
+        sales_leads.count({ where: whereClause }),
+        sales_leads.findAll({
+          where: whereClause,
+          include: getSalesLeadListIncludes(),
+          order: [['created_at', 'DESC']],
+          limit: pageLimit,
+          offset,
+          distinct: true
+        })
+      ]);
+
+      const processedLeads = await mapWithConcurrency(
+        leads,
+        GET_LEADS_PROCESS_CONCURRENCY,
+        (lead) => processSalesLeadForList(lead, logContext)
+      );
+
+      getLeadsSafeLog('info', 'database-paginated request completed', {
+        request_id: requestId,
+        total,
+        returned_count: processedLeads.length,
+        duration_ms: Date.now() - databasePageStartedAt
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          leads: processedLeads,
+          pagination: {
+            total,
+            page: pageNumber,
+            totalPages: Math.ceil(total / pageLimit)
+          }
+        }
+      });
+    }
+
     const leadIdQueryStartedAt = Date.now();
     const leadIdRows = await sales_leads.findAll({
       where: whereClause,
@@ -3563,7 +3616,7 @@ exports.assignLeadToSelf = async (req, res) => {
 
     const role = req.userRole?.toLowerCase();
 
-    if (!['admin', 'sales_admin'].includes(role)) {
+    if (!req.isInternalMember && !req.user?.isInternalMember && !['admin', 'sales_admin'].includes(role)) {
       return res.status(403).json({
         success: false,
         message: 'Only admin or sales admin can assign leads to themselves'

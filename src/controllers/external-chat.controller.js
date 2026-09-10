@@ -1040,6 +1040,7 @@ const sendChatPushNotifications = async ({
   recipientTargets = [],
   mentionedUserIds = [],
 }) => {
+  /*
   try {
     const senderId = String(sender?.id || '').trim();
     const mentionIds = new Set(
@@ -1118,6 +1119,7 @@ const sendChatPushNotifications = async ({
       message: error.message || error,
     });
   }
+    */
 };
 
 const sendChatNotificationTemplate = async ({
@@ -1128,6 +1130,7 @@ const sendChatNotificationTemplate = async ({
   fallbackPayload = {},
   recipientTargetsOverride = null,
 }) => {
+  /*
   try {
     const participantPayload = await proxyRequest(`/participants/${roomId}`).catch(() => null);
     const { envelope } = extractParticipantEnvelope(participantPayload || {});
@@ -1216,6 +1219,7 @@ const sendChatNotificationTemplate = async ({
   } catch (notificationError) {
     console.error('Chat notification failed:', notificationError?.message || notificationError);
   }
+    */
 };
 
 const parseDirectoryPaging = (query = {}) => {
