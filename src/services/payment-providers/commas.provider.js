@@ -104,31 +104,61 @@ async function createHostedCheckoutSession({ amountCents, title, description, me
   };
 }
 
+async function createProduct({ amountCents, title, description, metadata }) {
+  const { baseUrl, apiKey } = getEnvironmentConfig();
+  const body = {
+    title,
+    description,
+    price: Number((amountCents / 100).toFixed(2)),
+    type: 'onetime'
+  };
+
+  if (metadata) body.metadata = JSON.stringify(metadata);
+
+  const response = await requestJson({
+    baseUrl,
+    apiKey,
+    path: '/public-api/products/create',
+    body
+  });
+
+  const paymentLink = response?.data?.payment_link || null;
+  const productPublicId = paymentLink
+    ? String(new URL(paymentLink).pathname.split('/').filter(Boolean).pop() || '').trim()
+    : '';
+
+  if (!response?.data?.product_id || !productPublicId) {
+    throw new Error('Commas product response did not include product_id and public product link id');
+  }
+
+  return {
+    productId: response.data.product_id,
+    productPublicId,
+    paymentLink
+  };
+}
+
 /**
  * Embedded Checkout needs the public Commas checkout-session/product hash id
- * plus a server-created session secret. The public id is the short id returned
- * as `data.id` when the checkout session is created (for example "NLxj6").
- * Do not use the numeric checkout_session_id or numeric product.id in the SDK
- * URL; Commas embedded checkout treats that as a missing service.
+ * plus a server-created session secret. For dynamic embedded payments, create
+ * a real Commas product first and use the short hash from its payment_link
+ * (for example "NLxj6"). Do not use numeric product ids in the SDK URL;
+ * Commas embedded checkout treats those as a missing service.
  */
 async function createEmbeddedCheckoutSession({ amountCents, title, description, metadata, successUrl }) {
   if (!process.env.COMMAS_CREATOR_ID) {
     throw new Error('Missing COMMAS_CREATOR_ID required by the Commas Embedded Checkout SDK');
   }
   const { baseUrl, apiKey } = getEnvironmentConfig();
-  const checkoutSession = await createHostedCheckoutSession({
+  const product = await createProduct({
     amountCents,
     title,
     description,
-    metadata,
-    // This setup session supplies the dynamically priced Commas product only;
-    // do not configure a hosted redirect for the embedded UI.
-    successUrl: null,
-    type: 'onetime_reusable'
+    metadata
   });
-  const productId = checkoutSession.checkoutSessionPublicId;
+  const productId = product.productPublicId;
   if (!productId) {
-    throw new Error('Commas checkout session response did not include public id for Embedded Checkout');
+    throw new Error('Commas product response did not include public id for Embedded Checkout');
   }
 
   const embeddedResponse = await requestJson({
@@ -148,8 +178,9 @@ async function createEmbeddedCheckoutSession({ amountCents, title, description, 
   return {
     provider: 'commas',
     checkoutMode: 'embedded',
-    checkoutSessionId: checkoutSession.checkoutSessionId,
+    checkoutSessionId: embeddedResponse.data.id || product.productId,
     productId,
+    productNumericId: product.productId,
     creatorId: process.env.COMMAS_CREATOR_ID,
     checkoutSessionSecret,
     environment: (process.env.NODE_ENV || 'development') === 'production' ? 'production' : 'sandbox'
