@@ -3,7 +3,7 @@ name: Deploy Backend Production
 on:
   push:
     branches:
-      - feature/commas-payment
+      - main
   workflow_dispatch:
 
 concurrency:
