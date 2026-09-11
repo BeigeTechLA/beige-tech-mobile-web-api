@@ -94,3 +94,4 @@ router.post('/share/:shareToken/file-uploaded', externalFileManagerController.no
 router.post('/share/:shareToken/files-uploaded/batch', externalFileManagerController.notifySharedFilesUploadedBatch);
 
 module.exports = router;
+
