@@ -29,6 +29,14 @@ module.exports = {
     secretKey: process.env.STRIPE_SECRET_KEY,
     publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET
+  },
+  paymentProvider: process.env.PAYMENT_PROVIDER || 'stripe',
+  commas: {
+    sandboxApiKey: process.env.COMMAS_SANDBOX_API_KEY,
+    liveApiKey: process.env.COMMAS_LIVE_API_KEY,
+    webhookSecret: process.env.COMMAS_WEBHOOK_SECRET,
+    webhookUrl: process.env.COMMAS_WEBHOOK_URL,
+    checkoutMode: process.env.COMMAS_CHECKOUT_MODE || 'hosted',
+    creatorId: process.env.COMMAS_CREATOR_ID
   }
 };
-  
