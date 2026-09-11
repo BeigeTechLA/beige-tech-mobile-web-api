@@ -113,6 +113,38 @@ async function getCheckoutSession({ baseUrl, apiKey, checkoutSessionId }) {
   });
 }
 
+async function getPublicProductId({ baseUrl, apiKey, title, amountCents }) {
+  // The Embedded SDK uses the public product hashid shown by
+  // GET /public-api/products (for example, "Pj4JA"), not the internal numeric
+  // product id returned in checkout-session details.
+  let page = 1;
+  let lastPage = 1;
+
+  while (page <= lastPage) {
+    const productsResponse = await requestJson({
+      baseUrl,
+      apiKey,
+      method: 'GET',
+      path: `/public-api/products?page=${page}&per_page=100`
+    });
+    const productPage = productsResponse?.data;
+    const products = productPage?.data;
+    if (!Array.isArray(products)) {
+      throw new Error('Commas products response did not include a product list');
+    }
+
+    const product = products.find((item) =>
+      item?.title === title && Math.round(Number(item.price) * 100) === amountCents
+    );
+    if (product?.id) return String(product.id);
+
+    lastPage = Number(productPage?.last_page) || page;
+    page += 1;
+  }
+
+  throw new Error('Could not resolve the public Commas product ID for Embedded Checkout');
+}
+
 /**
  * Embedded Checkout needs a Commas product id plus a server-created session
  * secret. A checkout session creates the priced product from our authoritative
@@ -138,10 +170,11 @@ async function createEmbeddedCheckoutSession({ amountCents, title, description, 
     apiKey,
     checkoutSessionId: checkoutSession.checkoutSessionId
   });
-  const productId = details?.data?.product?.id;
-  if (!productId) {
+  const numericProductId = details?.data?.product?.id;
+  if (!numericProductId) {
     throw new Error('Commas checkout session response did not include product.id for Embedded Checkout');
   }
+  const productId = await getPublicProductId({ baseUrl, apiKey, title, amountCents });
 
   const embeddedResponse = await requestJson({
     baseUrl,
