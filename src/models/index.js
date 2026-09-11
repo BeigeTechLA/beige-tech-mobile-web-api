@@ -12,6 +12,7 @@ const signupCreditPromoHistoryFactory = require('./signup_credit_promo_history')
 const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
 const assignmentHistoryFactory = require('./assignment_history');
+const offlineCustomerPaymentSubmissionsFactory = require('./offline_customer_payment_submissions');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -25,6 +26,13 @@ models.signup_credit_promo_history = signupCreditPromoHistoryFactory(sequelize, 
 models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
+models.offline_customer_payment_submissions = offlineCustomerPaymentSubmissionsFactory(sequelize, DataTypes);
+
+models.offline_customer_payment_submissions.belongsTo(models.payment_links, { foreignKey: 'payment_link_id', as: 'payment_link' });
+models.payment_links.hasOne(models.offline_customer_payment_submissions, { foreignKey: 'payment_link_id', as: 'offline_payment_submission' });
+models.offline_customer_payment_submissions.belongsTo(models.stream_project_booking, { foreignKey: 'booking_id', as: 'booking' });
+models.stream_project_booking.hasMany(models.offline_customer_payment_submissions, { foreignKey: 'booking_id', as: 'offline_payment_submissions' });
+models.offline_customer_payment_submissions.belongsTo(models.users, { foreignKey: 'reviewed_by', as: 'reviewer' });
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {

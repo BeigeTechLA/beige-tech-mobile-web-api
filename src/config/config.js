@@ -29,6 +29,16 @@ module.exports = {
     secretKey: process.env.STRIPE_SECRET_KEY,
     publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET
+  },
+  payments: {
+    stripeCheckoutEnabled: String(process.env.STRIPE_CHECKOUT_ENABLED || 'false').toLowerCase() === 'true',
+    zelleRecipientName: process.env.ZELLE_RECIPIENT_NAME || '',
+    zelleRecipientContact: process.env.ZELLE_RECIPIENT_CONTACT || '',
+    wireBankName: process.env.WIRE_BANK_NAME || '',
+    wireAccountHolderName: process.env.WIRE_ACCOUNT_HOLDER_NAME || '',
+    wireRoutingNumber: process.env.WIRE_ROUTING_NUMBER || '',
+    wireAccountNumber: process.env.WIRE_ACCOUNT_NUMBER || '',
+    wireSwiftBic: process.env.WIRE_SWIFT_BIC || ''
   }
 };
   

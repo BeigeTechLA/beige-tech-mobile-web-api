@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS offline_customer_payment_submissions (
+  offline_payment_submission_id INT NOT NULL AUTO_INCREMENT,
+  payment_link_id INT NOT NULL,
+  booking_id INT NOT NULL,
+  payment_method ENUM('wire_transfer', 'zelle') NOT NULL,
+  submitted_amount DECIMAL(10, 2) NOT NULL,
+  payment_reference VARCHAR(255) NOT NULL,
+  proof_file_url VARCHAR(1024) NOT NULL,
+  customer_note TEXT NULL,
+  status ENUM('pending_verification', 'paid', 'partially_paid', 'rejected', 'needs_follow_up') NOT NULL DEFAULT 'pending_verification',
+  reviewed_by INT NULL,
+  reviewed_at DATETIME NULL,
+  review_notes TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (offline_payment_submission_id),
+  UNIQUE KEY uq_offline_customer_payment_link (payment_link_id),
+  KEY idx_offline_customer_payment_booking (booking_id),
+  KEY idx_offline_customer_payment_status (status),
+  CONSTRAINT fk_offline_customer_payment_link FOREIGN KEY (payment_link_id) REFERENCES payment_links(payment_link_id),
+  CONSTRAINT fk_offline_customer_payment_booking FOREIGN KEY (booking_id) REFERENCES stream_project_booking(stream_project_booking_id),
+  CONSTRAINT fk_offline_customer_payment_reviewer FOREIGN KEY (reviewed_by) REFERENCES users(id)
+);

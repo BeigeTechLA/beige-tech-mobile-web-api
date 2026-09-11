@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NSwidXNlclJvbGUiOiJDbGllbnQiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjMsImlhdCI6MTc4NjUyMTc0MiwiZXhwIjoxNzg3MTI2NTQyfQ.CoI96iZ3wFPAsULYefe4gGA2-SYhoiPGNjItzOqnYpI
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4ODc3MjUwMiwiZXhwIjoxNzg5Mzc3MzAyfQ.oL_InONC7dUcRkJvoA6SBSZi0KjLOhrrsm25R4Elzac
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjIsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjUyMjA0MCwiZXhwIjoxNzg3MTI2ODQwfQ.uKbYYQrU0jEgr4iNYnpL1IlQXrfsOsOIAJj4b-eexe8
 
@@ -3758,3 +3758,102 @@ Authorization: {{TOKEN}}
   "name": "Harsh Panchal",
   "phone_number": "9874562320"
 }
+
+
+
+### ============================================================
+### OFFLINE CUSTOMER PAYMENTS (Wire/Zelle) — Testing
+### ============================================================
+
+### Get Wire/Zelle payment instructions (customer-facing)
+### Replace :token with a valid booking/payment token
+GET {{URL}}payments/offline/c9fea25df7826741fbb756d865a5bd33a08c7b6a844810fc878544eb4c6b7ca7/instructions HTTP/1.1
+Content-Type: application/json
+###
+### Submit customer payment confirmation (Wire/Zelle)
+POST {{URL}}payments/offline/c9fea25df7826741fbb756d865a5bd33a08c7b6a844810fc878544eb4c6b7ca7/confirmations HTTP/1.1
+Content-Type: application/json
+
+{
+  "payment_method": "wire_transfer",
+  "payment_amount": 250,
+  "payment_reference": "WIRE-TEST-001",
+  "customer_note": "Local end-to-end test"
+}
+
+###
+### List all offline submissions (admin) — filter by status
+GET {{URL}}payments/offline/submissions?status=pending_verification HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+### Get single submission detail (admin)
+GET {{URL}}payments/offline/submissions/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+### Update submission status (admin review)
+PATCH {{URL}}payments/offline/submissions/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "status": "paid",
+  "review_notes": "Verified test payment — end to end test complete"
+}
+
+###
+### Check Stripe checkout is disabled (should return 410)
+POST {{URL}}payments/create-intent-multi HTTP/1.1
+Content-Type: application/json
+
+{
+  "booking_id": "945",
+  "amount": 500,
+  "guest_email": "test@gmail.com"
+}
+
+### Create Payment Link (Admin)
+POST {{URL}}sales/payment-links HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_id": 1093,
+  "requested_amount": 250.00,
+  "expiry_hours": 24
+}
+
+###
+POST {{URL}}payments/offline/c9fea25df7826741fbb756d865a5bd33a08c7b6a844810fc878544eb4c6b7ca7/confirmations HTTP/1.1
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="payment_method"
+
+wire_transfer
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="payment_amount"
+
+250
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="payment_reference"
+
+WIRE-TEST-001
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="customer_note"
+
+Local end-to-end test
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="proof_file"; filename="avatar.png"
+Content-Type: image/png
+
+< D:/web/beige-web-mobile-front/public/images/avatar.png
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+###
+GET {{URL}}payments/offline/submissions/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+

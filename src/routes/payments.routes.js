@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const paymentsController = require('../controllers/payments.controller');
+const offlineCustomerPaymentsController = require('../controllers/offline-customer-payments.controller');
 const { authenticate, optionalAuth, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
 
 /**
@@ -9,6 +10,15 @@ const { authenticate, optionalAuth, requireSalesRepOrAdmin } = require('../middl
  * @access  Public (with optional auth for tracking)
  */
 router.post('/create-intent', optionalAuth, paymentsController.createPaymentIntent);
+
+// Public customer payment-link flow. The token authorizes access to its booking only.
+router.get('/offline/:token/instructions', offlineCustomerPaymentsController.getInstructions);
+router.post('/offline/:token/confirmations', ...offlineCustomerPaymentsController.submitConfirmation);
+
+// Internal review flow; intentionally separate from the existing manual-payment routes.
+router.get('/offline/submissions', authenticate, requireSalesRepOrAdmin, offlineCustomerPaymentsController.listSubmissions);
+router.get('/offline/submissions/:id', authenticate, requireSalesRepOrAdmin, offlineCustomerPaymentsController.getSubmission);
+router.patch('/offline/submissions/:id', authenticate, requireSalesRepOrAdmin, offlineCustomerPaymentsController.reviewSubmission);
 
 /**
  * @route   POST /api/payments/confirm

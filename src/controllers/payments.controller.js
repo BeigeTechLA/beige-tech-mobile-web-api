@@ -1,4 +1,5 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const config = require('../config/config');
 const db = require('../models');
 const affiliateController = require('./affiliate.controller');
 const { ensureProjectForBooking } = require('./projects.controller');
@@ -2172,6 +2173,13 @@ const sendBookingConfirmationForBooking = async ({
  * POST /api/payments/create-intent
  */
 exports.createPaymentIntent = async (req, res) => {
+  if (!config.payments.stripeCheckoutEnabled) {
+    return res.status(410).json({
+      success: false,
+      code: 'STRIPE_CHECKOUT_DISABLED',
+      message: 'Card checkout is temporarily unavailable. Please use Wire Transfer or Zelle.'
+    });
+  }
   try {
     const {
       creator_id,
@@ -2284,27 +2292,10 @@ exports.createPaymentIntent = async (req, res) => {
       finalPayableAmount = referralDiscount.finalAmount;
     }
 
-    // Create Stripe PaymentIntent
+    /* Stripe customer checkout restoration code (enable STRIPE_CHECKOUT_ENABLED and restore this block).
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(finalPayableAmount * 100), // Convert to cents
-      currency: 'usd',
-      metadata: {
-        creator_id: creator_id.toString(),
-        user_id: resolvedUserId ? resolvedUserId.toString() : 'guest',
-        guest_email: guest_email || '',
-        hours: hours.toString(),
-        hourly_rate: hourly_rate.toString(),
-        shoot_date: shoot_date,
-        location: location,
-        cp_cost: pricing.cp_cost.toString(),
-        equipment_cost: pricing.equipment_cost.toString(),
-        subtotal: pricing.subtotal.toString(),
-        beige_margin_percent: pricing.beige_margin_percent.toString(),
-        beige_margin_amount: pricing.beige_margin_amount.toString(),
-        referral_code: normalizedReferralCode,
-        referral_discount_percent: normalizedReferralCode ? REFERRAL_DISCOUNT_PERCENT.toString() : '0',
-        referral_discount_amount: referralDiscountAmount.toString()
-      }
+      amount: Math.round(finalPayableAmount * 100), currency: 'usd',
+      metadata: { creator_id: creator_id.toString(), user_id: resolvedUserId ? resolvedUserId.toString() : 'guest', guest_email: guest_email || '', hours: hours.toString(), hourly_rate: hourly_rate.toString(), shoot_date, location, cp_cost: pricing.cp_cost.toString(), equipment_cost: pricing.equipment_cost.toString(), subtotal: pricing.subtotal.toString(), beige_margin_percent: pricing.beige_margin_percent.toString(), beige_margin_amount: pricing.beige_margin_amount.toString(), referral_code: normalizedReferralCode, referral_discount_percent: normalizedReferralCode ? REFERRAL_DISCOUNT_PERCENT.toString() : '0', referral_discount_amount: referralDiscountAmount.toString() }
     });
 
     return res.status(200).json({
@@ -2326,7 +2317,7 @@ exports.createPaymentIntent = async (req, res) => {
           total_amount: finalPayableAmount
         }
       }
-    });
+    }); */
 
   } catch (error) {
     console.error('Create Payment Intent Error:', error);
@@ -2344,6 +2335,9 @@ exports.createPaymentIntent = async (req, res) => {
  * POST /api/payments/confirm
  */
 exports.confirmPayment = async (req, res) => {
+  if (!config.payments.stripeCheckoutEnabled) {
+    return res.status(410).json({ success: false, code: 'STRIPE_CHECKOUT_DISABLED', message: 'Card checkout is temporarily unavailable. Please use Wire Transfer or Zelle.' });
+  }
   const transaction = await db.sequelize.transaction();
 
   try {
@@ -2683,6 +2677,9 @@ exports.confirmPayment = async (req, res) => {
  * POST /api/payments/create-intent-multi
  */
 exports.createPaymentIntentMulti = async (req, res) => {
+  if (!config.payments.stripeCheckoutEnabled) {
+    return res.status(410).json({ success: false, code: 'STRIPE_CHECKOUT_DISABLED', message: 'Card checkout is temporarily unavailable. Please use Wire Transfer or Zelle.' });
+  }
   try {
     const {
       booking_id,
@@ -2803,6 +2800,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       credit_amount_used: requestedCreditAmount
     });
 
+    /* Stripe customer checkout restoration code (enable STRIPE_CHECKOUT_ENABLED and restore this block).
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amountToCharge * 100), // Convert to cents
       currency: 'usd',
@@ -2827,7 +2825,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
         amount: amountToCharge,
         isFree: false
       }
-    });
+    }); */
 
   } catch (error) {
     console.error('Create Multi-Creator Payment Intent Error:', error);
@@ -2844,6 +2842,9 @@ exports.createPaymentIntentMulti = async (req, res) => {
  * POST /api/payments/confirm-multi
  */
 exports.confirmPaymentMulti = async (req, res) => {
+  if (!config.payments.stripeCheckoutEnabled) {
+    return res.status(410).json({ success: false, code: 'STRIPE_CHECKOUT_DISABLED', message: 'Card checkout is temporarily unavailable. Please use Wire Transfer or Zelle.' });
+  }
   const transaction = await db.sequelize.transaction();
 
   try {
