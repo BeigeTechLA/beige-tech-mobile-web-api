@@ -3857,3 +3857,17 @@ GET {{URL}}payments/offline/submissions/1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+###
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "jay123@gmail.com",
+  "password": "Test@12345"
+}
+
+###
+POST {{URL}}payments/offline/bookings/1093/payment-link HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIyOCwidXNlclJvbGUiOiJDbGllbnQiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjMsImlhdCI6MTc4OTIwMDczMywiZXhwIjoxNzg5ODA1NTMzfQ._FjlGNbuNUTcD5DN6Q1sZ8rbMbWI2MezdjrmK3sgSM4
+

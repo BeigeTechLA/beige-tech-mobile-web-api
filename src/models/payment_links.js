@@ -51,7 +51,9 @@ module.exports = function(sequelize, DataTypes) {
     },
     created_by_user_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      // Sales/admin and authenticated customer links retain their creator ID.
+      // Verified guest self-service links have no user account to attribute.
+      allowNull: true,
       references: {
         model: 'users',
         key: 'id'

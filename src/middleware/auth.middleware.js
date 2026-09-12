@@ -115,6 +115,31 @@ exports.optionalAuth = async (req, res, next) => {
 };
 
 /**
+ * Attach authenticated user details when a Bearer token is supplied. Unlike
+ * optionalAuth, a supplied invalid token is rejected instead of ignored.
+ */
+exports.optionalAuthenticate = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return next();
+
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, message: 'Invalid authentication token' });
+    }
+
+    const decoded = jwt.verify(authHeader.substring(7), process.env.JWT_SECRET);
+    await auth.validatePermissionVersion(decoded);
+    req.userId = decoded.userId;
+    req.userRole = decoded.userRole;
+    req.userType = decoded.userTypeId;
+    return next();
+  } catch (error) {
+    const message = error.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token';
+    return res.status(401).json({ success: false, message });
+  }
+};
+
+/**
  * Require sales rep role
  * User must be authenticated and have sales_rep role
  */

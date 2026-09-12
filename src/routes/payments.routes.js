@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const paymentsController = require('../controllers/payments.controller');
 const offlineCustomerPaymentsController = require('../controllers/offline-customer-payments.controller');
-const { authenticate, optionalAuth, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
+const paymentLinksController = require('../controllers/payment-links.controller');
+const { authenticate, optionalAuth, optionalAuthenticate, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
 
 /**
  * @route   POST /api/payments/create-intent
@@ -10,6 +11,17 @@ const { authenticate, optionalAuth, requireSalesRepOrAdmin } = require('../middl
  * @access  Public (with optional auth for tracking)
  */
 router.post('/create-intent', optionalAuth, paymentsController.createPaymentIntent);
+
+/**
+ * @route   POST /api/payments/offline/bookings/:bookingId/payment-link
+ * @desc    Get or create an offline payment link for the authenticated booking owner
+ * @access  Authenticated customer or verified guest booking owner
+ */
+router.post(
+  '/offline/bookings/:bookingId/payment-link',
+  optionalAuthenticate,
+  paymentLinksController.getOrCreateCustomerBookingPaymentLink
+);
 
 // Public customer payment-link flow. The token authorizes access to its booking only.
 router.get('/offline/:token/instructions', offlineCustomerPaymentsController.getInstructions);

@@ -1,6 +1,7 @@
 const { payment_links, sales_leads, client_leads, sales_lead_activities, client_lead_activities, discount_codes, stream_project_booking, quotes, quote_line_items, users } = require('../models');
 const db = require('../models');
 const paymentLinksService = require('../services/payment-links.service');
+const guestBookingAccessService = require('../services/guest-booking-access.service');
 const quoteService = require('../services/sales-quote.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
@@ -1502,6 +1503,7 @@ const calculateLeadPricing = async (booking) => {
  */
 exports.generatePaymentLink = async (req, res) => {
   try {
+    const customerSelfServeRequest = Boolean(req.paymentLinkOptions?.customerSelfServe);
     const {
       lead_id,
       client_lead_id,
@@ -1523,13 +1525,44 @@ exports.generatePaymentLink = async (req, res) => {
     }
 
     // 2. Verify booking exists
-    const booking = await stream_project_booking.findByPk(booking_id);
+    const booking = await stream_project_booking.findByPk(booking_id, {
+      include: [{
+        model: quotes,
+        as: 'primary_quote',
+        required: false,
+        include: [{ model: quote_line_items, as: 'line_items', required: false }]
+      }]
+    });
 
     if (!booking) {
       return res.status(404).json({
         success: false,
         message: 'Booking not found'
       });
+    }
+
+    if (customerSelfServeRequest) {
+      const isAuthenticatedOwner = Boolean(createdBy) && Number(booking.user_id) === Number(createdBy);
+      const guestAccess = req.paymentLinkOptions?.guestAccessToken
+        ? guestBookingAccessService.verifyGuestBookingAccessToken(req.paymentLinkOptions.guestAccessToken)
+        : null;
+      const requestedGuestEmail = guestBookingAccessService.normalizeEmail(req.body.guest_email);
+      const bookingGuestEmail = guestBookingAccessService.normalizeEmail(booking.guest_email);
+      const isVerifiedGuestOwner = Boolean(
+        !createdBy &&
+        guestAccess &&
+        guestAccess.bookingId === Number(booking.stream_project_booking_id) &&
+        requestedGuestEmail &&
+        requestedGuestEmail === bookingGuestEmail &&
+        guestAccess.guestEmail === bookingGuestEmail
+      );
+
+      if (!isAuthenticatedOwner && !isVerifiedGuestOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not have permission to access this booking'
+        });
+      }
     }
 
     // --- NEW CONDITION: CHECK IF QUOTE EXISTS ---
@@ -1610,6 +1643,20 @@ exports.generatePaymentLink = async (req, res) => {
       validatedRequestedAmount = requestedPaymentAmount;
     }
 
+    // Self-serve checkout does not accept a caller-provided amount. Persist
+    // the authoritative outstanding balance so offline instructions can show
+    // the amount due from payment_links.requested_amount.
+    if (customerSelfServeRequest && requestedPaymentAmount === null) {
+      if (!Number.isFinite(maxPayableAmount) || maxPayableAmount <= 0.009) {
+        return res.status(409).json({
+          success: false,
+          message: 'No outstanding amount is available for this booking.'
+        });
+      }
+
+      validatedRequestedAmount = Number(maxPayableAmount.toFixed(2));
+    }
+
     if (shouldTreatBookingAsPaid && !hasApprovedAdditionalAmount) {
       if (convertedQuoteContexts.additionalInvoiceContext) {
         return res.status(409).json({
@@ -1629,7 +1676,7 @@ exports.generatePaymentLink = async (req, res) => {
         });
       }
 
-      return res.status(400).json({
+      return res.status(customerSelfServeRequest ? 409 : 400).json({
         success: false,
         message: 'Payment for this booking has already been completed. No new link is required.'
       });
@@ -1640,10 +1687,38 @@ exports.generatePaymentLink = async (req, res) => {
       paymentState.hasSummary &&
       (!Number.isFinite(maxPayableAmount) || maxPayableAmount <= 0.009)
     ) {
-      return res.status(400).json({
+      return res.status(customerSelfServeRequest ? 409 : 400).json({
         success: false,
         message: 'No outstanding amount is available for this booking.'
       });
+    }
+
+    // The customer flow is idempotent: reuse an active link for the booking
+    // instead of issuing additional tokens for repeat checkout submissions.
+    if (customerSelfServeRequest) {
+      const activePaymentLink = await payment_links.findOne({
+        where: {
+          booking_id,
+          is_used: 0,
+          expires_at: { [Op.gt]: new Date() }
+        },
+        order: [['created_at', 'DESC'], ['payment_link_id', 'DESC']]
+      });
+
+      if (activePaymentLink) {
+        // Repair legacy self-serve links that were created before the amount was
+        // persisted, including rows stored as 0.00 by older schema defaults.
+        // A customer-safe link can only be returned after the authoritative
+        // outstanding balance above has been resolved.
+        if (Number(activePaymentLink.requested_amount) <= 0) {
+          await activePaymentLink.update({ requested_amount: validatedRequestedAmount });
+        }
+
+        return res.status(200).json({
+          success: true,
+          data: { link_token: activePaymentLink.link_token }
+        });
+      }
     }
 
     const token = paymentLinksService.generateLinkToken();
@@ -1699,6 +1774,13 @@ exports.generatePaymentLink = async (req, res) => {
       performedByUserId: createdBy
     });
 
+    if (customerSelfServeRequest) {
+      return res.status(201).json({
+        success: true,
+        data: { link_token: token }
+      });
+    }
+
     res.status(201).json({
       success: true,
       message: 'Payment link generated successfully',
@@ -1724,6 +1806,22 @@ exports.generatePaymentLink = async (req, res) => {
       error: error.message
     });
   }
+};
+
+/**
+ * Get or create an offline payment link for the authenticated booking owner.
+ * POST /api/payments/offline/bookings/:bookingId/payment-link
+ */
+exports.getOrCreateCustomerBookingPaymentLink = async (req, res) => {
+  req.body = {
+    ...req.body,
+    booking_id: req.params.bookingId
+  };
+  req.paymentLinkOptions = {
+    customerSelfServe: true,
+    guestAccessToken: req.get('X-Guest-Booking-Token') || req.body.guest_booking_access_token || null
+  };
+  return exports.generatePaymentLink(req, res);
 };
 
 exports.generateClientPaymentLink = async (req, res) => {

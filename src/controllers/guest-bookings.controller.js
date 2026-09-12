@@ -11,6 +11,7 @@ const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const affiliateController = require('./affiliate.controller');
 const pushNotificationService = require('../services/push-notification.service');
+const guestBookingAccessService = require('../services/guest-booking-access.service');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
 const parseQuoteActivityMetadata = (value) => {
@@ -881,6 +882,10 @@ exports.createGuestBooking = async (req, res) => {
         budget: booking.budget,
         quote_id: booking.quote_id,
         is_draft: booking.is_draft === 1,
+        guest_booking_access_token: guestBookingAccessService.issueGuestBookingAccessToken({
+          bookingId: booking.stream_project_booking_id,
+          guestEmail: normalizedGuestEmail
+        }),
         created_at: booking.created_at
       }
     });
@@ -1219,6 +1224,12 @@ exports.updateGuestBooking = async (req, res) => {
         budget: booking.budget,
         quote_id: booking.quote_id,
         is_draft: booking.is_draft === 1,
+        guest_booking_access_token: !booking.is_draft && booking.guest_email
+          ? guestBookingAccessService.issueGuestBookingAccessToken({
+            bookingId: booking.stream_project_booking_id,
+            guestEmail: booking.guest_email
+          })
+          : undefined,
         updated_at: booking.updated_at,
         booking_days: Array.isArray(booking.booking_days)
           ? booking.booking_days.map((d) => ({
