@@ -106,14 +106,16 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true,
       defaultValue: Sequelize.Sequelize.fn('current_timestamp')
     },
-     last_maintenance_date: {
+  last_maintenance_date: {
     type: DataTypes.DATEONLY, // or DataTypes.STRING depending on your DB
-    allowNull: true
+    allowNull: true,
+    field: 'last_maintanence_date'
   },
   equipment_on_maintenance: {
     type: DataTypes.INTEGER, // 1 or 0
     defaultValue: 0,
-    comment: "0= available, 1= maintenance"
+    comment: "0= available, 1= maintenance",
+    field: 'equipment_on_maintanence'
   }
   }, {
     sequelize,

@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
-const { S3UploadFiles } = require('../utils/common.js');
+const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const emailService = require("../utils/emailService");
@@ -2691,34 +2691,37 @@ exports.deleteProfileFile = async (req, res) => {
 
 exports.getMyEquipment = async (req, res) => {
   try {
-    const crew_member_id = req.user.crew_member_id || req.body;
+    const crew_member_id = Number(req.user?.crew_member_id || req.query.crew_member_id);
+    if (!crew_member_id) {
+      return res.status(constants.BAD_REQUEST.code).json({ error: true, code: constants.BAD_REQUEST.code, message: 'crew_member_id is required', data: null });
+    }
 
-    const data = await crew_equipment.findAll({
+    const records = await crew_equipment.findAll({
       where: {
         crew_member_id,
         is_active: 1
       },
-      include: [{
-        model: equipment,
-        as: 'equipment',
-        attributes: [
-          'equipment_id',
-          'equipment_name',
-          'manufacturer',
-          'model_number'
-        ]
-      },
-      {
-        model: crew_equipment_photos,
-        as: 'crew_equipment_photos',
-        attributes: [
-          'crew_equipment_photo_id',
-          'file_url',
-          'sort_order'
-        ]
-      }],
+      attributes: ['crew_equipment_id', 'equipment_name', 'category_id', 'manufacturer', 'model', 'model_number', 'serial_number', 'description', 'market_price', 'rental_price', 'rental_price_type', 'is_available_for_rent', 'storage_location'],
       order: [['created_at', 'DESC']]
     });
+
+    const ids = records.map((record) => record.crew_equipment_id);
+    const photos = ids.length ? await crew_equipment_photos.findAll({
+      where: { crew_equipment_id: { [Op.in]: ids }, is_active: 1 },
+      attributes: ['crew_equipment_photo_id', 'crew_equipment_id', 'file_url', 'sort_order'],
+      order: [['sort_order', 'ASC']]
+    }) : [];
+    const photosByEquipment = photos.reduce((result, photo) => {
+      const id = photo.crew_equipment_id;
+      if (!result[id]) result[id] = [];
+      const photoJson = photo.toJSON();
+      result[id].push({
+        ...photoJson,
+        file_url: toAbsoluteBeigeAssetUrl(photoJson.file_url)
+      });
+      return result;
+    }, {});
+    const data = records.map((record) => ({ ...record.toJSON(), crew_equipment_photos: photosByEquipment[record.crew_equipment_id] || [] }));
     
     return res.status(constants.OK.code).json({
       error: false,
@@ -2740,36 +2743,50 @@ exports.getMyEquipment = async (req, res) => {
 
 exports.getMyEquipmentById = async (req, res) => {
   try {
-    const crew_member_id = req.user.crew_member_id || req.body;
+    const crew_member_id = Number(req.user?.crew_member_id || req.query.crew_member_id);
     const { equipment_id } = req.params;
+    if (!crew_member_id) {
+      return res.status(constants.BAD_REQUEST.code).json({ error: true, code: constants.BAD_REQUEST.code, message: 'crew_member_id is required', data: null });
+    }
 
     const record = await crew_equipment.findOne({
       where: {
         crew_member_id,
-        equipment_id,
+        crew_equipment_id: equipment_id,
         is_active: 1
       },
-      include: [{
-        model: equipment,
-        as: 'equipment',
-        attributes: ['equipment_name', 'manufacturer', 'model_number']
-      }]
+      attributes: ['crew_equipment_id', 'equipment_name', 'category_id', 'manufacturer', 'model', 'model_number', 'serial_number', 'description', 'market_price', 'rental_price', 'rental_price_type', 'is_available_for_rent', 'storage_location']
     });
 
     if (!record) {
       return res.status(constants.NOT_FOUND.code).json({
-        error: false,
+        error: true,
         code: constants.NOT_FOUND.code,
         message: constants.NOT_FOUND.message,
-        data: data
+        data: null
       });
     }
+
+    const photos = await crew_equipment_photos.findAll({
+      where: { crew_equipment_id: equipment_id, is_active: 1 },
+      attributes: ['crew_equipment_photo_id', 'file_url', 'sort_order'],
+      order: [['sort_order', 'ASC']]
+    });
 
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: constants.OK.message,
-      data: record
+      data: {
+        ...record.toJSON(),
+        crew_equipment_photos: photos.map((photo) => {
+          const photoJson = photo.toJSON();
+          return {
+            ...photoJson,
+            file_url: toAbsoluteBeigeAssetUrl(photoJson.file_url)
+          };
+        })
+      }
     });
 
   } catch (err) {
@@ -2785,7 +2802,7 @@ exports.getMyEquipmentById = async (req, res) => {
 
 exports.saveMyEquipment = async (req, res) => {
   try {
-    const crew_member_id = req.user.crew_member_id || req.body;
+    const crew_member_id = Number(req.user?.crew_member_id || req.body.crew_member_id);
 
     const {
       crew_equipment_id,
@@ -2807,12 +2824,30 @@ exports.saveMyEquipment = async (req, res) => {
       is_draft = 0
     } = req.body;
 
-    if (!equipment_name) {
+    const requiredFields = {
+      crew_member_id,
+      equipment_name,
+      category_id,
+      manufacturer,
+      model,
+      model_number,
+      serial_number,
+      description,
+      market_price,
+      rental_price,
+      rental_price_type,
+      storage_location
+    };
+    const missingFields = Object.entries(requiredFields)
+      .filter(([, value]) => value === undefined || value === null || value === '')
+      .map(([field]) => field);
+
+    if (missingFields.length) {
       return res.status(constants.BAD_REQUEST.code).json({
         error: true,
         code: constants.BAD_REQUEST.code,
-        message: 'Equipment name is required',
-        data: null
+        message: `Missing required fields: ${missingFields.join(', ')}`,
+        data: { missing_fields: missingFields }
       });
     }
 
@@ -2841,14 +2876,16 @@ exports.saveMyEquipment = async (req, res) => {
         is_completed: is_draft ? 0 : 1,
         is_active: 1
       });
-      await common.logActivity({
+      // Activity logging must never make an already-saved equipment request fail.
+      // The legacy `common.logActivity` helper is not available in this controller.
+      activity_logs.create({
         crew_member_id,
         activity_type: 'equipment_added',
         title: 'Equipment Added',
         description: `${equipment_name} was added to your equipment list`,
         reference_id: record.crew_equipment_id,
         reference_type: 'crew_equipment'
-      });
+      }).catch((error) => console.error('Equipment activity log error:', error));
     } else {
       // Update existing equipment record
       record = await crew_equipment.findOne({
@@ -2887,14 +2924,14 @@ exports.saveMyEquipment = async (req, res) => {
         is_draft,
         is_completed: is_draft ? 0 : 1
       });
-      await common.logActivity({
+      activity_logs.create({
         crew_member_id,
         activity_type: 'equipment_updated',
         title: 'Equipment Updated',
         description: `${equipment_name} details were updated`,
         reference_id: record.crew_equipment_id,
         reference_type: 'crew_equipment'
-      });
+      }).catch((error) => console.error('Equipment activity log error:', error));
     }
 
     return res.status(constants.OK.code).json({
@@ -2923,7 +2960,7 @@ exports.uploadCrewEquipmentPhotos = [
 
   async (req, res) => {
     try {
-      const crew_member_id = req.user.crew_member_id || req.body;
+      const crew_member_id = Number(req.user?.crew_member_id || req.body.crew_member_id);
       const { crew_equipment_id } = req.params;
 
       console.log('FILES:', req.files); // should NOT be empty now
@@ -2945,11 +2982,11 @@ exports.uploadCrewEquipmentPhotos = [
         });
       }
 
-      if (!req.files || req.files.length === 0) {
+      if (!crew_member_id || !req.files || req.files.length < 1 || req.files.length > 10) {
         return res.status(constants.BAD_REQUEST.code).json({
           error: true,
           code: constants.BAD_REQUEST.code,
-          message: 'No images uploaded',
+          message: 'Upload between 1 and 10 images',
           data: null
         });
       }
@@ -2989,7 +3026,7 @@ exports.uploadCrewEquipmentPhotos = [
 
 exports.deleteMyEquipment = async (req, res) => {
   try {
-    const crew_member_id = req.user.crew_member_id || req.body;
+    const crew_member_id = Number(req.user?.crew_member_id || req.query.crew_member_id);
     const { id } = req.params;
 
     const record = await crew_equipment.findOne({

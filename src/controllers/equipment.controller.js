@@ -258,8 +258,8 @@ exports.getCategories = async (req, res) => {
   try {
     const categories = await equipment_category.findAll({
       where: { is_active: 1 },
-      attributes: ['category_id', 'category_name', 'description'],
-      order: [['category_name', 'ASC']]
+      attributes: ['category_id', 'name'],
+      order: [['name', 'ASC']]
     });
 
     res.json({
@@ -267,8 +267,7 @@ exports.getCategories = async (req, res) => {
       data: {
         categories: categories.map(cat => ({
           id: cat.category_id,
-          name: cat.category_name,
-          description: cat.description
+          name: cat.name
         }))
       }
     });
