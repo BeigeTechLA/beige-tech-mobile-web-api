@@ -26,6 +26,18 @@ models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
 
+if (models.agreements && models.users) {
+  models.agreements.belongsTo(models.users, {
+    foreignKey: 'created_by_user_id',
+    as: 'created_by'
+  });
+
+  models.users.hasMany(models.agreements, {
+    foreignKey: 'created_by_user_id',
+    as: 'created_agreements'
+  });
+}
+
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
     foreignKey: 'sales_rep_id',

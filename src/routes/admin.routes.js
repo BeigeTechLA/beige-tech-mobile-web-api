@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
+const agreementsController = require('../controllers/agreements.controller');
 const { authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const shiftManagementRoutes = require('./shifts.routes');
@@ -178,6 +179,8 @@ router.use('/sales-reps', salesRepDetailRoutes);
 
 router.get('/profile/:id', authMiddleware, admin.getAdminProfile);
 router.put('/profile/:id', authMiddleware, admin.updateAdminProfile);
+router.get('/agreements', authMiddleware, agreementsController.getAgreements);
+router.post('/agreements', authMiddleware, agreementsController.createAgreement);
 router.post('/profile/change-password', authMiddleware, admin.changeAdminProfilePassword);
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);

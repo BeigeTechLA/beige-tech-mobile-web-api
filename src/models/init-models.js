@@ -102,6 +102,7 @@ var _permissions = require("./permissions");
 var _role_permissions = require("./role_permissions");
 var _user_roles = require("./user_roles");
 var _user_permissions = require("./user_permissions");
+var _agreements = require("./agreements");
 
 function initModels(sequelize) {
   var account_credit_ledger = _account_credit_ledger(sequelize, DataTypes);
@@ -210,6 +211,7 @@ function initModels(sequelize) {
   var role_permissions = _role_permissions(sequelize, DataTypes);
   var user_roles = _user_roles(sequelize, DataTypes);
   var user_permissions = _user_permissions(sequelize, DataTypes);
+  var agreements = _agreements(sequelize, DataTypes);
 
   account_credit_ledger.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "user_id" });
@@ -916,6 +918,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     role_permissions,
     user_roles,
     user_permissions,
+    agreements,
     creator_earning_advances,
     creator_earning_compensation_items,
     creator_earning_timeline_events,
