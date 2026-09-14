@@ -5501,23 +5501,49 @@ exports.getFolderDownloadUrl = async (req, res) => {
     const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
     await ensureCreatorWorkspaceAccess(req, externalId);
     await ensureClientWorkspaceAccess(req, externalId);
+    let downloadFolders;
 
     if (isCreatorRole(req) && isCommonEventExternalId(externalId)) {
+      const phase = normalizeWorkspacePhase(req.body.phase, null);
+      const requestedPath = normalizePathForAccess(req.body.path);
       await ensureCreatorCommonEventRelativePathAccess({
         req,
         eventExternalId: externalId,
-        phase: req.body.phase,
-        relativePath: req.body.path,
-        allowRoot: false,
+        phase,
+        relativePath: requestedPath,
+        allowRoot: true,
+        allowAncestorNavigation: true,
       });
+
+      // Root/ancestor downloads must include only the creator's owned folders.
+      // Never pass an unrestricted common-event root to the storage service.
+      const creatorFolders = await listCreatorCommonEventFolders({
+        eventExternalId: externalId,
+        userId: getRequestUserId(req),
+        phase,
+      });
+      downloadFolders = creatorFolders.flatMap((row) => {
+        const ownedPath = stripCommonEventRootFromPath(row.folder_path, row);
+        const relativePath = stripCommonEventRootFromPath(requestedPath, row);
+        if (!ownedPath) return [];
+        const path = relativePath && isPathWithin(ownedPath, relativePath)
+          ? relativePath
+          : !relativePath || isPathWithin(relativePath, ownedPath) ? ownedPath : null;
+        return path ? [{ phase: normalizeWorkspacePhase(row.phase, null) || 'root', path }] : [];
+      });
+      if (!downloadFolders.length) {
+        return res.status(403).json({ success: false, message: 'You can access only your own common event folder/files' });
+      }
     }
 
+    const primaryFolder = downloadFolders?.[0];
     const result = await proxyRequest('/folder-download-url', {
       method: 'POST',
       body: JSON.stringify({
         externalId,
-        phase: req.body.phase,
-        path: req.body.path,
+        phase: primaryFolder?.phase || req.body.phase,
+        path: primaryFolder?.path || req.body.path,
+        folders: downloadFolders?.length > 1 ? downloadFolders : undefined,
       }),
     });
     return res.status(200).json(withPublicUrl(result, req));
@@ -5531,14 +5557,17 @@ exports.getFolderDownloadUrl = async (req, res) => {
 
 exports.downloadFolderZip = async (req, res) => {
   try {
-    const folderpath = String(req.query.folderpath || '').trim();
-    if (!folderpath) {
+    const rawPaths = Array.isArray(req.query.folderpath) ? req.query.folderpath : [req.query.folderpath];
+    const folderpaths = rawPaths.map((value) => String(value || '').trim()).filter(Boolean);
+    if (!folderpaths.length) {
       return res.status(400).json({ success: false, message: 'folderpath is required' });
     }
 
+    const query = new URLSearchParams();
+    folderpaths.forEach((folderpath) => query.append('folderpath', folderpath));
     return proxyZipResponse({
       res,
-      externalPath: `/download-folder?folderpath=${encodeURIComponent(folderpath)}`,
+      externalPath: `/download-folder?${query.toString()}`,
     });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
