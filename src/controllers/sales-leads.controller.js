@@ -1502,6 +1502,10 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             video_edit_types, 
             photo_edit_types, 
             edits_needed,
+            role_counts,
+            estimated_total,
+            pricing_subtotal,
+            pricing_line_items = [],
             studio_items = [],
             studio_total = 0
         } = req.body;
@@ -1601,7 +1605,53 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const studioMeta = normalizedStudioItems.length > 0
             ? `[BEIGE_STUDIO_META]${JSON.stringify(normalizedStudioItems)}`
             : '';
-        const combinedDescription = [specialInstructions, studioMeta]
+        const normalizeRoleCounts = (value) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+            return Object.entries(value).reduce((acc, [role, count]) => {
+                const normalizedCount = Number(count || 0);
+                if (Number.isFinite(normalizedCount) && normalizedCount > 0) {
+                    acc[role] = normalizedCount;
+                }
+                return acc;
+            }, {});
+        };
+        const normalizePricingLineItems = (value) => {
+            if (!Array.isArray(value)) return [];
+            return value
+                .map((item) => {
+                    const lineTotal = Number(item?.line_total ?? item?.total ?? item?.total_price ?? 0);
+                    const unitPrice = Number(item?.unit_price ?? item?.rate ?? item?.price ?? 0);
+                    const quantity = Number(item?.quantity || 1);
+                    const itemName = String(item?.item_name || item?.name || '').trim();
+                    if (!itemName || !Number.isFinite(lineTotal) || lineTotal <= 0) return null;
+                    return {
+                        item_id: item?.item_id ?? null,
+                        item_name: itemName,
+                        name: itemName,
+                        category_name: item?.category_name || null,
+                        category_slug: item?.category_slug || null,
+                        quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+                        unit_price: Number.isFinite(unitPrice) ? unitPrice : 0,
+                        line_total: lineTotal,
+                        total: lineTotal,
+                        rate_type: item?.rate_type || null,
+                        rate_unit: item?.rate_unit || null
+                    };
+                })
+                .filter(Boolean);
+        };
+        const normalizedRoleCounts = normalizeRoleCounts(role_counts);
+        const normalizedEstimatedTotal = Number(estimated_total || 0);
+        const normalizedPricingSubtotal = Number(pricing_subtotal || normalizedEstimatedTotal || 0);
+        const normalizedPricingLineItems = normalizePricingLineItems(pricing_line_items);
+        const pricingMeta = normalizedEstimatedTotal > 0 || normalizedPricingLineItems.length > 0
+            ? `[BEIGE_PRICING_META]${JSON.stringify({
+                total: Number.isFinite(normalizedEstimatedTotal) ? normalizedEstimatedTotal : 0,
+                subtotal: Number.isFinite(normalizedPricingSubtotal) ? normalizedPricingSubtotal : normalizedEstimatedTotal,
+                line_items: normalizedPricingLineItems
+            })}`
+            : '';
+        const combinedDescription = [specialInstructions, studioMeta, pricingMeta]
             .filter((value) => String(value || '').trim())
             .join('\n\n') || null;
 
@@ -1613,7 +1663,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             shoot_type: shoot_type,
             content_type: content_type,
             streaming_platforms: JSON.stringify([]),
-            crew_roles: JSON.stringify([]),
+            crew_roles: JSON.stringify(normalizedRoleCounts),
             event_date: event_date,
             estimated_delivery_date: normalizedEstimatedDeliveryDate,
             start_time: start_time_final,
@@ -1625,7 +1675,10 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             event_location: location || null,
             event_latitude: latitude,
             event_longitude: longitude,
-            description: combinedDescription,
+            ...(combinedDescription ? { description: combinedDescription } : {}),
+            ...(Number.isFinite(normalizedEstimatedTotal) && normalizedEstimatedTotal > 0
+                ? { budget: normalizedEstimatedTotal }
+                : {}),
             reference_links: reference_links || null,
             edits_needed: edits_needed ? 1 : 0,
             video_edit_types: video_edit_types || [], 
@@ -1635,6 +1688,19 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             is_cancelled: 0,
             is_active: 1
         };
+        const hasScheduleFields = [
+            start_date,
+            start_time,
+            end_time,
+            startDate,
+            endDate,
+            start_date_time
+        ].some((value) => value !== undefined && value !== null && String(value).trim() !== '') ||
+            normalizedBookingDays.length > 0;
+        const hasLocationField = location !== undefined;
+        const hasEditsField = edits_needed !== undefined;
+        const hasVideoEditsField = video_edit_types !== undefined;
+        const hasPhotoEditsField = photo_edit_types !== undefined;
 
         let booking;
         const tx = await db.sequelize.transaction();
@@ -1642,7 +1708,25 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             if (booking_id) {
                 booking = await stream_project_booking.findByPk(booking_id);
                 if (booking) {
-                    await booking.update(bookingData, { transaction: tx });
+                    const updateData = { ...bookingData };
+                    if (!hasScheduleFields) {
+                        delete updateData.event_date;
+                        delete updateData.start_time;
+                        delete updateData.end_time;
+                        delete updateData.start_date_time;
+                        delete updateData.end_date_time;
+                        delete updateData.duration_hours;
+                        delete updateData.time_zone;
+                    }
+                    if (!hasLocationField) {
+                        delete updateData.event_location;
+                        delete updateData.event_latitude;
+                        delete updateData.event_longitude;
+                    }
+                    if (!hasEditsField) delete updateData.edits_needed;
+                    if (!hasVideoEditsField) delete updateData.video_edit_types;
+                    if (!hasPhotoEditsField) delete updateData.photo_edit_types;
+                    await booking.update(updateData, { transaction: tx });
                 }
             } 
             
