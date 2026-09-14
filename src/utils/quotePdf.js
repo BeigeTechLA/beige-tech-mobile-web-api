@@ -266,7 +266,7 @@ function buildQuotePdfHtml(quote) {
                 </div>
               </div>
               <div style="margin-top: 16px;" class="small muted">
-                ${companyAddressLines.map((line) => `${escapeHtml(line)}<br>`).join('')}
+                ${'' /* companyAddressLines.map((line) => `${escapeHtml(line)}<br>`).join('') */}
                 ${escapeHtml(companyEmail)}<br>
                 ${escapeHtml(companyPhone)}
               </div>
