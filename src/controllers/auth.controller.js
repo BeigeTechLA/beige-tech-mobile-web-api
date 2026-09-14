@@ -3067,18 +3067,35 @@ exports.registerCrewMemberStep3 = [
         itemsToCreate.push(...filesToCreate);
       }
 
-      // Handle Portfolio Links (NEW LOGIC)
+      // Handle Portfolio Links (Deduplication Check)
       if (portfolio_links) {
         const parsedLinks = parseJsonInput(portfolio_links, []);
-        const linksToCreate = parsedLinks.map(link => ({
-          crew_member_id,
-          file_type: 'link', 
-          file_path: link.url,
-          file_category: 'portfolio_link',
-          tag: link.platform || null, // youtube, vimeo, etc.
-          title: link.title || null    // The name of the link
-        }));
-        itemsToCreate.push(...linksToCreate);
+        if (parsedLinks.length > 0) {
+          const existingDbLinks = await crew_member_files.findAll({
+            where: {
+              crew_member_id,
+              file_type: 'link'
+            }
+          });
+
+          const newLinksToInsert = parsedLinks.filter(link => {
+            if (!link.url) return false;
+            return !existingDbLinks.some(dbLink => 
+              String(dbLink.file_path).trim().toLowerCase() === String(link.url).trim().toLowerCase() &&
+              String(dbLink.tag || '').trim().toLowerCase() === String(link.platform || '').trim().toLowerCase()
+            );
+          });
+
+          const linksToCreate = newLinksToInsert.map(link => ({
+            crew_member_id,
+            file_type: 'link', 
+            file_path: link.url,
+            file_category: 'portfolio_link',
+            tag: link.platform || null, // youtube, vimeo, etc.
+            title: link.title || null    // The name of the link
+          }));
+          itemsToCreate.push(...linksToCreate);
+        }
       }
 
       // Bulk create if there is anything to save

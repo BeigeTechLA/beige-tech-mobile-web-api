@@ -42,6 +42,13 @@ app.post(
   paymentsController.handleStripeWebhook
 );
 
+// Commas signs the raw request body with HMAC-SHA256.
+app.post(
+  '/v1/payments/commas/webhook',
+  express.raw({ type: 'application/json' }),
+  paymentsController.handleCommasWebhook
+);
+
 // Request logging middleware
 app.use((req, res, next) => {
   const baseUrl = 'http://localhost:3000/api/'; // Define base URL for API

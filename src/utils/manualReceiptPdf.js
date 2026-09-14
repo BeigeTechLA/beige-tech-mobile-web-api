@@ -800,9 +800,11 @@ function buildManualReceiptHtml(data) {
               <div class="bill-card">
                 <div class="bill-title">Beige AI</div>
                 <div class="bill-line">323-826-7230</div>
+                <!--
                 <div class="bill-line">9200 West Sunset Boulevard Suite</div>
                 <div class="bill-line">650 West Hollywood, California 90069</div>
                 <div class="bill-line">United States</div>
+                -->
                 <div class="bill-line">sales@beigecorporation.io</div>
               </div>
             </div>
