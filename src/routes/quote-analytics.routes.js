@@ -1,0 +1,12 @@
+const express = require('express');
+const quoteAnalyticsController = require('../controllers/quote-analytics.controller');
+const { authenticate } = require('../middleware/auth.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
+const router = express.Router();
+const viewAnalytics = requireAnyPermission(['admin_quotes_all_quotes.view', 'sales_rep_quotes.view', 'sales_admin_quotes.view'], { allowRoles: ['sales_rep', 'sales_admin'] });
+router.get('/quotes/summary', authenticate, viewAnalytics, quoteAnalyticsController.getQuoteAnalyticsSummary);
+router.get('/quotes/reps', authenticate, viewAnalytics, quoteAnalyticsController.getQuoteAnalyticsReps);
+router.get('/quotes/rep/:repId/deals', authenticate, viewAnalytics, quoteAnalyticsController.getQuoteAnalyticsRepDeals);
+router.get('/quotes/rep/:repId', authenticate, viewAnalytics, quoteAnalyticsController.getQuoteAnalyticsRep);
+router.get('/quotes/list', authenticate, viewAnalytics, quoteAnalyticsController.getQuoteAnalyticsList);
+module.exports = router;

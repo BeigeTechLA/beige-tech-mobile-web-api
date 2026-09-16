@@ -153,6 +153,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATEONLY,
       allowNull: true
     },
+    last_follow_up_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     discount_type: {
       type: DataTypes.ENUM('none','percentage','fixed_amount'),
       allowNull: false,
@@ -261,6 +265,13 @@ module.exports = function(sequelize, DataTypes) {
         fields: [
           { name: "client_id" },
           { name: "client_user_id" },
+        ]
+      },
+      {
+        name: "idx_sales_quotes_last_follow_up_at",
+        using: "BTREE",
+        fields: [
+          { name: "last_follow_up_at" },
         ]
       },
       {

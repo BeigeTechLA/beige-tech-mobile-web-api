@@ -3758,3 +3758,145 @@ Authorization: {{TOKEN}}
   "name": "Harsh Panchal",
   "phone_number": "9874562320"
 }
+
+### ============================================================
+### QUOTE ANALYTICS MODULE — LOCAL TESTING
+### Confirmed base path: /v1/analytics/quotes/...
+### ============================================================
+
+@ANALYTICS_URL = {{URL}}analytics/quotes/
+
+###
+# Summary — default (no filters, last 30 days default range)
+GET {{ANALYTICS_URL}}summary HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Summary — with date preset
+GET {{ANALYTICS_URL}}summary?datePreset=this_month HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Summary — custom date range
+GET {{ANALYTICS_URL}}summary?dateFrom=2026-08-01&dateTo=2026-09-16 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Summary — filtered by sales rep
+GET {{ANALYTICS_URL}}summary?assignedSalesRepId=180 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Summary — filtered by shoot type
+GET {{ANALYTICS_URL}}summary?videoShootType=Corporate Event HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Summary — filtered by status
+GET {{ANALYTICS_URL}}summary?status=paid HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Summary — combined filters
+GET {{ANALYTICS_URL}}summary?dateFrom=2026-01-01&dateTo=2026-09-16&assignedSalesRepId=180&status=accepted HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Reps table — default, page 1
+GET {{ANALYTICS_URL}}reps?page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Reps table — sorted by quote value desc
+GET {{ANALYTICS_URL}}reps?page=1&limit=10&sortBy=quoteValue&sortOrder=desc HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Reps table — with date filter
+GET {{ANALYTICS_URL}}reps?dateFrom=2026-08-01&dateTo=2026-09-16&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Rep detail — replace 180 with a real assigned_sales_rep_id
+GET {{ANALYTICS_URL}}rep/180 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Rep deals — Deal Won list
+GET {{ANALYTICS_URL}}rep/180/deals?type=won&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Rep deals — Overdue list
+GET {{ANALYTICS_URL}}rep/180/deals?type=overdue&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Generic list — Sent quotes
+GET {{ANALYTICS_URL}}list?status=sent&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Generic list — Accepted quotes
+GET {{ANALYTICS_URL}}list?status=accepted&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Generic list — Partially Paid quotes
+GET {{ANALYTICS_URL}}list?status=partially_paid&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Generic list — Overdue quotes (tests last_follow_up_at + 48h logic)
+GET {{ANALYTICS_URL}}list?status=overdue&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Generic list — Overdue, filtered by rep
+GET {{ANALYTICS_URL}}list?status=overdue&assignedSalesRepId=180&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Edge case — no auth token (should 401)
+GET {{ANALYTICS_URL}}summary HTTP/1.1
+Content-Type: application/json
+
+###
+# Edge case — invalid rep id (should 400, per our validation requirement)
+GET {{ANALYTICS_URL}}rep/abc HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+# Edge case — invalid status value in list (should 400)
+GET {{ANALYTICS_URL}}list?status=random_value HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+
+###
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
+}

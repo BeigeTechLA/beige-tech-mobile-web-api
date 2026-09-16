@@ -4310,6 +4310,18 @@ function deriveQuoteValidityText(quoteDetails = {}) {
 }
 
 async function recordActivity(transaction, salesQuoteId, activityType, userId, message, metadata = null) {
+  // Keep the denormalized analytics timestamp in the same transaction as a
+  // client-contact activity. New call/note integrations must pass
+  // { is_follow_up: true } when recording their quote activity.
+  if (activityType === 'sent' || metadata?.is_follow_up === true) {
+    await db.sales_quotes.update({
+      last_follow_up_at: new Date()
+    }, {
+      where: { sales_quote_id: salesQuoteId },
+      transaction
+    });
+  }
+
   return db.sales_quote_activities.create({
     sales_quote_id: salesQuoteId,
     activity_type: activityType,

@@ -46,6 +46,7 @@ router.use('/reviews', require('./reviews.routes'));
 router.use('/affiliates', require('./affiliate.routes'));
 router.use('/client', require('./client.routes'));
 router.use('/quotes', require('./quotes.routes'));
+router.use('/analytics', require('./quote-analytics.routes'));
 router.use('/sales', require('./sales.routes'));
 router.use('/shifts', require('./shifts.routes'));
 router.use('/assignment-history', require('./assignment-history.routes'));
