@@ -401,6 +401,85 @@ const renderEmailTemplate = (templateName, values = {}) => {
   return html;
 };
 
+const sendRenderedTemplateEmail = async ({ to, subject, templateName, values = {}, text }) => {
+  try {
+    const recipients = normalizeRecipients(to);
+    if (!recipients.length) return { success: false, error: 'Recipient email is required' };
+
+    const html = renderEmailTemplate(templateName, values);
+    const fallbackText = text || subject || 'Beige notification';
+
+    if (process.env.SENDGRID_API_KEY) {
+      const fromEmail = getSendgridFromAddress();
+      if (!fromEmail) return { success: false, error: 'Sender email not configured' };
+
+      const settled = await Promise.allSettled(
+        recipients.map((recipient) =>
+          sgMail.send({
+            to: recipient,
+            from: {
+              email: fromEmail,
+              name: getSendgridFromName()
+            },
+            subject,
+            text: fallbackText,
+            html
+          })
+        )
+      );
+
+      const sent = settled.filter((item) => item.status === 'fulfilled').length;
+      const failed = settled
+        .map((item, index) => ({ item, to: recipients[index] }))
+        .filter((entry) => entry.item.status === 'rejected')
+        .map((entry) => ({
+          to: entry.to,
+          error: entry.item.reason?.response?.body || entry.item.reason?.message || 'Unknown email error'
+        }));
+
+      return {
+        success: sent > 0,
+        sent,
+        failed
+      };
+    }
+
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+      return { success: false, error: 'Email provider is not configured' };
+    }
+
+    const settled = await Promise.allSettled(
+      recipients.map((recipient) =>
+        transporter.sendMail({
+          from: `"${process.env.EMAIL_FROM_NAME || 'Beige AI'}" <${process.env.EMAIL_USER}>`,
+          to: recipient,
+          subject,
+          text: fallbackText,
+          html
+        })
+      )
+    );
+
+    const sent = settled.filter((item) => item.status === 'fulfilled').length;
+    const failed = settled
+      .map((item, index) => ({ item, to: recipients[index] }))
+      .filter((entry) => entry.item.status === 'rejected')
+      .map((entry) => ({
+        to: entry.to,
+        error: entry.item.reason?.message || 'Unknown email error'
+      }));
+
+    return {
+      success: sent > 0,
+      sent,
+      failed
+    };
+  } catch (error) {
+    console.error('Error sending rendered template email:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
+  }
+};
+
 const sendNewsletterSubscriptionNotification = async (data) => {
   try {
     const to =
@@ -4048,6 +4127,117 @@ const sendCreativePartnerProfileReminderEmail = async (data = {}) => {
   }
 };
 
+const sendFinanceDisputeRaisedAdminEmail = async ({ recipients = [], data = {} } = {}) => {
+  const raisedByLabel = data.raised_by_type_label || (
+    String(data.raised_by_type || '').toLowerCase() === 'creator'
+      ? 'Creative Partner'
+      : String(data.raised_by_type || '').toLowerCase() === 'admin'
+        ? 'Admin'
+        : 'Client'
+  );
+  const raisedByNameLabel = raisedByLabel === 'Creative Partner' ? 'Creative Partner Name' : `${raisedByLabel} Name`;
+  const raisedByDisplayName = raisedByLabel === 'Creative Partner'
+    ? (data.raised_by_name || data.creator_name || data.creative_partner || 'N/A')
+    : (data.client_name || data.raised_by_name || 'N/A');
+  const disputeCode = data.dispute_code || '';
+  const bookingId = data.booking_id || data.shoot_id || '';
+
+  return sendRenderedTemplateEmail({
+    to: recipients,
+    subject: data.subject || `New Finance Dispute Raised${disputeCode ? ` - ${disputeCode}` : ''}`,
+    templateName: 'NewDisputeRaisedByClient.html',
+    values: {
+      booking_id: bookingId,
+      raised_by_type_label: raisedByLabel,
+      raised_by_name_label: raisedByNameLabel,
+      client_name: raisedByDisplayName,
+      creative_partner: data.creative_partner || data.creator_name || 'N/A',
+      dispute_reason: data.dispute_reason || data.reason || data.category || data.description || 'N/A',
+      view_details_url: data.view_details_url || data.dispute_link || ''
+    },
+    text: [
+      'New finance dispute raised.',
+      disputeCode ? `Dispute: ${disputeCode}` : null,
+      bookingId ? `Booking: ${bookingId}` : null,
+      data.raised_by_name ? `Raised by: ${data.raised_by_name}` : null,
+      data.view_details_url || data.dispute_link || null
+    ].filter(Boolean).join('\n')
+  });
+};
+
+const sendFinanceDisputeReceivedEmail = async ({ to, data = {} } = {}) =>
+  sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || 'We Received Your Dispute',
+    templateName: 'ClientNotificationDisputeReceived.html',
+    values: {
+      client_name: data.recipient_name || data.client_name || 'there',
+      booking_id: data.booking_id || data.shoot_id || '',
+      view_details_url: data.view_details_url || data.dispute_link || ''
+    },
+    text: `We received your dispute for booking ${data.booking_id || data.shoot_id || ''}.`
+  });
+
+const sendFinanceDisputeResolvedEmail = async ({ to, data = {} } = {}) =>
+  sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || 'Your Dispute Has Been Resolved',
+    templateName: 'ClientNotificationDisputeResolved.html',
+    values: {
+      client_name: data.recipient_name || data.client_name || 'there',
+      booking_id: data.booking_id || data.shoot_id || '',
+      resolution_summary: data.resolution_summary || data.resolution_notes || data.notes || 'Resolved by the Beige finance team',
+      view_details_url: data.view_details_url || data.dispute_link || ''
+    },
+    text: `Your dispute for booking ${data.booking_id || data.shoot_id || ''} has been resolved.`
+  });
+
+const sendFinanceDisputeRejectedEmail = async ({ to, data = {} } = {}) =>
+  sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || 'Update on Your Dispute',
+    templateName: 'ClientNotificationDisputeRejected.html',
+    values: {
+      client_name: data.recipient_name || data.client_name || 'there',
+      booking_id: data.booking_id || data.shoot_id || '',
+      rejection_reason: data.rejection_reason || data.resolution_notes || data.notes || 'Reviewed by the Beige finance team',
+      view_details_url: data.view_details_url || data.dispute_link || ''
+    },
+    text: `Your dispute for booking ${data.booking_id || data.shoot_id || ''} has been rejected.`
+  });
+
+const sendFinanceDisputeReopenedEmail = async ({ to, data = {} } = {}) =>
+  sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || 'Dispute Reopened - Action Required',
+    templateName: 'ClientNotificationDisputeReopened.html',
+    values: {
+      client_name: data.recipient_name || data.client_name || 'there',
+      booking_id: data.booking_id || data.shoot_id || '',
+      reopened_by: data.reopened_by || data.updated_by || 'the Beige finance team',
+      dispute_reason: data.dispute_reason || data.reason || data.category || 'N/A',
+      previous_resolution: data.previous_resolution || data.resolution_notes || 'N/A',
+      dispute_link: data.dispute_link || data.view_details_url || ''
+    },
+    text: `Your dispute for booking ${data.booking_id || data.shoot_id || ''} has been reopened.`
+  });
+
+const sendFinanceDisputeUpdatedEmail = async ({ to, data = {} } = {}) =>
+  sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || 'Finance Dispute Updated',
+    templateName: 'NotificationDisputeUpdated.html',
+    values: {
+      client_name: data.recipient_name || data.client_name || 'there',
+      booking_id: data.booking_id || data.shoot_id || '',
+      reopened_by: data.updated_by || data.reopened_by || 'the Beige finance team',
+      update_message: data.update_message || `A dispute for Booking ${data.booking_id || data.shoot_id || ''} has been updated.`,
+      update_detail: data.update_detail || 'Please review the latest comments/files and take the necessary action.',
+      dispute_link: data.dispute_link || data.view_details_url || ''
+    },
+    text: data.update_message || `Finance dispute updated for booking ${data.booking_id || data.shoot_id || ''}.`
+  });
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
@@ -4105,5 +4295,11 @@ module.exports = {
   sendRevisionCommentAddedEmail,
   sendNewVersionUploadedClientEmail,
   sendFileShareInvitationEmail,
-  sendWorkspaceAccessInvitationEmail
+  sendWorkspaceAccessInvitationEmail,
+  sendFinanceDisputeRaisedAdminEmail,
+  sendFinanceDisputeReceivedEmail,
+  sendFinanceDisputeResolvedEmail,
+  sendFinanceDisputeRejectedEmail,
+  sendFinanceDisputeReopenedEmail,
+  sendFinanceDisputeUpdatedEmail
 };
