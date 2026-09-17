@@ -1368,11 +1368,17 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
     if (!externalTransaction) await transaction.commit();
 
     let emailResults = [];
+    let newShootRequestEmailResults = [];
     if (!externalTransaction && parseBooleanFlag(payload.send_email ?? payload.sendEmail)) {
       emailResults = await sendCreatorCompensationEmails({
         bookingId,
         creators,
         approvalStatus: options.approvalStatus
+      });
+      newShootRequestEmailResults = await sendNewShootRequestEmailsAfterCompensation({
+        bookingId,
+        creatorIds: payload.new_shoot_request_creator_ids ?? payload.newShootRequestCreatorIds,
+        creators
       });
     }
 
@@ -1383,11 +1389,72 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
       compensation_method: payload.compensation_method || null,
       creators,
       email_sent: emailResults.some((result) => result.success),
-      email_results: emailResults
+      email_results: emailResults,
+      new_shoot_request_email_sent: newShootRequestEmailResults.some((result) => result.success),
+      new_shoot_request_email_results: newShootRequestEmailResults
     };
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
     throw error;
+  }
+}
+
+async function sendNewShootRequestEmailsAfterCompensation({ bookingId, creatorIds, creators = [] }) {
+  const ids = [...new Set((Array.isArray(creatorIds) ? creatorIds : [])
+    .map(Number)
+    .filter(Boolean))];
+  if (!bookingId || !ids.length) return [];
+
+  try {
+    const [booking, assignments] = await Promise.all([
+      db.stream_project_booking.findByPk(bookingId, {
+        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'start_time', 'end_time'],
+        include: [
+          { model: db.users, as: 'user', required: false, attributes: ['id', 'name'] },
+          { model: db.sales_leads, as: 'sales_leads', required: false, attributes: ['lead_id', 'client_name'], limit: 1, order: [['lead_id', 'DESC']] }
+        ]
+      }),
+      db.assigned_crew.findAll({
+        where: {
+          project_id: bookingId,
+          crew_member_id: { [db.Sequelize.Op.in]: ids },
+          is_active: 1,
+          new_booking_email_sent_at: null
+        },
+        include: [{ model: db.crew_members, as: 'crew_member', required: true, attributes: ['crew_member_id', 'first_name', 'last_name', 'email'] }]
+      })
+    ]);
+
+    if (!booking) return ids.map((creatorId) => ({ creator_id: creatorId, success: false, error: 'Booking not found' }));
+
+    const compensationByCreatorId = new Map(
+      creators.map((creator) => [Number(creator.creator_id), Number(creator.total_compensation || 0)])
+    );
+    const clientName = booking?.sales_leads?.[0]?.client_name || booking?.user?.name || 'TBD';
+
+    return Promise.all(assignments.map(async (assignment) => {
+      const crew = assignment.crew_member;
+      const creatorId = Number(assignment.crew_member_id);
+      const result = await emailService.sendCPNewBookingRequestEmail({
+        to_email: crew.email,
+        user_name: crew.first_name,
+        client_name: clientName,
+        service_type: formatShootType(booking),
+        date: booking.event_date,
+        start_time: booking.start_time,
+        end_time: booking.end_time,
+        shoot_amount: compensationByCreatorId.get(creatorId) || 0,
+        show_tentative_earnings: true
+      });
+
+      if (result?.success) {
+        await assignment.update({ new_booking_email_sent_at: new Date() });
+      }
+      return { creator_id: creatorId, success: Boolean(result?.success), error: result?.success ? null : result?.error || 'Failed to send new shoot request email' };
+    }));
+  } catch (error) {
+    console.warn('[cp-compensation] new shoot request email batch failed:', { booking_id: bookingId, error: error?.message || error });
+    return ids.map((creatorId) => ({ creator_id: creatorId, success: false, error: error?.message || 'Failed to send new shoot request email' }));
   }
 }
 
@@ -1398,7 +1465,32 @@ async function sendCreatorCompensationEmails({ bookingId, creators = [], approva
   try {
     const [booking, crewMembers] = await Promise.all([
       db.stream_project_booking.findByPk(bookingId, {
-        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type']
+        attributes: [
+          'stream_project_booking_id',
+          'project_name',
+          'shoot_type',
+          'event_type',
+          'content_type',
+          'event_date',
+          'start_time',
+          'end_time'
+        ],
+        include: [
+          {
+            model: db.users,
+            as: 'user',
+            required: false,
+            attributes: ['id', 'name']
+          },
+          {
+            model: db.sales_leads,
+            as: 'sales_leads',
+            required: false,
+            attributes: ['lead_id', 'client_name'],
+            limit: 1,
+            order: [['lead_id', 'DESC']]
+          }
+        ]
       }),
       db.crew_members.findAll({
         where: { crew_member_id: { [db.Sequelize.Op.in]: creatorIds } },
@@ -1408,6 +1500,7 @@ async function sendCreatorCompensationEmails({ bookingId, creators = [], approva
 
     const crewById = new Map(crewMembers.map((creator) => [Number(creator.crew_member_id), creator]));
     const shootName = booking?.project_name || `Booking #${bookingId}`;
+    const clientName = booking?.sales_leads?.[0]?.client_name || booking?.user?.name || '';
 
     return Promise.all(creators.map(async (creator) => {
       const crew = crewById.get(Number(creator.creator_id));
@@ -1429,6 +1522,10 @@ async function sendCreatorCompensationEmails({ bookingId, creators = [], approva
         project_name: shootName,
         shoot_name: shootName,
         service_type: formatShootType(booking || {}),
+        client_name: clientName,
+        shoot_date: booking?.event_date || null,
+        start_time: booking?.start_time || null,
+        end_time: booking?.end_time || null,
         compensation_amount: creator.total_compensation,
         total_compensation: creator.total_compensation,
         approval_status: approvalStatus

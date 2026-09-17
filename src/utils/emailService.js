@@ -95,7 +95,8 @@ const {
   WELCOME_USER_TEMPLATE_ID,
   SALES_NOTIF_PARTIAL_PAYMENT_RECEIVED_TEMPLATE_ID,
   SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID,
-  EARNING_UPDATED_TEMPLATE_ID
+  EARNING_UPDATED_TEMPLATE_ID,
+  MANUAL_PAYMENT_RECORD_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -2292,6 +2293,45 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
 const sendPaymentSuccessSalesNotification = async (paymentData) =>
   sendSalesPaymentReceivedNotification(paymentData);
 
+const sendManualPaymentRecordEmail = async (paymentData = {}) => {
+  const recipients = [...new Set([
+    process.env.SALES_NOTIFICATION_EMAIL,
+    paymentData.created_by_email,
+    paymentData.quote_creator_email
+  ].filter(Boolean).map((email) => String(email).trim().toLowerCase()))];
+
+  if (!recipients.length) return { success: false, error: 'No manual payment email recipients configured' };
+  if (!MANUAL_PAYMENT_RECORD_TEMPLATE_ID) {
+    return { success: false, error: 'MANUAL_PAYMENT_RECORD_TEMPLATE_ID is not configured' };
+  }
+
+  const dashboardLink = paymentData.dashboard_link || paymentData.dashboardLink ||
+    `${String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '')}/admin/shoots/${paymentData.booking_id || ''}`;
+
+  return sendEmail({
+    to: recipients,
+    subject: 'Manual payment recorded',
+    templateId: MANUAL_PAYMENT_RECORD_TEMPLATE_ID,
+    dynamicTemplateData: {
+      booking_quote_id: paymentData.booking_quote_id || `Booking #${paymentData.booking_id || ''}`,
+      client_name: paymentData.client_name || 'TBD',
+      amount_added: formatAmount(paymentData.amount_added ?? paymentData.amount ?? 0),
+      payment_method: formatPaymentMethodLabel(paymentData.payment_method || paymentData.payment_mode),
+      updated_by: paymentData.updated_by || 'Beige team',
+      receipt_pdf_url: paymentData.receipt_pdf_url || paymentData.proof_url || dashboardLink,
+      receipt_pdf_name: paymentData.receipt_pdf_name || paymentData.proof_file_name || 'Manual payment proof',
+      dashboard_link: dashboardLink,
+      booking_id: paymentData.booking_id || '',
+      lead_id: paymentData.lead_id || '',
+      payment_type: String(paymentData.payment_type || '').toUpperCase(),
+      total_amount: formatAmount(paymentData.total_amount || 0),
+      paid_amount_total: formatAmount(paymentData.paid_amount_total || 0),
+      pending_amount: formatAmount(paymentData.pending_amount || 0),
+      year: new Date().getFullYear()
+    }
+  });
+};
+
 /**
  * Send notification to production team about a new lead
  * @param {Object} leadData - { guestEmail, shootType, contentType, eventDate, startTime, endTime, editsNeeded }
@@ -2848,7 +2888,8 @@ const sendCPNewBookingRequestEmail = async (data) => {
         date: shootDate,
         start_time: startTime,
         end_time: endTime,
-        // shoot_amount: shootAmount,
+        shoot_amount: shootAmount,
+        show_tentative_earnings: Boolean(data.show_tentative_earnings),
         dashboard_link: `${process.env.FRONTEND_URL}/creator/dashboard`,
         show_fifo_message: showFifoMessage,
       }
@@ -4027,21 +4068,44 @@ const sendWorkspaceAccessInvitationEmail = async ({ to, data = {} }) => {
 };
 
 const sendCreatorEarningUpdatedEmail = async (data = {}) => {
+  const creatorName = data.creator_name || data.cp_name || data.first_name || 'there';
+  const clientNameParts = String(data.client_name || data.client_full_name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const clientFirstName = data.client_first_name || clientNameParts[0] || 'TBD';
+  const clientLastName = data.client_last_name || clientNameParts.slice(1).join(' ') || '';
+  const shootDate = data.shoot_date || data.date || '';
+  const startTime = data.start_time || '';
+  const endTime = data.end_time || '';
+  const shootTime = data.shoot_time || [formatTime(startTime), formatTime(endTime)].filter(Boolean).join(' - ') || 'TBD';
+  const earnings = formatAmount(data.total_compensation ?? data.compensation_amount ?? data.amount ?? 0);
+  const dashboardLink = data.dashboard_link || `${String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '')}/creator/dashboard`;
+
   return sendEmail({
     to: data.to_email || data.email,
     subject: data.subject || 'Your Beige creator earning has been updated',
     templateId: EARNING_UPDATED_TEMPLATE_ID,
     dynamicTemplateData: {
-      first_name: getFirstName(data.creator_name || data.first_name || '', data.first_name || 'there') || 'there',
-      creator_name: data.creator_name || '',
+      // EARNING_UPDATED_TEMPLATE_ID uses these exact keys. Keep the older aliases
+      // below so an older SendGrid version remains compatible during deployment.
+      cp_name: creatorName,
+      first_name: clientFirstName,
+      last_name: clientLastName,
+      shootType: data.shoot_type || data.service_type || '',
+      shoot_date: shootDate ? formatDate(shootDate) : 'TBD',
+      shoot_time: shootTime,
+      earnings,
+      view_details_url: data.view_details_url || dashboardLink,
+      creator_name: creatorName,
       project_name: data.project_name || data.shoot_name || `Booking #${data.booking_id || ''}`,
       shoot_name: data.shoot_name || data.project_name || '',
       booking_id: data.booking_id || '',
       service_type: data.service_type || '',
-      compensation_amount: formatAmount(data.compensation_amount || data.amount || 0),
-      total_compensation: formatAmount(data.total_compensation || data.compensation_amount || data.amount || 0),
+      compensation_amount: earnings,
+      total_compensation: earnings,
       approval_status: data.approval_status || '',
-      dashboard_link: data.dashboard_link || `${String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '')}/creator/dashboard`,
+      dashboard_link: dashboardLink,
       year: new Date().getFullYear()
     }
   });
@@ -4252,6 +4316,7 @@ module.exports = {
   sendProductionLeadNotification,
   sendSalesPaymentReceivedNotification,
   sendPaymentSuccessSalesNotification,
+  sendManualPaymentRecordEmail,
   sendClientSignupWelcomeEmail,
   sendWelcomeUserEmail,
   sendBookingConfirmationEmail,

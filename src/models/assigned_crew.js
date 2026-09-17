@@ -56,6 +56,10 @@ module.exports = function(sequelize, DataTypes) {
     responded_at: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+    new_booking_email_sent_at: {
+      type: DataTypes.DATE,
+      allowNull: true
     }
   }, {
     sequelize,

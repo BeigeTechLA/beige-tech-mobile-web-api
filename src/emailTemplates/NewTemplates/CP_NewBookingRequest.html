@@ -430,14 +430,18 @@
                       </tr>
                     </table>
 
-                    <!-- Tentative earnings copy hidden until dynamic payout values are ready. -->
+                    {{#if show_tentative_earnings}}
+                    <div style="margin: 8px 0 0; padding: 22px; border-radius: 16px; background-color: #FEEFD8; text-align: center;">
+                      <div class="dark-text" style="font-size: 20px; font-weight: 700; color: #000000;">Tentative Earnings</div>
+                      <div class="dark-text" style="margin-top: 8px; font-size: 25px; font-weight: 700; color: #000000;">{{shoot_amount}}</div>
+                      <div style="margin-top: 8px; font-size: 14px; font-style: italic; color: #525252; line-height: 20px;">Final payout may vary based on shoot duration, deliverables, revisions, and approved adjustments.</div>
+                    </div>
+                    {{/if}}
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
-
-          <!-- Tentative earnings section hidden until dynamic payout values are ready. -->
 
           <!-- Separator Line -->
           <tr>

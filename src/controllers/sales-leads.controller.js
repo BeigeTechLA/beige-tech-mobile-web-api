@@ -4775,6 +4775,12 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   const externalWorkspaceSync = await syncExternalWorkspaceAfterManualPayment(lead.booking);
   if (!isNet30Mode && amountToApply > 0) {
     const quoteCreatorRecipient = await getManualPaymentQuoteCreatorRecipient(resolvedSalesQuoteId);
+    const performedByUser = performedBy
+      ? await users.findByPk(performedBy, { attributes: ['id', 'name', 'email'] }).catch((error) => {
+          console.warn('Manual payment actor lookup failed:', error.message);
+          return null;
+        })
+      : null;
     emailService.sendSalesPaymentReceivedNotification({
       guestEmail: lead.guest_email || '',
       email: lead.guest_email || '',
@@ -4798,6 +4804,28 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
       ...quoteCreatorRecipient
     }).catch((emailError) => {
       console.error('Manual payment sales notification error:', emailError);
+    });
+
+    emailService.sendManualPaymentRecordEmail({
+      booking_id: bookingId,
+      booking_quote_id: `Booking #${bookingId}`,
+      lead_id: Number(leadId),
+      client_name: lead.client_name || lead.booking?.client_name || '',
+      amount_added: amountToApply,
+      total_amount: totalAmount,
+      paid_amount_total: paidAmountAfter,
+      pending_amount: Math.max(remainingBefore - amountToApply, 0),
+      payment_type: normalizedPaymentType,
+      payment_mode: normalizedPaymentMode === 'other'
+        ? normalizedOtherPaymentMode || normalizedPaymentMode
+        : normalizedPaymentMode,
+      updated_by: performedByUser?.name || performedByUser?.email || 'Beige team',
+      proof_url: normalizedProofUrl,
+      proof_file_name: normalizedProofFileName || 'Manual payment proof',
+      created_by_email: quoteCreatorRecipient.created_by_email || null,
+      dashboard_link: `${String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '')}/admin/shoots/${bookingId}`
+    }).catch((emailError) => {
+      console.error('Manual payment record email error:', emailError);
     });
   }
 
