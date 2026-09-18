@@ -29,6 +29,7 @@ let fileShareOtpTableReadyPromise = null;
 let fileShareAccessLogsTableReadyPromise = null;
 let workspaceAccessTableReadyPromise = null;
 let fileManagerSettingsTableReadyPromise = null;
+let fileManagerSettingsHistoryTableReadyPromise = null;
 let creatorFoldersTableReadyPromise = null;
 let workspaceDisplayNamesTableReadyPromise = null;
 
@@ -1796,6 +1797,147 @@ const ensureFileManagerSettingsTable = async () => {
   }
 
   await fileManagerSettingsTableReadyPromise;
+};
+
+const ensureFileManagerSettingsHistoryTable = async () => {
+  if (!fileManagerSettingsHistoryTableReadyPromise) {
+    fileManagerSettingsHistoryTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_settings_history (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        setting_id TINYINT UNSIGNED NOT NULL DEFAULT 1,
+        cp_delete_lock_days INT UNSIGNED NOT NULL,
+        changed_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+        changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        change_reason VARCHAR(32) DEFAULT NULL,
+        change_details_json LONGTEXT DEFAULT NULL,
+        PRIMARY KEY (id),
+        KEY idx_file_manager_settings_history_changed_at (changed_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await fileManagerSettingsHistoryTableReadyPromise;
+};
+
+const normalizeFileManagerSettingsSnapshot = (settings = {}) => ({
+  cp_delete_lock_days: normalizeCpDeleteLockDays(
+    settings.cpDeleteLockDays ?? settings.cp_delete_lock_days
+  ),
+});
+
+const buildFileManagerSettingsChangeDetails = (before = null, after = null) => {
+  const previous = before ? normalizeFileManagerSettingsSnapshot(before) : null;
+  const next = after ? normalizeFileManagerSettingsSnapshot(after) : null;
+  const changes = [];
+
+  if (!previous && next) {
+    changes.push({ field: 'setting', before: null, after: next });
+  } else if (previous && next) {
+    ['cp_delete_lock_days'].forEach((field) => {
+      if (String(previous[field] ?? '') !== String(next[field] ?? '')) {
+        changes.push({
+          field,
+          before: previous[field],
+          after: next[field],
+        });
+      }
+    });
+  }
+
+  return { before: previous, after: next, changes };
+};
+
+const recordFileManagerSettingsHistory = async ({
+  before,
+  after,
+  changedByUserId = null,
+  changeReason = 'update',
+}) => {
+  const details = buildFileManagerSettingsChangeDetails(before, after);
+  if (!details.changes.length) return null;
+
+  await ensureFileManagerSettingsHistoryTable();
+  await db.sequelize.query(
+    `INSERT INTO file_manager_settings_history
+     (setting_id, cp_delete_lock_days, changed_by_user_id, change_reason, change_details_json)
+     VALUES (1, :cpDeleteLockDays, :changedBy, :changeReason, :changeDetails)`,
+    {
+      replacements: {
+        cpDeleteLockDays: details.after?.cp_delete_lock_days ?? normalizeCpDeleteLockDays(null),
+        changedBy: changedByUserId || null,
+        changeReason,
+        changeDetails: JSON.stringify(details),
+      },
+    }
+  );
+
+  return details;
+};
+
+const getFileManagerSettingsHistoryRows = async (filters = {}) => {
+  await ensureFileManagerSettingsHistoryTable();
+
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 1000);  
+  const offset = (page - 1) * limit;
+
+  const [countRows] = await db.sequelize.query(
+    `SELECT COUNT(*) AS total FROM file_manager_settings_history`
+  );
+  const total = Number(countRows?.[0]?.total || 0);
+
+  const [rows] = await db.sequelize.query(
+    `
+    SELECT
+      h.id,
+      h.setting_id,
+      h.cp_delete_lock_days,
+      h.changed_by_user_id,
+      h.changed_at,
+      h.change_reason,
+      h.change_details_json,
+      u.id AS user_id,
+      u.name AS user_name,
+      u.email AS user_email,
+      u.role AS user_role
+    FROM file_manager_settings_history h
+    LEFT JOIN users u ON u.id = h.changed_by_user_id
+    ORDER BY h.changed_at DESC, h.id DESC
+    LIMIT :limit OFFSET :offset
+    `,
+    { replacements: { limit, offset } }
+  );
+
+  return {
+    rows: (Array.isArray(rows) ? rows : []).map((row) => {
+      let details = {};
+      try {
+        details = row.change_details_json ? JSON.parse(row.change_details_json) : {};
+      } catch (error) {
+        details = {};
+      }
+
+      return {
+        id: row.id,
+        cp_delete_lock_days: row.cp_delete_lock_days,
+        changed_at: row.changed_at,
+        change_reason: row.change_reason,
+        changed_by_user_id: row.changed_by_user_id,
+        changed_by: row.user_id
+          ? { id: row.user_id, name: row.user_name, email: row.user_email, role: row.user_role }
+          : null,
+        before: details.before || null,
+        after: details.after || { cp_delete_lock_days: row.cp_delete_lock_days },
+        changes: details.changes || [],
+      };
+    }),
+    pagination: {
+      page,
+      limit,
+      total,
+      total_pages: Math.ceil(total / limit),
+    },
+  };
 };
 
 const getFileManagerSettings = async () => {
@@ -6211,6 +6353,8 @@ exports.updateFileManagerSettings = async (req, res) => {
       req.body.cp_delete_lock_days ?? req.body.cpDeleteLockDays
     );
 
+    const beforeSettings = await getFileManagerSettings();
+
     await db.sequelize.query(
       `INSERT INTO file_manager_settings
        (setting_id, cp_delete_lock_days, updated_by_user_id)
@@ -6228,6 +6372,16 @@ exports.updateFileManagerSettings = async (req, res) => {
     );
 
     const settings = await getFileManagerSettings();
+
+    await recordFileManagerSettingsHistory({
+      before: beforeSettings,
+      after: settings,
+      changedByUserId: getRequestUserId(req) || null,
+      changeReason: 'update',
+    }).catch((error) => {
+      console.error('Failed to record file manager settings history:', error?.message || error);
+    });
+
     return res.status(200).json({
       success: true,
       data: settings,
@@ -6236,6 +6390,28 @@ exports.updateFileManagerSettings = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Failed to update file manager settings',
+    });
+  }
+};
+
+exports.getFileManagerSettingsHistory = async (req, res) => {
+  try {
+    if (!isAdminRole(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can view file manager settings history',
+      });
+    }
+
+    const data = await getFileManagerSettingsHistoryRows(req.query);
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to load file manager settings history',
     });
   }
 };
