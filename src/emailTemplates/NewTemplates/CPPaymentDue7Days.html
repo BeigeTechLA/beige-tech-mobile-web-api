@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Force light mode rendering context -->
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+
+  <title>CP Payment Due in 7 Days - {{project_name}}</title>
+
+  <style>
+    /* Enforce light theme styles for supporting email apps */
+    :root {
+      color-scheme: light;
+      supported-color-schemes: light;
+    }
+
+    body,
+    table,
+    td,
+    p,
+    a,
+    h1,
+    h2,
+    h3,
+    div,
+    span {
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+    }
+
+    /* Force background and text colors in strict dark mode environments */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-bg {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-card-container {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .white-card-container,
+      .white-card-container td {
+        background-color: #FFFFFF !important;
+      }
+
+      .logo-pill {
+        background-color: #FFFFFF !important;
+      }
+
+      .accent-banner-bg {
+        background-color: #FFEAC7 !important;
+      }
+
+      .text-black {
+        color: #000000 !important;
+      }
+
+      .text-default {
+        color: #403E3E !important;
+      }
+
+      .text-muted {
+        color: #525252 !important;
+      }
+
+      .text-brand-gold {
+        color: #E8D1AB !important;
+      }
+
+      .btn-bg {
+        background-color: #000000 !important;
+      }
+
+      .btn-text {
+        color: #E8D1AB !important;
+      }
+    }
+
+    /* Specific overrides for Outlook Web and Gmail app dark mode */
+    [data-ogsc] body,
+    [data-ogsc] .body-bg {
+      background-color: #F7F7F7 !important;
+      color: #484848 !important;
+    }
+
+    [data-ogsc] .main-card-container {
+      background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+    }
+
+    [data-ogsc] .white-card-container,
+    [data-ogsc] .white-card-container td {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .logo-pill {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .accent-banner-bg {
+      background-color: #FFEAC7 !important;
+    }
+
+    [data-ogsc] .text-black {
+      color: #000000 !important;
+    }
+
+    [data-ogsc] .text-default {
+      color: #403E3E !important;
+    }
+
+    [data-ogsc] .text-muted {
+      color: #525252 !important;
+    }
+
+    [data-ogsc] .text-brand-gold {
+      color: #E8D1AB !important;
+    }
+
+    [data-ogsc] .btn-bg {
+      background-color: #000000 !important;
+    }
+
+    [data-ogsc] .btn-text {
+      color: #E8D1AB !important;
+    }
+  </style>
+</head>
+
+<body class="body-bg"
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <!-- Subject: CP Payment Due in 7 Days - {{project_name}} -->
+  <table class="body-bg" width="100%" cellpadding="0" cellspacing="0"
+    style="background-color: #F7F7F7; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table class="main-card-container" width="600"
+          style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04); width: 100%; max-width: 600px;">
+
+          <!-- Beige Logo Pill -->
+          <tr>
+            <td align="center" style="padding: 40px 0 28px;">
+              <div class="logo-pill"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="110" style="display: block; border: 0;">
+              </div>
+            </td>
+          </tr>
+
+          <!-- Header & Notification Message -->
+          <tr>
+            <td style="padding: 0 40px 32px; text-align: center;">
+              <h1 class="text-black"
+                style="margin: 0 0 16px; color: #000000; font-size: 28px; font-weight: 700; line-height: 1.3;">
+                Hello Team,
+              </h1>
+              <p class="text-default"
+                style="margin: 0 0 12px; font-size: 16px; line-height: 1.5; color: #403E3E;">
+                A quick reminder that the CP payment for <b class="text-black" style="color: #000000;">{{project_name}}</b> is due in <b class="text-black" style="color: #000000;">7 days</b>.
+              </p>
+              <p class="text-default"
+                style="margin: 0; font-size: 16px; line-height: 1.5; color: #403E3E;">
+                If the payment has already been transferred, please mark it as <b class="text-black" style="color: #000000;">Paid</b> in the dashboard. Otherwise, please process the payment before the due date.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Section Banner: Payment Details -->
+          <tr>
+            <td style="background-color: #000000; padding: 22px 30px; text-align: center;">
+              <p class="text-brand-gold"
+                style="color: #E8D1AB; font-size: 20px; font-weight: 600; font-style: italic; letter-spacing: 0.5px; margin: 0;">
+                Payment Details
+              </p>
+            </td>
+          </tr>
+
+          <!-- Details Table -->
+          <tr>
+            <td class="white-card-container" style="background-color: #FFFFFF; padding: 24px 40px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                style="border-collapse: collapse;">
+
+                <!-- Row 1: Project -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/DocumentTextBlack.svg"
+                        width="20" height="20" alt="Project"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    Project
+                  </td>
+                  <td class="text-black" align="right"
+                    style="font-size: 15px; color: #000000 !important; font-weight: 600; line-height: 1.5; padding: 10px 0;">
+                    {{project_name}}
+                  </td>
+                </tr>
+
+                <!-- Row 2: Booking ID -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BillListBlack.svg"
+                        width="20" height="20" alt="Booking ID"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    Booking ID
+                  </td>
+                  <td class="text-black" align="right"
+                    style="font-size: 15px; color: #000000 !important; font-weight: 600; line-height: 1.5; padding: 10px 0;">
+                    {{booking_id}}
+                  </td>
+                </tr>
+
+                <!-- Row 3: Assignment ID -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BillCheck.svg"
+                        width="20" height="20" alt="Assignment ID"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    Assignment ID
+                  </td>
+                  <td class="text-black" align="right"
+                    style="font-size: 15px; color: #000000 !important; font-weight: 600; line-height: 1.5; padding: 10px 0;">
+                    {{assignment_id}}
+                  </td>
+                </tr>
+
+                <!-- Row 4: CP -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/UserCircleBlack.svg"
+                        width="20" height="20" alt="CP"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    CP
+                  </td>
+                  <td class="text-black" align="right"
+                    style="font-size: 15px; color: #000000 !important; font-weight: 600; line-height: 1.5; padding: 10px 0;">
+                    {{cp_name}}
+                  </td>
+                </tr>
+
+                <!-- Row 5: Shoot Date -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/CalendarBlack.svg"
+                        width="20" height="20" alt="Shoot Date"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    Shoot Date
+                  </td>
+                  <td class="text-black" align="right"
+                    style="font-size: 15px; color: #000000 !important; font-weight: 600; line-height: 1.5; padding: 10px 0;">
+                    {{shoot_date}}
+                  </td>
+                </tr>
+
+                <!-- Row 6: Compensation -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/dollarcircleblack.svg"
+                        width="20" height="20" alt="Compensation"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    Compensation
+                  </td>
+                  <td class="text-black" align="right"
+                    style="font-size: 15px; color: #000000 !important; font-weight: 600; line-height: 1.5; padding: 10px 0;">
+                    ${{cp_compensation}}
+                  </td>
+                </tr>
+
+                <!-- Row 7: Payment Due By -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Hourglass.png"
+                        width="20" height="20" alt="Payment Due By"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    Payment Due By
+                  </td>
+                  <td class="text-black" align="right"
+                    style="font-size: 15px; color: #000000 !important; font-weight: 600; line-height: 1.5; padding: 10px 0;">
+                    {{payment_due_date}}
+                  </td>
+                </tr>
+
+                <!-- Row 8: Days Remaining -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/CalendarBlack.svg"
+                        width="20" height="20" alt="Days Remaining"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    Days Remaining
+                  </td>
+                  <td class="text-black" align="right"
+                    style="font-size: 15px; color: #000000 !important; font-weight: 600; line-height: 1.5; padding: 10px 0;">
+                    7 Days
+                  </td>
+                </tr>
+
+                <!-- Row 9: Payment Status -->
+                <tr>
+                  <td width="54" style="padding: 10px 0;">
+                    <div
+                      style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircleBlack.svg"
+                        width="20" height="20" alt="Payment Status"
+                        style="margin-top: 11px; display: inline-block; border: 0; max-width: 100%;">
+                    </div>
+                  </td>
+                  <td class="text-muted"
+                    style="font-size: 15px; color: #525252 !important; font-weight: 400; line-height: 1.5; padding: 10px 0 10px 14px;">
+                    Payment Status
+                  </td>
+                  <td align="right"
+                    style="font-size: 15px; font-weight: 700; color: #D8921B !important; line-height: 1.5; padding: 10px 0;">
+                    Pending
+                  </td>
+                </tr>
+
+              </table>
+            </td>
+          </tr>
+
+          <!-- Process Payment CTA Button with Line-through (Placed above notice per 7-days-payment-reminder.png) -->
+          <tr>
+            <td align="center" style="padding: 24px 0 24px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
+                <tr>
+                  <td valign="middle" style="font-size: 0; line-height: 0; padding: 0;">
+                    <div style="border-top: 1px solid #797670; font-size: 0; line-height: 0; height: 1px;"></div>
+                  </td>
+                  <td align="center" valign="middle" style="padding: 0 16px; white-space: nowrap; width: 1%;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+                      <tr>
+                        <td align="center" class="btn-bg" style="border-radius: 100px; background-color: #000000; padding: 13px 36px;">
+                          <a href="{{dashboard_link}}" target="_blank" class="btn-text"
+                            style="display: inline-block; font-size: 16px; font-weight: 600; color: #E8D1AB !important; text-decoration: none; letter-spacing: 0.5px; white-space: nowrap; line-height: 1.2;">
+                            Process Payment &nbsp;➔
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td valign="middle" style="font-size: 0; line-height: 0; padding: 0;">
+                    <div style="border-top: 1px solid #797670; font-size: 0; line-height: 0; height: 1px;"></div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Instructional Banner (Placed below button per 7-days-payment-reminder.png) -->
+          <tr>
+            <td class="accent-banner-bg" style="background-color: #FFEAC7; padding: 18px 30px; text-align: center;">
+              <p class="text-black"
+                style="margin: 0; font-size: 15px; line-height: 1.5; font-style: italic; color: #262525 !important;">
+                Please take action in time to avoid the payment becoming overdue.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Hero Image: Laptop on sand/glass ring -->
+          <tr>
+            <td style="padding: 0; line-height: 0; font-size: 0;">
+              <img
+                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/MockLaptopImage.png"
+                alt="Beige Dashboard" width="600"
+                style="display: block; width: 100%; max-width: 600px; height: auto; border: 0;" />
+            </td>
+          </tr>
+
+          <!-- Signoff: Thanks -->
+          <tr>
+            <td align="center" style="padding: 36px 30px 18px;">
+              <p class="text-default" style="margin: 0; font-size: 18px; font-weight: 500; color: #403E3E; line-height: 1.4;">
+                Thanks,
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer Badge: Beige System Notification with Line-through -->
+          <tr>
+            <td align="center" style="padding: 0 0 46px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width: 100%;">
+                <tr>
+                  <td valign="middle" style="font-size: 0; line-height: 0; padding: 0;">
+                    <div style="border-top: 1px solid #797670; font-size: 0; line-height: 0; height: 1px;"></div>
+                  </td>
+                  <td align="center" valign="middle" style="padding: 0 16px; white-space: nowrap; width: 1%;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+                      <tr>
+                        <td align="center" class="btn-bg"
+                          style="border-radius: 100px; background-color: #000000; padding: 13px 36px;">
+                          <span class="text-brand-gold"
+                            style="font-size: 17px; font-weight: 700; font-style: italic; color: #E8D1AB; letter-spacing: 0.5px; white-space: nowrap; display: block; line-height: 1.2;">
+                            Beige System Notification
+                          </span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td valign="middle" style="font-size: 0; line-height: 0; padding: 0;">
+                    <div style="border-top: 1px solid #797670; font-size: 0; line-height: 0; height: 1px;"></div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+
+</html>
