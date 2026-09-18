@@ -6553,6 +6553,17 @@ async function listQuotes(query, user) {
     .map((item) => Number(item.sales_quote_id || 0))
     .filter((quoteId) => Number.isFinite(quoteId) && quoteId > 0);
 
+  const linkedLeads = leadIds.length
+    ? await db.sales_leads.findAll({
+        where: { lead_id: { [Op.in]: leadIds } },
+        attributes: ['lead_id', 'lead_source'],
+        raw: true
+      })
+    : [];
+  const linkedLeadsById = new Map(
+    linkedLeads.map((lead) => [Number(lead.lead_id), lead])
+  );
+
   const quoteActivities = quoteIds.length
     ? await db.sales_quote_activities.findAll({
         where: {
@@ -6636,24 +6647,44 @@ async function listQuotes(query, user) {
     const resolvedManualPaymentSummary = financialDetails?.manual_payment_summary || manualPaymentSummary;
     const hasSummaryManualFullPayment = Boolean(resolvedManualPaymentSummary?.hasFullPayment);
     const hasSummaryManualPartialPayment = Boolean(resolvedManualPaymentSummary?.isPartiallyPaid);
+    const finalPaymentStatus = hasSummaryManualFullPayment
+      ? 'paid'
+      : hasSummaryManualPartialPayment
+        ? 'partially_paid'
+        : resolvedPaymentStatus;
+    const finalCollectedAmount = hasSummaryManualFullPayment || hasSummaryManualPartialPayment
+      ? resolvedManualPaymentSummary.paidAmount
+      : resolvedCollectedAmount;
+    const finalOutstandingAmount = hasSummaryManualFullPayment || hasSummaryManualPartialPayment
+      ? resolvedManualPaymentSummary.pendingAmount
+      : resolvedOutstandingAmount;
+    const openedAt = new Date(plain.sent_at || plain.created_at);
+    const isClosed = ['paid', 'rejected', 'expired'].includes(String(plain.status || '').toLowerCase()) || finalPaymentStatus === 'paid';
+    const closedAt = isClosed ? new Date(plain.updated_at || Date.now()) : new Date();
+    const daysOpen = Number.isNaN(openedAt.getTime())
+      ? 0
+      : Math.max(0, Math.floor((startOfDay(closedAt) - startOfDay(openedAt)) / (24 * 60 * 60 * 1000)));
+    const linkedLead = linkedLeadsById.get(Number(plain.lead_id || 0));
 
     return {
       ...plain,
       ...(financialDetails || {}),
+      quote_value: roundCurrency(plain.total),
+      lead_source: linkedLead?.lead_source || null,
+      shoot_type: plain.video_shoot_type || null,
+      days_open: daysOpen,
+      sales_rep: plain.assigned_sales_rep || plain.created_by || null,
       latest_change_log: buildQuoteChangeLogs(changeLogsByQuote[Number(plain.sales_quote_id || 0)] || [])[0] || null,
       change_log_count: buildQuoteChangeLogs(changeLogsByQuote[Number(plain.sales_quote_id || 0)] || []).length,
-      payment_status: hasSummaryManualFullPayment
-        ? 'paid'
-        : hasSummaryManualPartialPayment
-          ? 'partially_paid'
-          : resolvedPaymentStatus,
+      payment_status: finalPaymentStatus,
       is_collected: hasSummaryManualFullPayment ? true : (hasManualFullPayment ? true : billingState.is_collected),
-      collected_amount: hasSummaryManualFullPayment || hasSummaryManualPartialPayment
-        ? resolvedManualPaymentSummary.paidAmount
-        : resolvedCollectedAmount,
-      outstanding_amount: hasSummaryManualFullPayment || hasSummaryManualPartialPayment
-        ? resolvedManualPaymentSummary.pendingAmount
-        : resolvedOutstandingAmount,
+      collected_amount: finalCollectedAmount,
+      outstanding_amount: finalOutstandingAmount,
+      payment: {
+        status: finalPaymentStatus,
+        paid_amount: roundCurrency(finalCollectedAmount),
+        outstanding_amount: roundCurrency(finalOutstandingAmount)
+      },
       manual_payment_summary: resolvedManualPaymentSummary
     };
   }));
