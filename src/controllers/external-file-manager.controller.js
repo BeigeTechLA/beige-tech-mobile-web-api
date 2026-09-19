@@ -180,6 +180,8 @@ const isCommonEventExternalId = (value) =>
   String(value || '').trim().toLowerCase().startsWith(COMMON_EVENT_ID_PREFIX);
 
 const DEFAULT_CP_DELETE_LOCK_DAYS = 7;
+const DEFAULT_CP_SHARING_ENABLED = true;
+const DEFAULT_CLIENT_ACCESS_TRANSFER_ENABLED = true;
 
 const extractCommonEventExternalIdFromPath = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -1781,18 +1783,55 @@ const normalizeCpDeleteLockDays = (value, fallback = DEFAULT_CP_DELETE_LOCK_DAYS
   return Math.max(0, Math.min(365, Math.floor(parsed)));
 };
 
+const normalizeBooleanSetting = (value, fallback = false) => {
+  if (value === undefined || value === null || value === '') return Boolean(fallback);
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'enabled', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'disabled', 'off'].includes(normalized)) return false;
+
+  return Boolean(fallback);
+};
+
 const ensureFileManagerSettingsTable = async () => {
   if (!fileManagerSettingsTableReadyPromise) {
-    fileManagerSettingsTableReadyPromise = db.sequelize.query(`
-      CREATE TABLE IF NOT EXISTS file_manager_settings (
-        setting_id TINYINT UNSIGNED NOT NULL DEFAULT 1,
-        cp_delete_lock_days INT UNSIGNED NOT NULL DEFAULT 7,
-        updated_by_user_id BIGINT UNSIGNED DEFAULT NULL,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (setting_id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    `);
+    fileManagerSettingsTableReadyPromise = (async () => {
+      await db.sequelize.query(`
+        CREATE TABLE IF NOT EXISTS file_manager_settings (
+          setting_id TINYINT UNSIGNED NOT NULL DEFAULT 1,
+          cp_delete_lock_days INT UNSIGNED NOT NULL DEFAULT 7,
+          cp_sharing_enabled TINYINT(1) NOT NULL DEFAULT 1,
+          client_access_transfer_enabled TINYINT(1) NOT NULL DEFAULT 1,
+          updated_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (setting_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+      `);
+
+      const [columns] = await db.sequelize.query(`SHOW COLUMNS FROM file_manager_settings`);
+      const existingColumns = new Set(
+        (Array.isArray(columns) ? columns : []).map((column) => String(column.Field || '').toLowerCase())
+      );
+
+      if (!existingColumns.has('cp_sharing_enabled')) {
+        await db.sequelize.query(`
+          ALTER TABLE file_manager_settings
+          ADD COLUMN cp_sharing_enabled TINYINT(1) NOT NULL DEFAULT 1
+          AFTER cp_delete_lock_days
+        `);
+      }
+
+      if (!existingColumns.has('client_access_transfer_enabled')) {
+        await db.sequelize.query(`
+          ALTER TABLE file_manager_settings
+          ADD COLUMN client_access_transfer_enabled TINYINT(1) NOT NULL DEFAULT 1
+          AFTER cp_sharing_enabled
+        `);
+      }
+    })();
   }
 
   await fileManagerSettingsTableReadyPromise;
@@ -1801,21 +1840,49 @@ const ensureFileManagerSettingsTable = async () => {
 const getFileManagerSettings = async () => {
   await ensureFileManagerSettingsTable();
   await db.sequelize.query(
-    `INSERT IGNORE INTO file_manager_settings (setting_id, cp_delete_lock_days)
-     VALUES (1, :defaultDays)`,
-    { replacements: { defaultDays: DEFAULT_CP_DELETE_LOCK_DAYS } }
+    `INSERT IGNORE INTO file_manager_settings
+      (setting_id, cp_delete_lock_days, cp_sharing_enabled, client_access_transfer_enabled)
+     VALUES (1, :defaultDays, :defaultCpSharingEnabled, :defaultClientAccessTransferEnabled)`,
+    {
+      replacements: {
+        defaultDays: DEFAULT_CP_DELETE_LOCK_DAYS,
+        defaultCpSharingEnabled: DEFAULT_CP_SHARING_ENABLED ? 1 : 0,
+        defaultClientAccessTransferEnabled: DEFAULT_CLIENT_ACCESS_TRANSFER_ENABLED ? 1 : 0,
+      },
+    }
   );
 
   const [rows] = await db.sequelize.query(
-    `SELECT setting_id, cp_delete_lock_days, updated_by_user_id, created_at, updated_at
+    `SELECT
+       setting_id,
+       cp_delete_lock_days,
+       cp_sharing_enabled,
+       client_access_transfer_enabled,
+       updated_by_user_id,
+       created_at,
+       updated_at
      FROM file_manager_settings
      WHERE setting_id = 1
      LIMIT 1`
   );
   const row = Array.isArray(rows) && rows.length ? rows[0] : {};
+
+  const cpSharingEnabled = normalizeBooleanSetting(
+    row.cp_sharing_enabled,
+    DEFAULT_CP_SHARING_ENABLED
+  );
+  const clientAccessTransferEnabled = normalizeBooleanSetting(
+    row.client_access_transfer_enabled,
+    DEFAULT_CLIENT_ACCESS_TRANSFER_ENABLED
+  );
+
   return {
     cpDeleteLockDays: normalizeCpDeleteLockDays(row.cp_delete_lock_days),
     cp_delete_lock_days: normalizeCpDeleteLockDays(row.cp_delete_lock_days),
+    cpSharingEnabled,
+    cp_sharing_enabled: cpSharingEnabled,
+    clientAccessTransferEnabled,
+    client_access_transfer_enabled: clientAccessTransferEnabled,
     updatedByUserId: row.updated_by_user_id || null,
     updatedAt: row.updated_at || null,
   };
@@ -6207,21 +6274,48 @@ exports.updateFileManagerSettings = async (req, res) => {
     }
 
     await ensureFileManagerSettingsTable();
+    const currentSettings = await getFileManagerSettings();
+
     const cpDeleteLockDays = normalizeCpDeleteLockDays(
-      req.body.cp_delete_lock_days ?? req.body.cpDeleteLockDays
+      req.body.cp_delete_lock_days ?? req.body.cpDeleteLockDays,
+      currentSettings.cpDeleteLockDays
+    );
+    const cpSharingEnabled = normalizeBooleanSetting(
+      req.body.cp_sharing_enabled ?? req.body.cpSharingEnabled,
+      currentSettings.cpSharingEnabled
+    );
+    const clientAccessTransferEnabled = normalizeBooleanSetting(
+      req.body.client_access_transfer_enabled ?? req.body.clientAccessTransferEnabled,
+      currentSettings.clientAccessTransferEnabled
     );
 
     await db.sequelize.query(
       `INSERT INTO file_manager_settings
-       (setting_id, cp_delete_lock_days, updated_by_user_id)
-       VALUES (1, :cpDeleteLockDays, :updatedBy)
+       (
+         setting_id,
+         cp_delete_lock_days,
+         cp_sharing_enabled,
+         client_access_transfer_enabled,
+         updated_by_user_id
+       )
+       VALUES (
+         1,
+         :cpDeleteLockDays,
+         :cpSharingEnabled,
+         :clientAccessTransferEnabled,
+         :updatedBy
+       )
        ON DUPLICATE KEY UPDATE
          cp_delete_lock_days = VALUES(cp_delete_lock_days),
+         cp_sharing_enabled = VALUES(cp_sharing_enabled),
+         client_access_transfer_enabled = VALUES(client_access_transfer_enabled),
          updated_by_user_id = VALUES(updated_by_user_id),
          updated_at = CURRENT_TIMESTAMP`,
       {
         replacements: {
           cpDeleteLockDays,
+          cpSharingEnabled: cpSharingEnabled ? 1 : 0,
+          clientAccessTransferEnabled: clientAccessTransferEnabled ? 1 : 0,
           updatedBy: getRequestUserId(req) || null,
         },
       }
@@ -6249,6 +6343,14 @@ exports.grantWorkspaceAccess = async (req, res) => {
     }
 
     if (isClientRole(req)) {
+      const settings = await getFileManagerSettings();
+      if (!settings.clientAccessTransferEnabled) {
+        return res.status(403).json({
+          success: false,
+          message: 'Client File Manager access transfer is disabled by admin',
+        });
+      }
+
       await ensureClientWorkspaceAccess(req, externalId);
     }
 
@@ -6406,6 +6508,16 @@ exports.revokeWorkspaceAccess = async (req, res) => {
 exports.createShare = async (req, res) => {
   try {
     await ensureFileShareTable();
+
+    if (isCreatorRole(req)) {
+      const settings = await getFileManagerSettings();
+      if (!settings.cpSharingEnabled) {
+        return res.status(403).json({
+          success: false,
+          message: 'File Manager sharing is disabled for Creative Partners',
+        });
+      }
+    }
     const resourceType = String(req.body.resourceType || '').trim().toLowerCase();
     const externalId = String(req.body.externalId || '').trim();
     const phase = String(req.body.phase || '').trim() || null;
