@@ -58,5 +58,6 @@ router.use('/comments', require('./comments.routes'));
 router.use('/push-notifications', require('./push-notification.routes'));
 router.use('/notification-preferences', require('./notification-preference.routes'));
 router.use('/app-notifications', require('./app-notification.routes'));
+router.use('/', require('./agreement.routes'));
 
 module.exports = router;

@@ -1,0 +1,6 @@
+const Sequelize = require('sequelize');
+module.exports = function(sequelize, DataTypes) {
+  return sequelize.define('agreement_sections', {
+    id: { autoIncrement: true, type: DataTypes.INTEGER, allowNull: false, primaryKey: true }, agreement_version_id: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'agreement_versions', key: 'id' } }, section_order: { type: DataTypes.INTEGER, allowNull: false }, section_title: { type: DataTypes.STRING(255), allowNull: false }, section_body: { type: DataTypes.TEXT, allowNull: false }, is_deleted: { type: DataTypes.TINYINT(1), allowNull: false, defaultValue: 0 }, deleted_at: { type: DataTypes.DATE, allowNull: true }, deleted_by_user_id: { type: DataTypes.INTEGER, allowNull: true, references: { model: 'users', key: 'id' } }, created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: Sequelize.Sequelize.fn('current_timestamp') }, updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: Sequelize.Sequelize.fn('current_timestamp'), onUpdate: Sequelize.Sequelize.fn('current_timestamp') }
+  }, { sequelize, tableName: 'agreement_sections', timestamps: false, indexes: [{ name: 'PRIMARY', unique: true, using: 'BTREE', fields: [{ name: 'id' }] }, { name: 'agreement_version_id', using: 'BTREE', fields: [{ name: 'agreement_version_id' }] }] });
+};

@@ -12,6 +12,14 @@ const signupCreditPromoHistoryFactory = require('./signup_credit_promo_history')
 const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
 const assignmentHistoryFactory = require('./assignment_history');
+const agreementsFactory = require('./agreements');
+const agreementVersionsFactory = require('./agreement_versions');
+const agreementSectionsFactory = require('./agreement_sections');
+const cpGeneralAgreementAcceptanceFactory = require('./cp_general_agreement_acceptance');
+const shootRequestsFactory = require('./shoot_requests');
+const shootAgreementsFactory = require('./shoot_agreements');
+const shootAgreementVersionsFactory = require('./shoot_agreement_versions');
+const agreementActivityLogFactory = require('./agreement_activity_log');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -25,6 +33,14 @@ models.signup_credit_promo_history = signupCreditPromoHistoryFactory(sequelize, 
 models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
+models.agreements = agreementsFactory(sequelize, DataTypes);
+models.agreement_versions = agreementVersionsFactory(sequelize, DataTypes);
+models.agreement_sections = agreementSectionsFactory(sequelize, DataTypes);
+models.cp_general_agreement_acceptance = cpGeneralAgreementAcceptanceFactory(sequelize, DataTypes);
+models.shoot_requests = shootRequestsFactory(sequelize, DataTypes);
+models.shoot_agreements = shootAgreementsFactory(sequelize, DataTypes);
+models.shoot_agreement_versions = shootAgreementVersionsFactory(sequelize, DataTypes);
+models.agreement_activity_log = agreementActivityLogFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
@@ -145,6 +161,26 @@ models.signup_credit_promo_history.belongsTo(models.users, {
 
 const Signature = require('./signature.model')(sequelize, DataTypes);
 models.signatures = Signature;
+
+if (models.agreements && models.agreement_versions && models.agreement_sections) {
+  models.agreements.hasMany(models.agreement_versions, { foreignKey: 'agreement_id', as: 'versions' });
+  models.agreement_versions.belongsTo(models.agreements, { foreignKey: 'agreement_id', as: 'agreement' });
+  models.agreement_versions.hasMany(models.agreement_sections, { foreignKey: 'agreement_version_id', as: 'sections' });
+  models.agreement_sections.belongsTo(models.agreement_versions, { foreignKey: 'agreement_version_id', as: 'version' });
+  models.agreements.belongsTo(models.agreement_versions, { foreignKey: 'current_version_id', as: 'current_version' });
+  models.cp_general_agreement_acceptance.belongsTo(models.agreement_versions, { foreignKey: 'agreement_version_id' });
+  models.cp_general_agreement_acceptance.belongsTo(models.crew_members, { foreignKey: 'creative_partner_id', targetKey: 'crew_member_id', as: 'creative_partner' });
+}
+
+if (models.shoot_requests && models.shoot_agreements && models.shoot_agreement_versions) {
+  models.shoot_agreements.belongsTo(models.shoot_requests, { foreignKey: 'shoot_request_id' });
+  models.shoot_requests.hasOne(models.shoot_agreements, { foreignKey: 'shoot_request_id', as: 'agreement' });
+  models.shoot_agreements.hasMany(models.shoot_agreement_versions, { foreignKey: 'shoot_agreement_id', as: 'versions' });
+  models.shoot_agreement_versions.belongsTo(models.shoot_agreements, { foreignKey: 'shoot_agreement_id' });
+  models.shoot_agreements.belongsTo(models.shoot_agreement_versions, { foreignKey: 'current_version_id', as: 'current_version' });
+  models.shoot_requests.belongsTo(models.crew_members, { foreignKey: 'creative_partner_id', targetKey: 'crew_member_id', as: 'creative_partner' });
+  models.shoot_agreements.belongsTo(models.crew_members, { foreignKey: 'creative_partner_id', targetKey: 'crew_member_id', as: 'creative_partner' });
+}
 
 if (models.quotes && models.signatures) {
   models.signatures.belongsTo(models.quotes, { foreignKey: 'quote_id' });
