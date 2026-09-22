@@ -4111,6 +4111,142 @@ const sendCreatorEarningUpdatedEmail = async (data = {}) => {
   });
 };
 
+const sendShootCompletedPaymentDueEmail = async ({ to, data = {} } = {}) => {
+  const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
+
+  return sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || (data.payment_due_date
+      ? `Shoot Completed - CP Payment Due by ${data.payment_due_date}`
+      : 'Shoot Completed - CP Payment Due'),
+    templateName: 'ShootCompletedPaymentDue.html',
+    values: {
+      project_name: projectName,
+      booking_id: data.booking_id || '',
+      assignment_id: data.assignment_id || '',
+      cp_name: data.cp_name || '',
+      shoot_date: data.shoot_date || '',
+      cp_compensation: data.cp_compensation || '0.00',
+      payment_due_date: data.payment_due_date || '',
+      dashboard_link: data.dashboard_link || ''
+    },
+    text: [
+      `Shoot completed: ${projectName}`,
+      `Creative Partner: ${data.cp_name || 'N/A'}`,
+      `Compensation: $${data.cp_compensation || '0.00'}`,
+      `Payment due: ${data.payment_due_date || 'N/A'}`,
+      data.dashboard_link || null
+    ].filter(Boolean).join('\n')
+  });
+};
+
+const sendCPPaymentDue7DaysEmail = async ({ to, data = {} } = {}) => {
+  const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
+
+  return sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || `CP Payment Due in 7 Days - ${projectName}`,
+    templateName: 'CPPaymentDue7Days.html',
+    values: {
+      project_name: projectName,
+      booking_id: data.booking_id || '',
+      assignment_id: data.assignment_id || '',
+      cp_name: data.cp_name || '',
+      shoot_date: data.shoot_date || '',
+      cp_compensation: data.cp_compensation || '0.00',
+      payment_due_date: data.payment_due_date || '',
+      dashboard_link: data.dashboard_link || ''
+    },
+    text: [
+      `CP payment is due in 7 days: ${projectName}`,
+      `Creative Partner: ${data.cp_name || 'N/A'}`,
+      `Compensation: $${data.cp_compensation || '0.00'}`,
+      `Payment due: ${data.payment_due_date || 'N/A'}`,
+      data.dashboard_link || null
+    ].filter(Boolean).join('\n')
+  });
+};
+
+const sendCPPaymentOverdue1DayEmail = async ({ to, data = {} } = {}) => {
+  const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
+
+  return sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || `CP Payment Overdue - ${projectName}`,
+    templateName: 'CP⁠PaymentOverdue1DayAfterDueDate.html',
+    values: {
+      project_name: projectName,
+      booking_id: data.booking_id || '',
+      assignment_id: data.assignment_id || '',
+      cp_name: data.cp_name || '',
+      shoot_date: data.shoot_date || '',
+      cp_compensation: data.cp_compensation || '0.00',
+      payment_due_date: data.payment_due_date || '',
+      dashboard_link: data.dashboard_link || ''
+    },
+    text: [
+      `CP payment is overdue: ${projectName}`,
+      `Creative Partner: ${data.cp_name || 'N/A'}`,
+      `Compensation: $${data.cp_compensation || '0.00'}`,
+      `Payment due: ${data.payment_due_date || 'N/A'}`,
+      data.dashboard_link || null
+    ].filter(Boolean).join('\n')
+  });
+};
+
+const sendCPPaymentOverdue3DaysEmail = async ({ to, data = {} } = {}) => {
+  const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
+
+  return sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || `CP Payment Overdue for 3 Days - ${projectName}`,
+    templateName: 'CPPaymentOverdue.html',
+    values: {
+      project_name: projectName,
+      booking_id: data.booking_id || '',
+      assignment_id: data.assignment_id || '',
+      cp_name: data.cp_name || '',
+      shoot_date: data.shoot_date || '',
+      cp_compensation: data.cp_compensation || '0.00',
+      payment_due_date: data.payment_due_date || '',
+      dashboard_link: data.dashboard_link || ''
+    },
+    text: [
+      `CP payment is overdue for 3 days: ${projectName}`,
+      `Creative Partner: ${data.cp_name || 'N/A'}`,
+      `Compensation: $${data.cp_compensation || '0.00'}`,
+      `Payment due: ${data.payment_due_date || 'N/A'}`,
+      data.dashboard_link || null
+    ].filter(Boolean).join('\n')
+  });
+};
+
+const sendCPPaymentCompletedEmail = async ({ to, data = {} } = {}) => {
+  const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
+
+  return sendRenderedTemplateEmail({
+    to,
+    subject: data.subject || `Your Payment Has Been Completed - ${projectName}`,
+    templateName: 'CPPaymentCompleted.html',
+    values: {
+      cp_firstname: data.cp_firstname || 'there',
+      project_name: projectName,
+      booking_id: data.booking_id || '',
+      assignment_id: data.assignment_id || '',
+      shoot_date: data.shoot_date || '',
+      cp_payment_amount: data.cp_payment_amount || '0.00',
+      payment_date: data.payment_date || '',
+      dashboard_link: data.dashboard_link || ''
+    },
+    text: [
+      `Your payment for ${projectName} has been successfully processed.`,
+      `Payment amount: $${data.cp_payment_amount || '0.00'}`,
+      `Payment date: ${data.payment_date || 'N/A'}`,
+      data.dashboard_link || null
+    ].filter(Boolean).join('\n')
+  });
+};
+
 const sendCreativePartnerProfileReminderEmail = async (data = {}) => {
   try {
     const to = data.to_email || data.email;
@@ -4335,6 +4471,11 @@ module.exports = {
   sendCPConfirmedEmailByRequest,
   sendCPNewBookingRequestEmail,
   sendCreatorEarningUpdatedEmail,
+  sendShootCompletedPaymentDueEmail,
+  sendCPPaymentDue7DaysEmail,
+  sendCPPaymentOverdue1DayEmail,
+  sendCPPaymentOverdue3DaysEmail,
+  sendCPPaymentCompletedEmail,
   sendCreativePartnerProfileReminderEmail,
   sendPostProductionAssignmentEmail,
   sendNewClientSignupNotification,

@@ -222,6 +222,62 @@ function buildCreatorName(creator = null) {
   return [creator.first_name, creator.last_name].filter(Boolean).join(' ').trim() || creator.email || null;
 }
 
+function formatEmailDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+async function sendCompletedCompensationPaymentEmail(creatorEarningId, paymentDate) {
+  try {
+    const earning = await db.creator_earnings.findByPk(creatorEarningId, {
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: true,
+          attributes: ['stream_project_booking_id', 'project_name', 'event_date']
+        },
+        {
+          model: db.crew_members,
+          as: 'creator',
+          required: true,
+          attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+        }
+      ]
+    });
+    if (!earning?.creator?.email || earning.status !== 'paid') return null;
+
+    const assignment = await db.assigned_crew.findOne({
+      where: { project_id: earning.booking_id, crew_member_id: earning.creator_id, is_active: 1 },
+      attributes: ['id'],
+      order: [['id', 'DESC']]
+    });
+    const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+
+    return emailService.sendCPPaymentCompletedEmail({
+      to: earning.creator.email,
+      data: {
+        cp_firstname: earning.creator.first_name || 'there',
+        project_name: earning.booking.project_name || `Booking #${earning.booking_id}`,
+        booking_id: earning.booking_id,
+        assignment_id: assignment?.id || '',
+        shoot_date: formatEmailDate(earning.booking.event_date),
+        cp_payment_amount: Number(earning.net_earning_amount || 0).toFixed(2),
+        payment_date: formatEmailDate(paymentDate || new Date()),
+        dashboard_link: `${frontendBaseUrl}/creator/dashboard`
+      }
+    });
+  } catch (error) {
+    console.warn('[cp-compensation] completed payment email failed:', {
+      creator_earning_id: creatorEarningId,
+      error: error?.message || error
+    });
+    return null;
+  }
+}
+
 async function buildCompensationStatus(earnings = []) {
   if (!earnings.length) return 'draft';
   if (earnings.some((earning) => earning.approval_status === 'pending_approval')) return 'pending_approval';
@@ -2494,6 +2550,15 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
     }
 
     if (!externalTransaction) await transaction.commit();
+
+    // Only a fully settled payout changes the earning to paid. Send after the
+    // transaction commits so an email can never confirm a rolled-back payment.
+    if (remainingAfter <= 0 && !externalTransaction) {
+      await sendCompletedCompensationPaymentEmail(
+        earning.creator_earning_id,
+        payload.paid_at || payload.payment_date || new Date()
+      );
+    }
 
     return {
       creator_earning_id: earning.creator_earning_id,
