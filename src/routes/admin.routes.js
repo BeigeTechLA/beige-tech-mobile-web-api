@@ -202,6 +202,7 @@ router.get('/get-upcoming-projects', admin.getUpcomingEvents);
 router.get('/get-project-status', admin.getProjectStats);
 router.post('/final-project-brief', admin.createProjectBrief);
 router.get('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getCrewMembers);
+router.get('/all-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getAllCrewMembers);
 router.post('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getCrewMembers);
 router.get(
   '/crew-members/export',

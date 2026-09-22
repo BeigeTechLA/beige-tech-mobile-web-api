@@ -6237,6 +6237,320 @@ exports.createCrewMember = [
 //     });
 //   }
 // };
+exports.getAllCrewMembers = async (req, res) => {
+    try {
+        const payload = {
+            ...req.body,
+            ...req.query
+        };
+
+        let {
+            page = 1,
+            limit = 20,
+            search,
+            location,
+            status,
+            range,
+            start_date,
+            end_date,
+            fetch_all
+        } = payload;
+
+        page = parseInt(page, 10);
+        limit = parseInt(limit, 10);
+
+        const offset = (page - 1) * limit;
+
+        const shouldFetchAll =
+            String(fetch_all).toLowerCase() === 'true' ||
+            String(fetch_all) === '1';
+
+        // ALL active creative partners.
+        // IMPORTANT:
+        // Do not filter by application_submitted_at here.
+        let conditions = [
+            { is_active: 1 }
+        ];
+
+        // Keep status filtering available for the ALL tab filters.
+        if (status) {
+            if (status === 'pending') {
+                conditions.push({
+                    is_crew_verified: 0
+                });
+            } else if (status === 'approved') {
+                conditions.push({
+                    is_crew_verified: 1
+                });
+            } else if (status === 'rejected') {
+                conditions.push({
+                    is_crew_verified: 2
+                });
+            }
+        }
+
+        // Search
+        if (search) {
+            conditions.push({
+                [Sequelize.Op.or]: [
+                    {
+                        first_name: {
+                            [Sequelize.Op.like]: `%${search}%`
+                        }
+                    },
+                    {
+                        last_name: {
+                            [Sequelize.Op.like]: `%${search}%`
+                        }
+                    },
+                    {
+                        email: {
+                            [Sequelize.Op.like]: `%${search}%`
+                        }
+                    },
+                    {
+                        phone_number: {
+                            [Sequelize.Op.like]: `%${search}%`
+                        }
+                    },
+                    Sequelize.where(
+                        Sequelize.fn(
+                            'concat',
+                            Sequelize.col('first_name'),
+                            ' ',
+                            Sequelize.col('last_name')
+                        ),
+                        {
+                            [Sequelize.Op.like]: `%${search}%`
+                        }
+                    )
+                ]
+            });
+        }
+
+        // Location
+        if (location) {
+            conditions.push({
+                location: {
+                    [Sequelize.Op.like]: `%${location}%`
+                }
+            });
+        }
+
+        // Date range
+        if (start_date && end_date) {
+            conditions.push({
+                created_at: {
+                    [Sequelize.Op.between]: [
+                        start_date,
+                        end_date
+                    ]
+                }
+            });
+        }
+
+        const [{ count, rows: members }, allRoles] =
+            await Promise.all([
+                crew_members.findAndCountAll({
+                    where: {
+                        [Sequelize.Op.and]: conditions
+                    },
+
+                    distinct: true,
+
+                    col: 'crew_member_id',
+
+                    include: [
+                        {
+                            model: crew_member_files,
+                            as: 'crew_member_files',
+                            attributes: [
+                                'crew_files_id',
+                                'file_type',
+                                'file_path',
+                                'created_at',
+                                'is_active'
+                            ],
+                            where: {
+                                is_active: 1
+                            },
+                            required: false
+                        }
+                    ],
+
+                    order: [
+                        ['is_crew_verified', 'ASC'],
+                        ['is_beige_member', 'ASC'],
+                        ['crew_member_id', 'DESC']
+                    ],
+
+                    ...(shouldFetchAll
+                        ? {}
+                        : {
+                            limit,
+                            offset
+                        })
+                }),
+
+                crew_roles.findAll({
+                    attributes: [
+                        'role_id',
+                        'role_name'
+                    ],
+                    raw: true
+                })
+            ]);
+
+        // Get user IDs
+        const crewUserIds = Array.from(
+            new Set(
+                members
+                    .map(member => Number(member.user_id))
+                    .filter(Boolean)
+            )
+        );
+
+        // Get affiliate/referral data
+        const affiliateRows = crewUserIds.length
+            ? await affiliates.findAll({
+                where: {
+                    user_id: {
+                        [Sequelize.Op.in]: crewUserIds
+                    }
+                },
+                attributes: [
+                    'user_id',
+                    'referral_code'
+                ],
+                raw: true
+            })
+            : [];
+
+        const affiliateMap = new Map(
+            affiliateRows.map(row => [
+                Number(row.user_id),
+                row.referral_code || null
+            ])
+        );
+
+        // Process members
+        const processedMembers = members.map(member => {
+            const memberData = member.get({
+                clone: true
+            });
+
+            // Verification status
+            let statusLabel = 'pending';
+
+            if (Number(member.is_crew_verified) === 1) {
+                statusLabel = 'approved';
+            } else if (Number(member.is_crew_verified) === 2) {
+                statusLabel = 'rejected';
+            }
+
+            // Location
+            let finalLocation = memberData.location;
+
+            if (
+                finalLocation &&
+                typeof finalLocation === 'string' &&
+                (
+                    finalLocation.startsWith('{') ||
+                    finalLocation.startsWith('[')
+                )
+            ) {
+                try {
+                    const parsed = JSON.parse(finalLocation);
+
+                    finalLocation =
+                        parsed.address ||
+                        parsed ||
+                        finalLocation;
+                } catch (error) {
+                    // Keep original location
+                }
+            }
+
+            // Roles
+            let roleNames = [];
+
+            const rawRole = memberData.primary_role;
+
+            if (rawRole) {
+                let roleIds = [];
+
+                try {
+                    const parsed = JSON.parse(rawRole);
+
+                    roleIds = Array.isArray(parsed)
+                        ? parsed.map(String)
+                        : [String(parsed)];
+
+                } catch (error) {
+                    roleIds = [String(rawRole)];
+                }
+
+                roleNames = allRoles
+                    .filter(role =>
+                        roleIds.includes(
+                            String(role.role_id)
+                        )
+                    )
+                    .map(role => role.role_name);
+            }
+
+            return {
+                ...memberData,
+
+                referral_code:
+                    affiliateMap.get(
+                        Number(memberData.user_id)
+                    ) || null,
+
+                location: finalLocation,
+
+                status: statusLabel,
+
+                role:
+                    roleNames.length > 0
+                        ? {
+                            role_name:
+                                roleNames.join(', ')
+                        }
+                        : null
+            };
+        });
+
+        return res.status(200).json({
+            error: false,
+            message: 'All crew members fetched successfully',
+
+            pagination: {
+                total_records: count,
+                current_page: page,
+                per_page: shouldFetchAll
+                    ? count
+                    : limit,
+                total_pages: shouldFetchAll
+                    ? 1
+                    : Math.ceil(count / limit)
+            },
+
+            data: processedMembers
+        });
+
+    } catch (error) {
+        console.error(
+            'Get All Crew Members Error:',
+            error
+        );
+
+        return res.status(500).json({
+            error: true,
+            message: 'Internal server error'
+        });
+    }
+};
 
 exports.getCrewMembers = async (req, res) => {
     try {
