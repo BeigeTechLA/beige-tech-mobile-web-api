@@ -4584,19 +4584,45 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   }
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  // A booking created from a sales quote must always settle against that accepted
+  // quote.  `stream_project_booking.quote_id` points at the legacy quote table,
+  // whose value can subsequently be recalculated by the legacy pricing flow.
+  // Do not let that later value replace the sales-quote contract amount.
+  const summarySalesQuoteId = Number(existingSummary?.sales_quote_id || 0);
+  const requestedSalesQuoteId = Number(sales_quote_id || 0);
+  const latestLeadSalesQuote = (!Number.isInteger(summarySalesQuoteId) || summarySalesQuoteId <= 0)
+    ? await sales_quotes.findOne({
+        where: { lead_id: Number(leadId) },
+        attributes: ['sales_quote_id', 'total'],
+        order: [['accepted_at', 'DESC'], ['updated_at', 'DESC'], ['sales_quote_id', 'DESC']]
+      })
+    : null;
+  const resolvedSalesQuoteId = Number.isInteger(summarySalesQuoteId) && summarySalesQuoteId > 0
+    ? summarySalesQuoteId
+    : (latestLeadSalesQuote?.sales_quote_id || requestedSalesQuoteId || null);
+  const lockedSalesQuote = resolvedSalesQuoteId
+    ? await sales_quotes.findByPk(resolvedSalesQuoteId, {
+        attributes: ['sales_quote_id', 'total']
+      })
+    : null;
+  const lockedSalesQuoteTotal = Number(lockedSalesQuote?.total || 0);
   const summaryQuoteTotal = Number(existingSummary?.quote_total || 0);
   const calculatedPricing = await calculateLeadPricing(lead.booking);
   const calculatedPricingTotal = Number(calculatedPricing?.total || 0);
-  const totalAmount = Math.max(
-    resolveLeadTotalAmount(lead, lead.booking),
-    calculatedPricingTotal,
-    summaryQuoteTotal,
-    0
-  );
+  const totalAmount = Number.isFinite(lockedSalesQuoteTotal) && lockedSalesQuoteTotal > 0
+    ? lockedSalesQuoteTotal
+    : Math.max(
+        resolveLeadTotalAmount(lead, lead.booking),
+        calculatedPricingTotal,
+        summaryQuoteTotal,
+        0
+      );
   const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
   const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
   const dueFromSummary = Number(existingSummary?.due_amount);
-  const remainingBefore = Number.isFinite(dueFromSummary)
+  const remainingBefore = Number.isFinite(lockedSalesQuoteTotal) && lockedSalesQuoteTotal > 0
+    ? Math.max(totalAmount - previouslyPaidAmount - creditUsedAmount, 0)
+    : Number.isFinite(dueFromSummary)
     ? Math.max(dueFromSummary, 0)
     : Math.max(totalAmount - previouslyPaidAmount - creditUsedAmount, 0);
   const alreadyFullyPaid = remainingBefore <= 0 && previouslyPaidAmount > 0;
@@ -4644,17 +4670,6 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
     : remainingBefore;
   const paidAmountAfter = Math.max(previouslyPaidAmount + amountToApply, 0);
 
-  const normalizedSalesQuoteId = Number(sales_quote_id || 0);
-  const latestLeadSalesQuote = Number.isFinite(normalizedSalesQuoteId) && normalizedSalesQuoteId > 0
-    ? null
-    : await sales_quotes.findOne({
-        where: { lead_id: Number(leadId) },
-        attributes: ['sales_quote_id'],
-        order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']]
-      });
-  const resolvedSalesQuoteId = Number.isFinite(normalizedSalesQuoteId) && normalizedSalesQuoteId > 0
-    ? normalizedSalesQuoteId
-    : (existingSummary?.sales_quote_id || latestLeadSalesQuote?.sales_quote_id || null);
   const normalizedOtherPaymentMode = normalizedPaymentMode === 'other' ? String(other_payment_mode).trim() : null;
   const normalizedProofFilePath = String(proof_file_path || '').trim() || null;
   const normalizedProofFileName = String(proof_file_name || '').trim() || null;
