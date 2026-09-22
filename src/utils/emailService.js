@@ -96,6 +96,11 @@ const {
   SALES_NOTIF_PARTIAL_PAYMENT_RECEIVED_TEMPLATE_ID,
   SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID,
   EARNING_UPDATED_TEMPLATE_ID,
+  CP_PAYMENT_DUE_TEMPLATE_ID,
+  CP_PAYMENT_DUE_7_DAYS_TEMPLATE_ID,
+  CP_PAYMENT_OVERDUE_1_DAY_TEMPLATE_ID,
+  CP_PAYMENT_OVERDUE_3_DAYS_TEMPLATE_ID,
+  CP_PAYMENT_COMPLETED_TEMPLATE_ID,
   MANUAL_PAYMENT_RECORD_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
@@ -4114,13 +4119,13 @@ const sendCreatorEarningUpdatedEmail = async (data = {}) => {
 const sendShootCompletedPaymentDueEmail = async ({ to, data = {} } = {}) => {
   const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
 
-  return sendRenderedTemplateEmail({
+  return sendEmail({
     to,
     subject: data.subject || (data.payment_due_date
       ? `Shoot Completed - CP Payment Due by ${data.payment_due_date}`
       : 'Shoot Completed - CP Payment Due'),
-    templateName: 'ShootCompletedPaymentDue.html',
-    values: {
+    templateId: CP_PAYMENT_DUE_TEMPLATE_ID,
+    dynamicTemplateData: {
       project_name: projectName,
       booking_id: data.booking_id || '',
       assignment_id: data.assignment_id || '',
@@ -4143,11 +4148,11 @@ const sendShootCompletedPaymentDueEmail = async ({ to, data = {} } = {}) => {
 const sendCPPaymentDue7DaysEmail = async ({ to, data = {} } = {}) => {
   const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
 
-  return sendRenderedTemplateEmail({
+  return sendEmail({
     to,
     subject: data.subject || `CP Payment Due in 7 Days - ${projectName}`,
-    templateName: 'CPPaymentDue7Days.html',
-    values: {
+    templateId: CP_PAYMENT_DUE_7_DAYS_TEMPLATE_ID,
+    dynamicTemplateData: {
       project_name: projectName,
       booking_id: data.booking_id || '',
       assignment_id: data.assignment_id || '',
@@ -4170,11 +4175,11 @@ const sendCPPaymentDue7DaysEmail = async ({ to, data = {} } = {}) => {
 const sendCPPaymentOverdue1DayEmail = async ({ to, data = {} } = {}) => {
   const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
 
-  return sendRenderedTemplateEmail({
+  return sendEmail({
     to,
     subject: data.subject || `CP Payment Overdue - ${projectName}`,
-    templateName: 'CP⁠PaymentOverdue1DayAfterDueDate.html',
-    values: {
+    templateId: CP_PAYMENT_OVERDUE_1_DAY_TEMPLATE_ID,
+    dynamicTemplateData: {
       project_name: projectName,
       booking_id: data.booking_id || '',
       assignment_id: data.assignment_id || '',
@@ -4197,11 +4202,11 @@ const sendCPPaymentOverdue1DayEmail = async ({ to, data = {} } = {}) => {
 const sendCPPaymentOverdue3DaysEmail = async ({ to, data = {} } = {}) => {
   const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
 
-  return sendRenderedTemplateEmail({
+  return sendEmail({
     to,
     subject: data.subject || `CP Payment Overdue for 3 Days - ${projectName}`,
-    templateName: 'CPPaymentOverdue.html',
-    values: {
+    templateId: CP_PAYMENT_OVERDUE_3_DAYS_TEMPLATE_ID,
+    dynamicTemplateData: {
       project_name: projectName,
       booking_id: data.booking_id || '',
       assignment_id: data.assignment_id || '',
@@ -4224,11 +4229,11 @@ const sendCPPaymentOverdue3DaysEmail = async ({ to, data = {} } = {}) => {
 const sendCPPaymentCompletedEmail = async ({ to, data = {} } = {}) => {
   const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
 
-  return sendRenderedTemplateEmail({
+  return sendEmail({
     to,
     subject: data.subject || `Your Payment Has Been Completed - ${projectName}`,
-    templateName: 'CPPaymentCompleted.html',
-    values: {
+    templateId: CP_PAYMENT_COMPLETED_TEMPLATE_ID,
+    dynamicTemplateData: {
       cp_firstname: data.cp_firstname || 'there',
       project_name: projectName,
       booking_id: data.booking_id || '',
