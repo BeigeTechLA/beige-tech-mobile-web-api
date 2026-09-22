@@ -98,6 +98,8 @@ const getFiles = (member) => member?.crew_member_files || [];
 
 const getFileType = (file) => String(file?.file_type || '').trim().toLowerCase();
 
+const getFileCategory = (file) => String(file?.file_category || '').trim().toLowerCase();
+
 const buildCreatorOnboardingSummary = (member) => {
   if (!member) return buildEmptyOnboardingSummary();
 
@@ -110,6 +112,15 @@ const buildCreatorOnboardingSummary = (member) => {
     ['recent_work', 'work_sample'].includes(getFileType(file)) &&
     hasMeaningfulValue(file?.file_path)
   );
+
+  const isOnlyVideographerRole = Array.isArray(roles) && roles.length === 1 && String(roles[0]) === '1';
+  const isOnlyEditorRole = Array.isArray(roles) && roles.length === 1 && String(roles[0]) === '3';
+
+  const portfolioLinkFiles = files.filter((file) =>
+    getFileType(file) === 'link' &&
+    hasMeaningfulValue(file?.file_path)
+  );
+  const hasPortfolioLinks = portfolioLinkFiles.length > 0;
 
   const featuredWorkGroups = Object.values(
     featuredWorkFiles.reduce((groups, file) => {
@@ -140,15 +151,15 @@ const buildCreatorOnboardingSummary = (member) => {
     { label: 'Skills', complete: Array.isArray(skills) && skills.length > 0 },
     {
       label: 'Equipment',
-      complete: Array.isArray(equipment) && equipment.length > 0,
+      complete: isOnlyEditorRole ? true : (Array.isArray(equipment) && equipment.length > 0),
     },
     {
       label: 'Social links',
       complete: Object.values(socialLinks || {}).some((value) => hasMeaningfulValue(value)),
     },
     {
-      label: 'Featured work',
-      complete: hasValidFeaturedWork,
+      label: isOnlyVideographerRole ? 'Portfolio links' : 'Featured work',
+      complete: isOnlyVideographerRole ? hasPortfolioLinks : hasValidFeaturedWork,
     },
   ];
 
@@ -159,7 +170,12 @@ const buildCreatorOnboardingSummary = (member) => {
   const isRegistrationComplete = missingCount === 0 ? 1 : 0;
   const missingFields = fieldChecks.filter((field) => !field.complete).map((field) => field.label);
   const missingFieldSet = new Set(missingFields);
-  const requiredSteps = REQUIRED_STEPS.map((stepConfig) => {
+  const requiredStepsConfig = REQUIRED_STEPS.map((stepConfig) =>
+    stepConfig.key === 'step3' && isOnlyVideographerRole
+      ? { ...stepConfig, fields: ['Social links', 'Portfolio links'] }
+      : stepConfig
+  );
+  const requiredSteps = requiredStepsConfig.map((stepConfig) => {
     const stepMissingFields = stepConfig.fields.filter((field) => missingFieldSet.has(field));
 
     return {

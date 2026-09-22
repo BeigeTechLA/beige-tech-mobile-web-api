@@ -129,7 +129,7 @@ const AI_EDITING_PHOTO_TYPE_MAP = {
     { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
   ],
   wedding: [
-    { key: 'edited_photos', value: 'Edited Photos', note: '50 edited photos per hour for weddings' }
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
   ],
   privateevent: [
     { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
@@ -5928,8 +5928,8 @@ async function fetchQuoteById(salesQuoteId, user = null) {
         required: false,
         include: [{ model: db.users, as: 'performed_by', attributes: ['id', 'name', 'email'], required: false }]
       },
-      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'] },
-      { model: db.users, as: 'assigned_sales_rep', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.users.unscoped(), as: 'created_by', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.users.unscoped(), as: 'assigned_sales_rep', attributes: ['id', 'name', 'email'], required: false },
       { model: db.users, as: 'client_user', attributes: ['id', 'name', 'email'], required: false }
     ],
     order: [
@@ -6519,8 +6519,8 @@ async function listQuotes(query, user) {
   const { count, rows } = await db.sales_quotes.findAndCountAll({
     where,
     include: [
-      { model: db.users, as: 'assigned_sales_rep', attributes: ['id', 'name', 'email'], required: false },
-      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'] }
+      { model: db.users.unscoped(), as: 'assigned_sales_rep', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.users.unscoped(), as: 'created_by', attributes: ['id', 'name', 'email'], required: false }
     ],
     order: [[sortBy, sortOrder]],
     offset,

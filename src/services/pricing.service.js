@@ -544,6 +544,7 @@ async function calculateQuote({
   customAddOnItems = [],
   videoEditTypes = [], 
   photoEditTypes = [],
+  applySelfServeCoveragePricing = false,
   marginPercent = null, 
   skipDiscount = false, 
   skipMargin = false 
@@ -556,7 +557,10 @@ async function calculateQuote({
 
     // 1. Fetch all relevant items from DB in one go
     // We fetch by ID (for crew) and by SLUG (for edits)
-    const creatorItemIds = items.map(i => i.item_id).filter(id => id !== null);
+    const creatorItemIds = items.map(i => i.item_id).filter(id => id !== null && id !== undefined);
+    const selectedItemSlugs = items
+      .map(i => String(i.slug || '').trim())
+      .filter(Boolean);
     const editCounts = new Map();
     mergeEditTypeCounts(editCounts, normalizeEditTypeCounts(videoEditTypes));
     mergeEditTypeCounts(editCounts, normalizeEditTypeCounts(photoEditTypes));
@@ -566,6 +570,7 @@ async function calculateQuote({
       where: { 
         [Op.or]: [
           { item_id: { [Op.in]: creatorItemIds } },
+          { slug: { [Op.in]: selectedItemSlugs } },
           { slug: { [Op.in]: editSlugs } }
         ],
         is_active: 1 
@@ -585,14 +590,41 @@ async function calculateQuote({
     let subtotal = 0;
 
     // 2. Process Crew / Base Items
+    // Self-serve coverage is always billed for at least one hour. This does
+    // not affect editing, studios, or other non-coverage catalog items.
+    let hasPhotoCoverage = false;
+    let hasVideoCoverage = false;
     for (const selectedItem of items) {
       if (isPodcast && selectedItem.item_id === 50) continue; 
-      const dbItem = itemMap.get(selectedItem.item_id);
+      const dbItem = selectedItem.item_id
+        ? itemMap.get(selectedItem.item_id)
+        : slugMap.get(String(selectedItem.slug || '').trim());
       if (!dbItem) continue;
+
+      const itemSlug = String(dbItem.slug || '').toLowerCase();
+      const itemName = String(dbItem.name || '').toLowerCase();
+      const categorySlug = String(dbItem.category?.slug || '').toLowerCase();
+      const isPhotoCoverage =
+        itemSlug === 'photographer' ||
+        itemSlug === 'photo-video-creator' ||
+        categorySlug === 'photography';
+      const isVideoCoverage =
+        itemSlug === 'videographer' ||
+        itemSlug === 'photo-video-creator' ||
+        categorySlug === 'videography';
+
+      hasPhotoCoverage = hasPhotoCoverage || isPhotoCoverage;
+      hasVideoCoverage = hasVideoCoverage || isVideoCoverage;
 
       const quantity = selectedItem.quantity || 1;
       const unitPrice = parseFloat(dbItem.rate);
-      let lineTotal = dbItem.rate_type === 'per_hour' ? unitPrice * shootHours * quantity : unitPrice * quantity;
+      const billableHours =
+        applySelfServeCoveragePricing && (isPhotoCoverage || isVideoCoverage)
+          ? Math.max(1, shootHours)
+          : shootHours;
+      let lineTotal = dbItem.rate_type === 'per_hour'
+        ? unitPrice * billableHours * quantity
+        : unitPrice * quantity;
 
       subtotal += lineTotal;
       lineItems.push({
@@ -603,7 +635,7 @@ async function calculateQuote({
         quantity,
         unit_price: unitPrice,
         rate_type: dbItem.rate_type,
-        duration_hours: dbItem.rate_type === 'per_hour' ? shootHours : null,
+        duration_hours: dbItem.rate_type === 'per_hour' ? billableHours : null,
         line_total: parseFloat(lineTotal.toFixed(2)),
         is_mandatory: false
       });
@@ -633,18 +665,30 @@ async function calculateQuote({
     const hasNonEditingLineItems = lineItems.some((lineItem) => !isEditingOnlyLineItem(lineItem));
     const isEditingOnlyQuote = hasEditSelections && !hasNonEditingLineItems;
 
-    // 4. Pre-Production Fees
+    // 4. Coverage fees
     const preProdMap = {
       photo: { wedding: 250, corporate: 250, private: 250, brand_product: 250, social_content: 250, people_teams: 250, behind_scenes: 250 },
       video: { wedding: 250, corporate: 250, private: 250, advertising: 250, social_content: 250, podcast: 250, short_film: 250, music: 250, podcast_shows: 250 }
     };
 
-    const hasPhoto = !isEditingOnlyQuote && lineItems.some(li => li.category_slug === 'photography' || li.item_name.toLowerCase().includes('photo'));
-    const hasVideo = !isEditingOnlyQuote && lineItems.some(li => li.category_slug === 'videography' || li.item_name.toLowerCase().includes('video'));
+    const hasPhoto = applySelfServeCoveragePricing
+      ? hasPhotoCoverage
+      : !isEditingOnlyQuote && (
+        hasPhotoCoverage ||
+        lineItems.some(li => li.category_slug === 'photography' || li.item_name.toLowerCase().includes('photo'))
+      );
+    const hasVideo = applySelfServeCoveragePricing
+      ? hasVideoCoverage
+      : !isEditingOnlyQuote && (
+        hasVideoCoverage ||
+        lineItems.some(li => li.category_slug === 'videography' || li.item_name.toLowerCase().includes('video'))
+      );
 
     const photoPreProd = hasPhoto ? (preProdMap.photo[normalizedType] || 0) : 0;
     const videoPreProd = hasVideo ? (preProdMap.video[normalizedType] || 0) : 0;
-    const preProdTotal = Math.max(photoPreProd, videoPreProd);
+    const preProdTotal = applySelfServeCoveragePricing && (hasPhoto || hasVideo)
+      ? 250
+      : Math.max(photoPreProd, videoPreProd);
 
     if (preProdTotal > 0) {
       subtotal += preProdTotal;
@@ -654,7 +698,27 @@ async function calculateQuote({
         unit_price: preProdTotal,
         line_total: preProdTotal,
         is_mandatory: true,
-        hidden: true // Keep hidden as it's rolled into "Shoot Cost" on frontend
+        hidden: !applySelfServeCoveragePricing,
+      });
+    }
+
+    // A video production needs one setup window, even when the booking has
+    // Photography as well. Photography-only bookings intentionally do not
+    // receive this fee so their one-hour total remains $500.
+    if (applySelfServeCoveragePricing && hasVideo) {
+      const setupTimeFee = 250;
+      subtotal += setupTimeFee;
+      lineItems.push({
+        item_name: 'Setup Time (up to 45 minutes)',
+        category_name: 'Coverage Fees',
+        category_slug: 'coverage-fees',
+        quantity: 1,
+        unit_price: setupTimeFee,
+        rate_type: 'flat',
+        rate_unit: null,
+        line_total: setupTimeFee,
+        is_mandatory: true,
+        hidden: false,
       });
     }
 

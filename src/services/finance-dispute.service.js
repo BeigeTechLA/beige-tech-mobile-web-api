@@ -3,6 +3,7 @@ const accountCreditService = require('./account-credit.service');
 const creatorEarningsService = require('./creator-earnings.service');
 const cpCompensationService = require('./cp-compensation.service');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common');
+const emailService = require('../utils/emailService');
 
 const DISPUTE_STATUSES = ['open', 'in_review', 'resolved', 'rejected', 'escalated'];
 const DISPUTE_CATEGORIES = ['quality', 'payment_delay', 'wrong_deliverables', 'refund', 'payout_issues', 'other'];
@@ -12,6 +13,204 @@ const CREATOR_DISPUTE_TYPE_LABELS = {
   payout_issues: 'Incorrect Amount',
   other: 'Other'
 };
+
+function getFrontendBaseUrl() {
+  return String(process.env.FRONTEND_URL || 'https://beige.app').trim().replace(/\/+$/, '');
+}
+
+function buildFrontendUrl(pathname = '') {
+  const normalizedPath = String(pathname || '').startsWith('/') ? pathname : `/${pathname}`;
+  return `${getFrontendBaseUrl()}${normalizedPath}`;
+}
+
+function getFinanceDisputeAdminRecipients() {
+  return [
+    process.env.FINANCE_DISPUTE_NOTIFICATION_EMAIL,
+    process.env.FINANCE_NOTIFICATION_EMAIL,
+    process.env.ADMIN_NOTIFICATION_EMAIL,
+    process.env.SALES_NOTIFICATION_EMAIL
+  ]
+    .flatMap((value) => String(value || '').split(','))
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index);
+}
+
+function getRaisedByTypeLabel(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'creator') return 'Creative Partner';
+  if (normalized === 'admin') return 'Admin';
+  return 'Client';
+}
+
+function getDisplayBookingId(dispute = {}) {
+  return dispute.shoot_id || (dispute.booking_id ? `SH-${String(dispute.booking_id).padStart(3, '0')}` : '');
+}
+
+function getDisputeAdminUrl(dispute = {}) {
+  return buildFrontendUrl(`/admin/finances/disputes?dispute_id=${encodeURIComponent(dispute.dispute_id || '')}`);
+}
+
+function getDisputeParticipantUrl(dispute = {}) {
+  if (dispute.raised_by?.type === 'creator') {
+    return buildFrontendUrl('/creator/dashboard/finances/disputes');
+  }
+  return buildFrontendUrl('/affiliate/finances');
+}
+
+function getDisputeParticipant(dispute = {}) {
+  if (dispute.raised_by?.type === 'creator') {
+    return {
+      email: dispute.creator?.email || null,
+      name: dispute.creator?.name || dispute.raised_by?.name || 'there',
+      type: 'creator'
+    };
+  }
+
+  if (dispute.raised_by?.type === 'client') {
+    return {
+      email: dispute.client?.email || dispute.project?.guest_email || null,
+      name: dispute.client?.name || dispute.raised_by?.name || 'there',
+      type: 'client'
+    };
+  }
+
+  if (dispute.creator?.email) {
+    return {
+      email: dispute.creator.email,
+      name: dispute.creator.name || 'there',
+      type: 'creator'
+    };
+  }
+
+  return {
+    email: dispute.client?.email || dispute.project?.guest_email || null,
+    name: dispute.client?.name || 'there',
+    type: 'client'
+  };
+}
+
+function buildDisputeEmailData(dispute = {}, overrides = {}) {
+  const participant = getDisputeParticipant(dispute);
+  const metadata = dispute.metadata || {};
+  return {
+    dispute_code: dispute.dispute_code || '',
+    booking_id: getDisplayBookingId(dispute),
+    shoot_id: getDisplayBookingId(dispute),
+    raised_by_type: dispute.raised_by?.type || '',
+    raised_by_type_label: getRaisedByTypeLabel(dispute.raised_by?.type),
+    raised_by_name: dispute.raised_by?.name || participant.name || 'N/A',
+    client_name: dispute.client?.name || (participant.type === 'client' ? participant.name : '') || 'N/A',
+    creator_name: dispute.creator?.name || metadata?.cp_compensation?.creator_name || '',
+    creative_partner: dispute.creator?.name || metadata?.cp_compensation?.creator_name || 'N/A',
+    dispute_reason: dispute.subject || dispute.issue_type || dispute.category || dispute.description || 'N/A',
+    reason: dispute.subject || dispute.issue_type || dispute.category || 'N/A',
+    category: dispute.issue_type || dispute.category || '',
+    resolution_notes: dispute.resolution?.notes || '',
+    resolution_summary: dispute.resolution?.notes || 'Resolved by the Beige finance team',
+    view_details_url: getDisputeParticipantUrl(dispute),
+    dispute_link: getDisputeParticipantUrl(dispute),
+    admin_dispute_link: getDisputeAdminUrl(dispute),
+    ...overrides
+  };
+}
+
+async function safeSendDisputeEmail(label, sendPromise) {
+  try {
+    const result = await sendPromise;
+    if (!result?.success) {
+      console.warn(`Finance dispute email skipped/failed (${label}):`, result?.error || result?.failed || 'Unknown error');
+    }
+    return result;
+  } catch (error) {
+    console.warn(`Finance dispute email failed (${label}):`, error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+async function notifyDisputeCreated(disputeId) {
+  const dispute = await getAdminDisputeDetails(disputeId);
+  const participant = getDisputeParticipant(dispute);
+  const data = buildDisputeEmailData(dispute);
+  const tasks = [
+    safeSendDisputeEmail('admin:new_dispute', emailService.sendFinanceDisputeRaisedAdminEmail({
+      recipients: getFinanceDisputeAdminRecipients(),
+      data: {
+        ...data,
+        view_details_url: data.admin_dispute_link
+      }
+    }))
+  ];
+
+  if (participant.email && dispute.raised_by?.type !== 'admin') {
+    tasks.push(safeSendDisputeEmail('participant:dispute_received', emailService.sendFinanceDisputeReceivedEmail({
+      to: participant.email,
+      data: {
+        ...data,
+        recipient_name: participant.name
+      }
+    })));
+  }
+
+  await Promise.all(tasks);
+}
+
+async function notifyDisputeUpdated(disputeId, overrides = {}) {
+  const dispute = await getAdminDisputeDetails(disputeId);
+  const participant = getDisputeParticipant(dispute);
+  if (!participant.email) return;
+
+  await safeSendDisputeEmail('participant:dispute_updated', emailService.sendFinanceDisputeUpdatedEmail({
+    to: participant.email,
+    data: {
+      ...buildDisputeEmailData(dispute),
+      recipient_name: participant.name,
+      ...overrides
+    }
+  }));
+}
+
+async function notifyAdminDisputeUpdated(disputeId, overrides = {}) {
+  const recipients = getFinanceDisputeAdminRecipients();
+  if (!recipients.length) return;
+
+  const dispute = await getAdminDisputeDetails(disputeId);
+  await safeSendDisputeEmail('admin:dispute_updated', emailService.sendFinanceDisputeUpdatedEmail({
+    to: recipients,
+    data: {
+      ...buildDisputeEmailData(dispute),
+      recipient_name: 'Team',
+      dispute_link: getDisputeAdminUrl(dispute),
+      view_details_url: getDisputeAdminUrl(dispute),
+      ...overrides
+    }
+  }));
+}
+
+async function notifyDisputeClosed(disputeId, closeStatus, overrides = {}) {
+  const dispute = await getAdminDisputeDetails(disputeId);
+  const participant = getDisputeParticipant(dispute);
+  if (!participant.email) return;
+
+  const data = {
+    ...buildDisputeEmailData(dispute),
+    recipient_name: participant.name,
+    ...overrides
+  };
+
+  if (closeStatus === 'rejected') {
+    await safeSendDisputeEmail('participant:dispute_rejected', emailService.sendFinanceDisputeRejectedEmail({
+      to: participant.email,
+      data
+    }));
+    return;
+  }
+
+  await safeSendDisputeEmail('participant:dispute_resolved', emailService.sendFinanceDisputeResolvedEmail({
+    to: participant.email,
+    data
+  }));
+}
 
 function toMoney(value) {
   const numeric = typeof value === 'number'
@@ -626,26 +825,37 @@ async function createClientDispute(payload = {}, files = null, userContext = {})
   }, { userId: client.id });
 
   if (hasUploadedFiles(files) || payload.attachments || payload.file_path) {
-    await addDisputeAttachment(dispute.dispute_id, payload, files, { userId: client.id });
+    await addDisputeAttachment(dispute.dispute_id, payload, files, { userId: client.id, suppressParticipantNotification: true });
   }
 
+  await notifyDisputeCreated(dispute.dispute_id);
   return getClientDisputeDetails(dispute.dispute_id, { userId: client.id });
 }
 
 async function addClientDisputeComment(disputeId, payload = {}, userContext = {}) {
   const client = await getClientContext(userContext);
   await getClientDisputeDetails(disputeId, { userId: client.id });
-  return addDisputeComment(disputeId, {
+  const result = await addDisputeComment(disputeId, {
     ...payload,
     visibility: 'all',
     comment_type: 'status_update'
-  }, { userId: client.id });
+  }, { userId: client.id, suppressParticipantNotification: true });
+  await notifyAdminDisputeUpdated(disputeId, {
+    update_message: `The client added a comment to dispute ${disputeId}.`,
+    update_detail: 'Please review the latest dispute activity.'
+  });
+  return result;
 }
 
 async function addClientDisputeAttachment(disputeId, payload = {}, files = null, userContext = {}) {
   const client = await getClientContext(userContext);
   await getClientDisputeDetails(disputeId, { userId: client.id });
-  return addDisputeAttachment(disputeId, payload, files, { userId: client.id });
+  const result = await addDisputeAttachment(disputeId, payload, files, { userId: client.id, suppressParticipantNotification: true });
+  await notifyAdminDisputeUpdated(disputeId, {
+    update_message: `The client added an attachment to dispute ${disputeId}.`,
+    update_detail: 'Please review the latest dispute files.'
+  });
+  return result;
 }
 
 function buildCreatorDisputeWhere(filters = {}, creator = {}) {
@@ -846,10 +1056,15 @@ async function createCreatorDispute(payload = {}, files = null, userContext = {}
     }, { userId: userContext.userId, transaction });
 
     if (hasUploadedFiles(files) || payload.attachments || payload.file_path) {
-      await addDisputeAttachment(dispute.dispute_id, payload, files, { userId: userContext.userId, transaction });
+      await addDisputeAttachment(dispute.dispute_id, payload, files, {
+        userId: userContext.userId,
+        transaction,
+        suppressParticipantNotification: true
+      });
     }
 
     await transaction.commit();
+    await notifyDisputeCreated(dispute.dispute_id);
     return getCreatorDisputeDetails(dispute.dispute_id, { userId: userContext.userId });
   } catch (error) {
     if (transaction && !transaction.finished) await transaction.rollback();
@@ -860,17 +1075,30 @@ async function createCreatorDispute(payload = {}, files = null, userContext = {}
 async function addCreatorDisputeComment(disputeId, payload = {}, userContext = {}) {
   const creator = await getCreatorContext(userContext);
   await getCreatorDisputeDetails(disputeId, { userId: userContext.userId });
-  return addDisputeComment(disputeId, {
+  const result = await addDisputeComment(disputeId, {
     ...payload,
     created_by_creator_id: creator.creator_id,
     visibility: 'all',
     comment_type: 'status_update'
-  }, { userId: userContext.userId });
+  }, { userId: userContext.userId, suppressParticipantNotification: true });
+  await notifyAdminDisputeUpdated(disputeId, {
+    update_message: `The creative partner added a comment to dispute ${disputeId}.`,
+    update_detail: 'Please review the latest dispute activity.'
+  });
+  return result;
 }
 
 async function addCreatorDisputeAttachment(disputeId, payload = {}, files = null, userContext = {}) {
   await getCreatorDisputeDetails(disputeId, userContext);
-  return addDisputeAttachment(disputeId, payload, files, { userId: userContext.userId });
+  const result = await addDisputeAttachment(disputeId, payload, files, {
+    userId: userContext.userId,
+    suppressParticipantNotification: true
+  });
+  await notifyAdminDisputeUpdated(disputeId, {
+    update_message: `The creative partner added an attachment to dispute ${disputeId}.`,
+    update_detail: 'Please review the latest dispute files.'
+  });
+  return result;
 }
 
 async function processCreatorResolutionPayment(dispute, payload = {}, options = {}, transaction = null) {
@@ -1084,6 +1312,9 @@ async function createAdminDispute(payload = {}, options = {}) {
     }
 
     await transaction.commit();
+    if (raisedByType === 'admin') {
+      await notifyDisputeCreated(dispute.finance_dispute_id);
+    }
     return getAdminDisputeDetails(dispute.finance_dispute_id);
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
@@ -1133,6 +1364,15 @@ async function updateAdminDispute(disputeId, payload = {}, options = {}) {
     }, transaction);
 
     if (!externalTransaction) await transaction.commit();
+    if (!externalTransaction) {
+      const updateMessage = dispute.status !== previousStatus
+        ? `Your finance dispute for Booking ${getDisplayBookingId(formatDisputeRow(dispute))} is now ${formatIssueType(dispute.status)}.`
+        : `Your finance dispute for Booking ${getDisplayBookingId(formatDisputeRow(dispute))} has been updated.`;
+      await notifyDisputeUpdated(dispute.finance_dispute_id, {
+        update_message: updateMessage,
+        update_detail: payload.notes || payload.resolution_notes || 'Please review the latest dispute details in your dashboard.'
+      });
+    }
     return getAdminDisputeDetails(dispute.finance_dispute_id);
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
@@ -1172,6 +1412,12 @@ async function addDisputeComment(disputeId, payload = {}, options = {}) {
     }, transaction);
 
     if (!externalTransaction) await transaction.commit();
+    if (!externalTransaction && !options.suppressParticipantNotification) {
+      await notifyDisputeUpdated(dispute.finance_dispute_id, {
+        update_message: `A new comment has been added to your finance dispute for Booking ${getDisplayBookingId(formatDisputeRow(dispute))}.`,
+        update_detail: 'Please review the latest dispute activity in your dashboard.'
+      });
+    }
     return comment;
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
@@ -1245,6 +1491,12 @@ async function addDisputeAttachment(disputeId, payload = {}, files = null, optio
     }, transaction);
 
     if (!externalTransaction) await transaction.commit();
+    if (!externalTransaction && !options.suppressParticipantNotification) {
+      await notifyDisputeUpdated(dispute.finance_dispute_id, {
+        update_message: `New file evidence has been added to your finance dispute for Booking ${getDisplayBookingId(formatDisputeRow(dispute))}.`,
+        update_detail: 'Please review the latest dispute files in your dashboard.'
+      });
+    }
     return attachments;
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
@@ -1434,6 +1686,12 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
     }, transaction);
 
     if (!externalTransaction) await transaction.commit();
+    if (!externalTransaction) {
+      await notifyDisputeClosed(dispute.finance_dispute_id, closeStatus, {
+        resolution_summary: payload.resolution_notes || payload.notes || 'Resolved by the Beige finance team',
+        rejection_reason: payload.rejection_reason || payload.resolution_notes || payload.notes || 'Reviewed by the Beige finance team'
+      });
+    }
     return getAdminDisputeDetails(dispute.finance_dispute_id);
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
@@ -1468,6 +1726,12 @@ async function escalateDispute(disputeId, payload = {}, options = {}) {
     }, transaction);
 
     if (!externalTransaction) await transaction.commit();
+    if (!externalTransaction) {
+      await notifyDisputeUpdated(dispute.finance_dispute_id, {
+        update_message: `Your finance dispute for Booking ${getDisplayBookingId(formatDisputeRow(dispute))} has been escalated.`,
+        update_detail: payload.notes || payload.reason || 'Our team has escalated this case for further review.'
+      });
+    }
     return getAdminDisputeDetails(dispute.finance_dispute_id);
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();

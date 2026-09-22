@@ -2599,6 +2599,172 @@ const fetchWorkspaceFiles = async (externalId, phase, path) => {
   );
 };
 
+const normalizeMetadataObject = (value) => {
+  const parsed = parseFileManagerMetadataValue(value);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+};
+
+const getFileUploaderId = (file = {}) => {
+  const metadata = normalizeMetadataObject(file.metadata);
+  const candidates = [
+    file.userId,
+    file.user_id,
+    file.uploadedById,
+    file.uploaded_by_id,
+    file.uploadedByUserId,
+    file.uploaded_by_user_id,
+    file.authorUserId,
+    file.author_user_id,
+    file.createdByUserId,
+    file.created_by_user_id,
+    file.user?.id,
+    file.user?.user_id,
+    file.author?.id,
+    file.author?.user_id,
+    file.uploadedBy?.id,
+    file.uploadedBy?.user_id,
+    file.uploaded_by?.id,
+    file.uploaded_by?.user_id,
+    metadata.userId,
+    metadata.user_id,
+    metadata.uploadedById,
+    metadata.uploaded_by_id,
+    metadata.uploadedByUserId,
+    metadata.uploaded_by_user_id,
+    metadata.authorUserId,
+    metadata.author_user_id,
+  ];
+
+  const uploaderId = candidates
+    .map((value) => String(value || '').trim())
+    .find(Boolean);
+  return uploaderId || null;
+};
+
+const isFileUploadedByUser = (file, userId) => {
+  const uploaderId = getFileUploaderId(file);
+  if (!uploaderId) return true;
+  return uploaderId === String(userId || '').trim();
+};
+
+const getCreatorCommonEventRelativeRoots = (creatorFolders = []) =>
+  Array.from(
+    new Set(
+      (creatorFolders || [])
+        .map((row) => {
+          const folderPath = normalizePathForAccess(row.folder_path);
+          return stripCommonEventRootFromPath(folderPath, row) || folderPath;
+        })
+        .map((path) => normalizePathForAccess(path))
+        .filter(Boolean)
+    )
+  );
+
+const countFilesUnderPath = (filePaths = [], folderPath = '') => {
+  const normalizedFolderPath = normalizePathForAccess(folderPath);
+  if (!normalizedFolderPath) return filePaths.length;
+  return filePaths.filter((filePath) => isPathWithin(normalizedFolderPath, filePath)).length;
+};
+
+const toCommonEventRelativePath = (path, creatorFolders = []) => {
+  const normalizedPath = normalizePathForAccess(path);
+  if (!normalizedPath) return '';
+  for (const row of creatorFolders || []) {
+    const relativePath = stripCommonEventRootFromPath(normalizedPath, row);
+    if (relativePath && relativePath !== normalizedPath) return normalizePathForAccess(relativePath);
+  }
+  return normalizedPath;
+};
+
+const collectCreatorCommonEventUploadedFilePaths = async ({
+  eventExternalId,
+  userId,
+  phase = null,
+  creatorFolders = [],
+}) => {
+  const roots = getCreatorCommonEventRelativeRoots(creatorFolders);
+  const filePathSet = new Set();
+  const visitedFolders = new Set();
+
+  const collectFromPath = async (currentPath) => {
+    const normalizedPath = normalizePathForAccess(currentPath);
+    if (!normalizedPath || visitedFolders.has(normalizedPath)) return;
+    visitedFolders.add(normalizedPath);
+
+    const listing = await fetchWorkspaceFiles(eventExternalId, phase || null, normalizedPath);
+    const files = Array.isArray(listing?.data?.files) ? listing.data.files : [];
+    const folders = Array.isArray(listing?.data?.folders) ? listing.data.folders : [];
+
+    for (const file of files) {
+      if (!isFileUploadedByUser(file, userId)) continue;
+      const filePath = toCommonEventRelativePath(
+        getRelativePathForEntry(file, normalizedPath),
+        creatorFolders
+      );
+      if (filePath) filePathSet.add(filePath);
+    }
+
+    for (const folder of folders) {
+      const childPath = toCommonEventRelativePath(
+        getRelativePathForEntry(folder, normalizedPath),
+        creatorFolders
+      );
+      if (childPath) await collectFromPath(childPath);
+    }
+  };
+
+  await Promise.all(roots.map((rootPath) => collectFromPath(rootPath)));
+  return Array.from(filePathSet);
+};
+
+const applyCreatorCommonEventCounts = async ({
+  eventExternalId,
+  userId,
+  phase = null,
+  creatorFolders = null,
+  workspace = null,
+  folders = [],
+  parentPath = '',
+}) => {
+  const normalizedEventExternalId = String(eventExternalId || '').trim().toLowerCase();
+  const normalizedUserId = Number(userId || 0);
+  if (!isCommonEventExternalId(normalizedEventExternalId) || !normalizedUserId) {
+    return { workspace, folders, fileCount: Number(workspace?.fileCount || 0) };
+  }
+
+  const ownedFolders =
+    creatorFolders ||
+    await listCreatorCommonEventFolders({
+      eventExternalId: normalizedEventExternalId,
+      userId: normalizedUserId,
+      phase: phase || null,
+    });
+  const uploadedFilePaths = await collectCreatorCommonEventUploadedFilePaths({
+    eventExternalId: normalizedEventExternalId,
+    userId: normalizedUserId,
+    phase,
+    creatorFolders: ownedFolders,
+  });
+  const scopedWorkspaceFileCount = uploadedFilePaths.length;
+  const countedFolders = (Array.isArray(folders) ? folders : []).map((folder) => {
+    const folderPath = toCommonEventRelativePath(
+      getRelativePathForEntry(folder, parentPath),
+      ownedFolders
+    );
+    return {
+      ...folder,
+      fileCount: countFilesUnderPath(uploadedFilePaths, folderPath),
+    };
+  });
+
+  return {
+    workspace: workspace ? { ...workspace, fileCount: scopedWorkspaceFileCount } : workspace,
+    folders: countedFolders,
+    fileCount: scopedWorkspaceFileCount,
+    uploadedFilePaths,
+  };
+};
+
 const collectWorkspaceImageCandidates = async (externalId) => {
   const collected = new Map();
   const phases = ['pre', 'post'];
@@ -4386,9 +4552,26 @@ exports.listWorkspaces = async (req, res) => {
     const totalPages = Math.max(1, Math.ceil(total / effectiveLimit));
     const safePage = hasPaginationParams ? Math.min(page, totalPages) : 1;
     const offset = (safePage - 1) * effectiveLimit;
-    const paginatedWorkspaces = upstreamAlreadyPaginated
+    let paginatedWorkspaces = upstreamAlreadyPaginated
       ? filteredWorkspaces
       : filteredWorkspaces.slice(offset, offset + effectiveLimit);
+
+    if (creatorRole) {
+      paginatedWorkspaces = await Promise.all(
+        paginatedWorkspaces.map(async (workspace) => {
+          const externalId = String(workspace?.externalId || '').trim().toLowerCase();
+          if (!isCommonEventExternalId(externalId)) return workspace;
+
+          const counts = await applyCreatorCommonEventCounts({
+            eventExternalId: externalId,
+            userId: getRequestUserId(req),
+            workspace,
+          }).catch(() => null);
+
+          return counts?.workspace || workspace;
+        })
+      );
+    }
 
     return res.status(200).json({
       ...result,
@@ -4451,21 +4634,29 @@ exports.getWorkspace = async (req, res) => {
           userId: getRequestUserId(req),
         });
         const allowedRoots = getCreatorCommonEventAllowedRoots(creatorFolders);
+        const visibleRootFolders = rootFolders.filter((folder) => {
+          const entryPath = getRelativePathForEntry(folder);
+          return entryPath && allowedRoots.some((rootPath) => isPathWithin(rootPath, entryPath) || isPathWithin(entryPath, rootPath));
+        });
+        const counted = await applyCreatorCommonEventCounts({
+          eventExternalId: req.params.bookingId,
+          userId: getRequestUserId(req),
+          creatorFolders,
+          workspace: result.data?.workspace || {},
+          folders: visibleRootFolders,
+        });
         result = {
           ...result,
           data: {
             ...(result.data || {}),
             workspace: {
-              ...applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
+              ...applyWorkspaceDisplayName(counted.workspace || result.data?.workspace || {}, displayNameMap),
               isCommonEvent: true,
               eventId: eventRow?.event_id,
               eventName: eventRow?.event_name,
               visibleUntil: eventRow?.visible_until || null,
             },
-            folders: rootFolders.filter((folder) => {
-              const entryPath = getRelativePathForEntry(folder);
-              return entryPath && allowedRoots.some((rootPath) => isPathWithin(rootPath, entryPath) || isPathWithin(entryPath, rootPath));
-            }),
+            folders: counted.folders,
           },
         };
       } else {
@@ -4649,13 +4840,22 @@ exports.getWorkspaceFiles = async (req, res) => {
         const entryPath = getRelativePathForEntry(file, requestedPath);
         return entryPath && isAllowed(entryPath);
       });
+      const counted = await applyCreatorCommonEventCounts({
+        eventExternalId: req.params.bookingId,
+        userId: getRequestUserId(req),
+        phase,
+        creatorFolders,
+        workspace: result.data?.workspace || {},
+        folders: filteredFolders,
+        parentPath: requestedPath,
+      });
 
       return res.status(200).json({
         ...result,
         data: {
           ...(result.data || {}),
-          workspace: result.data?.workspace,
-          folders: filteredFolders,
+          workspace: counted.workspace || result.data?.workspace,
+          folders: counted.folders,
           files: filteredFiles,
         },
       });
@@ -5301,23 +5501,49 @@ exports.getFolderDownloadUrl = async (req, res) => {
     const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
     await ensureCreatorWorkspaceAccess(req, externalId);
     await ensureClientWorkspaceAccess(req, externalId);
+    let downloadFolders;
 
     if (isCreatorRole(req) && isCommonEventExternalId(externalId)) {
+      const phase = normalizeWorkspacePhase(req.body.phase, null);
+      const requestedPath = normalizePathForAccess(req.body.path);
       await ensureCreatorCommonEventRelativePathAccess({
         req,
         eventExternalId: externalId,
-        phase: req.body.phase,
-        relativePath: req.body.path,
-        allowRoot: false,
+        phase,
+        relativePath: requestedPath,
+        allowRoot: true,
+        allowAncestorNavigation: true,
       });
+
+      // Root/ancestor downloads must include only the creator's owned folders.
+      // Never pass an unrestricted common-event root to the storage service.
+      const creatorFolders = await listCreatorCommonEventFolders({
+        eventExternalId: externalId,
+        userId: getRequestUserId(req),
+        phase,
+      });
+      downloadFolders = creatorFolders.flatMap((row) => {
+        const ownedPath = stripCommonEventRootFromPath(row.folder_path, row);
+        const relativePath = stripCommonEventRootFromPath(requestedPath, row);
+        if (!ownedPath) return [];
+        const path = relativePath && isPathWithin(ownedPath, relativePath)
+          ? relativePath
+          : !relativePath || isPathWithin(relativePath, ownedPath) ? ownedPath : null;
+        return path ? [{ phase: normalizeWorkspacePhase(row.phase, null) || 'root', path }] : [];
+      });
+      if (!downloadFolders.length) {
+        return res.status(403).json({ success: false, message: 'You can access only your own common event folder/files' });
+      }
     }
 
+    const primaryFolder = downloadFolders?.[0];
     const result = await proxyRequest('/folder-download-url', {
       method: 'POST',
       body: JSON.stringify({
         externalId,
-        phase: req.body.phase,
-        path: req.body.path,
+        phase: primaryFolder?.phase || req.body.phase,
+        path: primaryFolder?.path || req.body.path,
+        folders: downloadFolders?.length > 1 ? downloadFolders : undefined,
       }),
     });
     return res.status(200).json(withPublicUrl(result, req));
@@ -5331,14 +5557,17 @@ exports.getFolderDownloadUrl = async (req, res) => {
 
 exports.downloadFolderZip = async (req, res) => {
   try {
-    const folderpath = String(req.query.folderpath || '').trim();
-    if (!folderpath) {
+    const rawPaths = Array.isArray(req.query.folderpath) ? req.query.folderpath : [req.query.folderpath];
+    const folderpaths = rawPaths.map((value) => String(value || '').trim()).filter(Boolean);
+    if (!folderpaths.length) {
       return res.status(400).json({ success: false, message: 'folderpath is required' });
     }
 
+    const query = new URLSearchParams();
+    folderpaths.forEach((folderpath) => query.append('folderpath', folderpath));
     return proxyZipResponse({
       res,
-      externalPath: `/download-folder?folderpath=${encodeURIComponent(folderpath)}`,
+      externalPath: `/download-folder?${query.toString()}`,
     });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {

@@ -18,6 +18,60 @@ const parseArray = (value) => {
   }
 };
 
+const parsePricingSnapshot = (description) => {
+  if (!description) return null;
+
+  const text = String(description);
+  const marker = '[BEIGE_PRICING_META]';
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) return null;
+
+  const afterMarker = text.slice(markerIndex + marker.length);
+  const nextMetaIndex = afterMarker.search(/\n\n\[BEIGE_[A-Z_]+META\]/);
+  const jsonText = (nextMetaIndex >= 0 ? afterMarker.slice(0, nextMetaIndex) : afterMarker).trim();
+
+  try {
+    const parsed = JSON.parse(jsonText);
+    const total = Number(parsed?.total || 0);
+    const subtotal = Number(parsed?.subtotal || total || 0);
+    const lineItems = Array.isArray(parsed?.line_items)
+      ? parsed.line_items
+          .map((item) => {
+            const itemName = String(item?.item_name || item?.name || '').trim();
+            const lineTotal = Number(item?.line_total ?? item?.total ?? 0);
+            if (!itemName || !Number.isFinite(lineTotal) || lineTotal <= 0) return null;
+            return {
+              item_id: item?.item_id ?? null,
+              item_name: itemName,
+              name: itemName,
+              category_name: item?.category_name || null,
+              category_slug: item?.category_slug || null,
+              quantity: Number(item?.quantity || 1),
+              unit_price: Number(item?.unit_price || 0),
+              line_total: lineTotal,
+              total: lineTotal,
+              rate_type: item?.rate_type || null,
+              rate_unit: item?.rate_unit || null,
+            };
+          })
+          .filter(Boolean)
+      : [];
+
+    if (!Number.isFinite(total) || total <= 0) return null;
+
+    return {
+      source: 'book_a_shoot_v4_snapshot',
+      total,
+      subtotal: Number.isFinite(subtotal) && subtotal > 0 ? subtotal : total,
+      discount_amount: Number(parsed?.discount_amount || 0),
+      shoot_hours: Number(parsed?.shoot_hours || 0),
+      line_items: lineItems,
+    };
+  } catch {
+    return null;
+  }
+};
+
 const parseRoles = (booking) => {
   let roles = {};
   try {
@@ -82,6 +136,11 @@ async function calculateBookingPricing(booking) {
     };
   }
 
+  const pricingSnapshot = parsePricingSnapshot(booking.description);
+  if (pricingSnapshot) {
+    return pricingSnapshot;
+  }
+
   const roles = parseRoles(booking);
   const items = Object.entries(roles)
     .map(([role, quantity]) => ({
@@ -117,10 +176,17 @@ async function calculateBookingPricing(booking) {
     skipMargin: true,
   });
 
+  const persistedBudget = Number(booking?.budget || 0);
+  const calculatedTotal = Number(calculated.total || 0);
+  const effectiveTotal =
+    Number.isFinite(persistedBudget) && persistedBudget > calculatedTotal
+      ? persistedBudget
+      : calculatedTotal;
+
   return {
     source: 'current_booking_state',
-    total: Number(calculated.total || 0),
-    subtotal: Number(calculated.subtotal || 0),
+    total: effectiveTotal,
+    subtotal: effectiveTotal,
     discount_amount: Number(calculated.discountAmount || 0),
     shoot_hours: hours,
     line_items: calculated.lineItems || [],
