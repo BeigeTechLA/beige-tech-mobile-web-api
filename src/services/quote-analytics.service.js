@@ -4,6 +4,7 @@ const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service
 const leadAssignmentService = require('./lead-assignment.service');
 
 const DATE_PRESETS = [
+  'all_time',
   'today',
   'yesterday',
   'last_7_days',
@@ -90,7 +91,10 @@ function parseDateOnly(value, fieldName) {
 }
 
 function resolveDateRange(query = {}, nowValue = new Date()) {
-  const preset = String(query.date_preset || 'last_30_days').trim().toLowerCase();
+  // Analytics opens on All Time.  Keeping this default in the API (rather than
+  // relying on the client to send a parameter) also makes direct API consumers
+  // and rep drill-downs consistent with the dashboard.
+  const preset = String(query.date_preset || 'all_time').trim().toLowerCase();
   if (!DATE_PRESETS.includes(preset)) {
     throw badRequest(`date_preset must be one of: ${DATE_PRESETS.join(', ')}`);
   }
@@ -100,7 +104,13 @@ function resolveDateRange(query = {}, nowValue = new Date()) {
   let start;
   let endExclusive;
 
-  if (preset === 'today') {
+  if (preset === 'all_time') {
+    // The exact first sent quote is resolved after filters have been applied so
+    // the chart begins at useful data instead of rendering empty historical
+    // months. `isInRange` treats this preset as unbounded.
+    start = new Date(0);
+    endExclusive = tomorrow;
+  } else if (preset === 'today') {
     start = today;
     endExclusive = tomorrow;
   } else if (preset === 'yesterday') {
@@ -280,6 +290,7 @@ function applyFilters(records, filters) {
 }
 
 function isInRange(value, range) {
+  if (range.preset === 'all_time') return Boolean(value);
   if (!value) return false;
   const date = new Date(value);
   return date >= range.start && date < range.endExclusive;
@@ -352,47 +363,32 @@ function summarizeCohort(records) {
   };
 }
 
-function createChartBuckets(range) {
-  const totalDays = Math.max(1, Math.ceil((range.endExclusive - range.start) / 86400000));
-  const useMonths = totalDays > 120;
-  const useHours = totalDays === 1;
+function createSixMonthChartBuckets(nowValue = new Date()) {
+  const currentMonth = startOfMonth(nowValue);
+  const start = addMonths(currentMonth, -5);
+  const endExclusive = addMonths(currentMonth, 1);
   const buckets = [];
 
-  if (useHours) {
-    for (let hour = 0; hour < 24; hour += 1) {
-      const start = new Date(range.start);
-      start.setHours(hour, 0, 0, 0);
-      buckets.push({ key: `${formatDate(start)}T${String(hour).padStart(2, '0')}`, date: start.toISOString(), records: [] });
-    }
-  } else if (useMonths) {
-    let cursor = startOfMonth(range.start);
-    while (cursor < range.endExclusive) {
-      buckets.push({ key: formatDate(cursor).slice(0, 7), date: formatDate(cursor), records: [] });
-      cursor = addMonths(cursor, 1);
-    }
-  } else {
-    let cursor = new Date(range.start);
-    while (cursor < range.endExclusive) {
-      buckets.push({ key: formatDate(cursor), date: formatDate(cursor), records: [] });
-      cursor = addDays(cursor, 1);
-    }
+  for (let cursor = start; cursor < endExclusive; cursor = addMonths(cursor, 1)) {
+    buckets.push({
+      key: formatDate(cursor).slice(0, 7),
+      date: formatDate(cursor),
+      records: []
+    });
   }
 
-  return { buckets, useHours, useMonths };
+  return { buckets, start, endExclusive };
 }
 
-function buildPerformanceChart(records, range) {
-  const { buckets, useHours, useMonths } = createChartBuckets(range);
+function buildPerformanceChart(records, nowValue = new Date()) {
+  const { buckets, start, endExclusive } = createSixMonthChartBuckets(nowValue);
   const map = new Map(buckets.map((bucket) => [bucket.key, bucket]));
 
   records.forEach((record) => {
     const date = new Date(record.sentAt);
-    const key = useHours
-      ? `${formatDate(date)}T${String(date.getHours()).padStart(2, '0')}`
-      : useMonths
-        ? formatDate(date).slice(0, 7)
-        : formatDate(date);
-    if (map.has(key)) map.get(key).records.push(record);
+    if (Number.isNaN(date.getTime()) || date < start || date >= endExclusive) return;
+    const key = formatDate(date).slice(0, 7);
+    map.get(key)?.records.push(record);
   });
 
   return buckets.map((bucket) => ({ date: bucket.date, ...summarizeCohort(bucket.records) }));
@@ -591,7 +587,10 @@ function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
       ...summarizeCohort(cohortRecords),
       ...currentState
     },
-    performance_chart: buildPerformanceChart(cohortRecords, range),
+    // This visualization is intentionally a rolling six-month trend. Date
+    // filters continue to control the dashboard totals above it; non-date
+    // filters (rep, status, source, etc.) are still applied to the chart.
+    performance_chart: buildPerformanceChart(segmentedRecords, nowValue),
     rep_performance: buildRepPerformance(segmentedRecords, cohortRecords, nowValue),
     definitions: getDefinitions()
   };

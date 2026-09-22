@@ -57,6 +57,49 @@ test('custom date ranges include both selected calendar dates', () => {
   assert.equal(range.endExclusive.getDate(), 4);
 });
 
+test('quote analytics defaults to an unbounded all-time sent cohort', () => {
+  const range = _private.resolveDateRange({}, new Date('2026-09-18T12:00:00.000Z'));
+
+  assert.equal(range.preset, 'all_time');
+  assert.equal(_private.buildAnalyticsData([
+    {
+      quoteStatus: 'paid', quoteValue: 1000, collectedAmount: 1000,
+      outstandingAmount: 0, fullPaid: true, paymentStatus: 'paid',
+      sentAt: new Date('2024-01-10T08:00:00.000Z'), repId: 1,
+      salesRep: { id: 1, name: 'Alex', email: 'alex@example.com' },
+      shootTypeKey: '', leadSourceKey: '', customerType: 'new'
+    }
+  ], {}, new Date('2026-09-18T12:00:00.000Z')).overview.quotes_sent, 1);
+});
+
+test('performance chart always returns the rolling six calendar months', () => {
+  const now = new Date('2026-09-18T12:00:00.000Z');
+  const data = _private.buildAnalyticsData([
+    {
+      quoteStatus: 'paid', quoteValue: 1000, collectedAmount: 1000,
+      outstandingAmount: 0, fullPaid: true, paymentStatus: 'paid',
+      sentAt: new Date('2026-04-10T08:00:00.000Z'), repId: 1,
+      salesRep: { id: 1, name: 'Alex', email: 'alex@example.com' },
+      shootTypeKey: '', leadSourceKey: '', customerType: 'new'
+    },
+    {
+      quoteStatus: 'paid', quoteValue: 500, collectedAmount: 500,
+      outstandingAmount: 0, fullPaid: true, paymentStatus: 'paid',
+      sentAt: new Date('2026-09-10T08:00:00.000Z'), repId: 1,
+      salesRep: { id: 1, name: 'Alex', email: 'alex@example.com' },
+      shootTypeKey: '', leadSourceKey: '', customerType: 'new'
+    }
+  ], {}, now);
+
+  assert.equal(data.performance_chart.length, 6);
+  assert.deepEqual(data.performance_chart.map((item) => item.date), [
+    '2026-04-01', '2026-05-01', '2026-06-01',
+    '2026-07-01', '2026-08-01', '2026-09-01'
+  ]);
+  assert.equal(data.performance_chart[0].quotes_sent, 1);
+  assert.equal(data.performance_chart[5].quotes_sent, 1);
+});
+
 test('an active unpaid quote becomes overdue 48 hours after its last contact', () => {
   const now = new Date('2026-09-18T12:00:00.000Z');
   const base = {

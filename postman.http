@@ -1633,7 +1633,7 @@ GET {{URL}}sales/quotes/analytics/filters HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
-### Quote Analytics: dashboard overview (default: last 30 days)
+### Quote Analytics: dashboard overview (default: all time)
 GET {{URL}}sales/quotes/analytics HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
