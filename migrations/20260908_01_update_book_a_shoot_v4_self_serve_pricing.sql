@@ -33,7 +33,7 @@ SELECT
   'both',
   'Videography + Photography (1 person)',
   'photo-video-creator',
-  375.00,
+  350.00,
   'per_hour',
   'per hour',
   3,

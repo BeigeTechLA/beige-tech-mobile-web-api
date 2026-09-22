@@ -204,6 +204,7 @@ exports.saveQuote = async (req, res) => {
       studio_total = 0,
       studio_items = [],
       custom_add_on_items = [],
+      apply_self_serve_coverage_pricing = false,
       // 1. Extract these from the request body
       video_edit_types = [], 
       photo_edit_types = [] 
@@ -220,6 +221,7 @@ exports.saveQuote = async (req, res) => {
       customAddOnItems: custom_add_on_items,
       videoEditTypes: video_edit_types, // Pass video edits
       photoEditTypes: photo_edit_types, // Pass photo edits
+      applySelfServeCoveragePricing: apply_self_serve_coverage_pricing,
       skipDiscount: true,
       skipMargin: true
     });
@@ -562,6 +564,7 @@ exports.calculateFromCreators = async (req, res) => {
       custom_add_on_items = [],
       video_edit_types = [], // Added
       photo_edit_types = [], 
+      apply_self_serve_coverage_pricing = false,
       skip_discount = false,
       skip_margin = false,
       is_return
@@ -588,6 +591,19 @@ exports.calculateFromCreators = async (req, res) => {
       (!!video_edit_types && !Array.isArray(video_edit_types) && Object.keys(video_edit_types).length > 0) ||
       (Array.isArray(photo_edit_types) && photo_edit_types.length > 0) ||
       (!!photo_edit_types && !Array.isArray(photo_edit_types) && Object.keys(photo_edit_types).length > 0);
+
+    // Studios are priced as snapshots, rather than catalog pricing items. A
+    // studio-only booking therefore has no creator, add-on, or edit items,
+    // but is still a valid quote when it includes a selected studio.
+    const hasStudioSelections =
+      Number(studio_total) > 0 ||
+      (Array.isArray(studio_items) && studio_items.some((studio) => {
+        const total = Number(studio?.total);
+        const unitPrice = Number(studio?.unit_price);
+        const quantity = Number(studio?.quantity) || 1;
+        return (Number.isFinite(total) && total > 0) ||
+          (Number.isFinite(unitPrice) && unitPrice > 0 && quantity > 0);
+      }));
 
     const numericShootHours = Number(shoot_hours);
     const resolvedShootHours = Number.isFinite(numericShootHours) && numericShootHours > 0
@@ -711,7 +727,8 @@ exports.calculateFromCreators = async (req, res) => {
       pricingItems.length === 0 &&
       add_on_items.length === 0 &&
       custom_add_on_items.length === 0 &&
-      !hasEditSelections
+      !hasEditSelections &&
+      !hasStudioSelections
     ) {
       return res.status(400).json({
         success: false,
@@ -733,6 +750,7 @@ exports.calculateFromCreators = async (req, res) => {
       skipMargin: skip_margin,
       videoEditTypes: video_edit_types, // Sent to service
       photoEditTypes: photo_edit_types,
+      applySelfServeCoveragePricing: apply_self_serve_coverage_pricing,
     });
     
     const responsePayload = {
