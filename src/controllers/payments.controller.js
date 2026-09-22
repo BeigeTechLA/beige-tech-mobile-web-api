@@ -337,7 +337,7 @@ async function getSalesQuoteForBooking(bookingId, transaction = null) {
 
   return db.sales_quotes.findOne({
     where: { lead_id: lead.lead_id },
-    attributes: ['sales_quote_id', 'total', 'subtotal'],
+    attributes: ['sales_quote_id', 'total', 'subtotal', 'discount_amount', 'notes'],
     order: [['sales_quote_id', 'DESC']],
     transaction
   });
@@ -751,6 +751,7 @@ async function markConvertedSalesQuoteAsPaid({
   paymentIntentId = null,
   paidAmount = null,
   creditUsedAmount = 0,
+  quoteTotalOverride = null,
   transaction
 }) {
   if (!bookingId) return null;
@@ -778,7 +779,11 @@ async function markConvertedSalesQuoteAsPaid({
 
   if (!salesQuote) return null;
 
-  const quoteTotal = round2(salesQuote.total || salesQuote.subtotal || 0);
+  const quoteTotal = round2(
+    quoteTotalOverride !== null && quoteTotalOverride !== undefined
+      ? quoteTotalOverride
+      : (salesQuote.total || salesQuote.subtotal || 0)
+  );
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
   const totalPaidAmount = round2(Number(existingSummary?.paid_amount || 0) + Number(paidAmount || 0));
   const totalCreditUsedAmount = round2(Number(existingSummary?.credit_used_amount || 0) + Number(creditUsedAmount || 0));
@@ -1110,6 +1115,29 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       metadata: invoiceMetadata,
       transaction
     });
+    let normalizedReferralCode = '';
+    const metadataReferralCode = String(invoiceMetadata?.referral_code || '').trim().toUpperCase();
+    if (metadataReferralCode) {
+      const referralAffiliate = await getValidReferralAffiliate(
+        metadataReferralCode,
+        booking.user_id || null,
+        transaction
+      );
+      if (referralAffiliate) {
+        normalizedReferralCode = referralAffiliate.referral_code;
+      } else {
+        console.error(`Webhook: referral code ${metadataReferralCode} is no longer valid for booking ${booking_id}`);
+      }
+    }
+    const webhookReferralDiscountAmount = normalizedReferralCode
+      ? round2(invoiceMetadata?.referral_discount_amount || 0)
+      : 0;
+    const webhookReferralOriginalAmount = normalizedReferralCode
+      ? round2(invoiceMetadata?.referral_original_amount || 0)
+      : 0;
+    const webhookReferralSettledTotal = normalizedReferralCode
+      ? round2(invoiceMetadata?.referral_settled_total || 0)
+      : 0;
     const webhookShouldUseCredit =
       ['1', 'true', 'yes'].includes(String(invoiceMetadata?.use_credit || '').toLowerCase());
     let webhookRequestedCreditAmount = round2(invoiceMetadata?.credit_amount_used || 0);
@@ -1345,6 +1373,7 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       location: finalLocation,
       shoot_type: booking.shoot_type || null,
       notes: paymentNotes,
+      referral_code: normalizedReferralCode || null,
       status: 'succeeded'
     }, { transaction });
 
@@ -1358,6 +1387,49 @@ async function processStripePaidWebhookEvent(event, req = {}) {
         paymentId: payment.payment_id,
         paymentIntentId,
         createdByUserId: null,
+        transaction
+      });
+    }
+
+    if (normalizedReferralCode) {
+      const referralCommissionBase = getReferralCommissionBaseAmount(
+        amountPaid,
+        webhookReferralOriginalAmount
+      );
+      const referral = await affiliateController.processReferral(
+        normalizedReferralCode,
+        payment.payment_id,
+        referralCommissionBase,
+        booking.user_id || null,
+        booking.guest_email || dataObject.customer_email || dataObject.receipt_email || null,
+        transaction
+      );
+      if (referral) {
+        payment.referral_id = referral.referral_id;
+        await payment.save({ transaction });
+      }
+
+      const bookingQuote = await db.quotes.findOne({
+        where: { booking_id },
+        order: [['quote_id', 'DESC']],
+        transaction
+      });
+      const settledTotal = webhookReferralSettledTotal || round2(
+        amountPaid + Number(usedCreditEntry?.amount || 0)
+      );
+      if (bookingQuote) {
+        await persistQuoteReferralDiscount({
+          quote: bookingQuote,
+          referralCode: normalizedReferralCode,
+          paidTotal: settledTotal,
+          transaction
+        });
+      }
+      await persistSalesQuoteReferralDiscount({
+        bookingId: booking_id,
+        referralCode: normalizedReferralCode,
+        paidTotal: settledTotal,
+        referralDiscountAmount: webhookReferralDiscountAmount,
         transaction
       });
     }
@@ -1376,12 +1448,14 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       paymentIntentId,
       paidAmount: amountPaid,
       creditUsedAmount: usedCreditEntry?.amount || 0,
+      quoteTotalOverride: webhookReferralSettledTotal || null,
       transaction
     });
 
     await saveStripePaymentSummary({
       bookingId: booking_id,
       salesQuoteId,
+      quoteTotal: webhookReferralSettledTotal || null,
       amountPaid,
       creditUsedAmount: usedCreditEntry?.amount || 0,
       transaction
@@ -1399,6 +1473,7 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     const reconciledPaymentState = await reconcileBookingPaymentSummaryFromReceipts({
       booking,
       bookingId: booking_id,
+      quoteTotal: webhookReferralSettledTotal || null,
       salesQuoteId,
       latestPaymentId: payment.payment_id,
       transaction
@@ -1698,6 +1773,42 @@ async function persistQuoteReferralDiscount({
       transaction
     }
   );
+}
+
+async function persistSalesQuoteReferralDiscount({
+  bookingId,
+  referralCode,
+  paidTotal,
+  referralDiscountAmount = null,
+  transaction
+}) {
+  if (!bookingId || !referralCode) return null;
+
+  const salesQuote = await getSalesQuoteForBooking(bookingId, transaction);
+  if (!salesQuote) return null;
+
+  const normalizedPaidTotal = round2(paidTotal || 0);
+  const currentTotal = round2(salesQuote.total || salesQuote.subtotal || 0);
+  const computedDiscount = round2(
+    referralDiscountAmount !== null && referralDiscountAmount !== undefined
+      ? referralDiscountAmount
+      : Math.max(currentTotal - normalizedPaidTotal, 0)
+  );
+  const existingNotes = String(salesQuote.notes || '').trim();
+  const referralMarker = `Referral applied (${referralCode})`;
+  const hasReferralNote = existingNotes.includes(referralMarker);
+
+  await salesQuote.update({
+    total: normalizedPaidTotal,
+    ...(!hasReferralNote ? {
+      discount_amount: round2(Number(salesQuote.discount_amount || 0) + computedDiscount),
+      notes: existingNotes
+        ? `${existingNotes}\n${referralMarker}: -$${computedDiscount.toFixed(2)} (${REFERRAL_DISCOUNT_PERCENT}%)`
+        : `${referralMarker}: -$${computedDiscount.toFixed(2)} (${REFERRAL_DISCOUNT_PERCENT}%)`
+    } : {})
+  }, { transaction });
+
+  return salesQuote;
 }
 
 async function getValidReferralAffiliate(referralCode, referredUserId = null, transaction = null) {
@@ -2738,6 +2849,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       booking_id,
       amount,
       guest_email,
+      referral_code,
       payment_source,
       use_credit,
       credit_amount_used,
@@ -2789,22 +2901,65 @@ exports.createPaymentIntentMulti = async (req, res) => {
         });
       }
     }
+    const authoritativeQuote = await getSalesQuoteForBooking(booking_id);
+    const fallbackBookingQuote = authoritativeQuote
+      ? null
+      : await db.quotes.findOne({
+          where: { booking_id },
+          attributes: ['total', 'price_after_discount', 'subtotal'],
+          order: [['quote_id', 'DESC']]
+        });
+    const authoritativeQuoteTotal = round2(
+      authoritativeQuote?.total ||
+      authoritativeQuote?.subtotal ||
+      fallbackBookingQuote?.total ||
+      fallbackBookingQuote?.price_after_discount ||
+      fallbackBookingQuote?.subtotal ||
+      amount ||
+      0
+    );
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
-      quoteTotal: amount,
+      quoteTotal: authoritativeQuoteTotal,
       transaction: null
     });
     const linkRequestedAmount = paymentLink?.requested_amount
       ? round2(paymentLink.requested_amount)
       : null;
     const requestedAmount = linkRequestedAmount || round2(amount || 0);
-    const amountToCharge = paymentState.hasSummary
-      ? (
-        requestedAmount > 0
-          ? round2(Math.min(requestedAmount, paymentState.payableAmount))
-          : round2(Math.max(paymentState.payableAmount - requestedCreditAmount, 0))
-      )
-      : requestedAmount;
+    let normalizedReferralCode = '';
+    let referralDiscountAmount = 0;
+    let referralOriginalAmount = 0;
+    let referralSettledTotal = 0;
+
+    if (referral_code) {
+      const referralAffiliate = await getValidReferralAffiliate(
+        referral_code,
+        booking.user_id || req.userId || null
+      );
+      if (!referralAffiliate) {
+        return res.status(400).json({ success: false, message: 'Invalid referral code' });
+      }
+
+      normalizedReferralCode = referralAffiliate.referral_code;
+      referralOriginalAmount = round2(
+        linkRequestedAmount ||
+        (paymentState.hasSummary ? paymentState.payableAmount : authoritativeQuoteTotal)
+      );
+      const referralPricing = applyReferralDiscount(referralOriginalAmount);
+      referralDiscountAmount = referralPricing.discountAmount;
+      referralSettledTotal = referralPricing.finalAmount;
+    }
+
+    const amountToCharge = normalizedReferralCode
+      ? round2(Math.max(referralSettledTotal - requestedCreditAmount, 0))
+      : paymentState.hasSummary
+        ? (
+          requestedAmount > 0
+            ? round2(Math.min(requestedAmount, paymentState.payableAmount))
+            : round2(Math.max(paymentState.payableAmount - requestedCreditAmount, 0))
+        )
+        : requestedAmount;
 
     // A positive client request must never be converted into a free checkout.
     // If the authoritative booking summary says there is no balance, stop and
@@ -2859,6 +3014,11 @@ exports.createPaymentIntentMulti = async (req, res) => {
       guest_email: guest_email || booking.guest_email || '',
       type: 'multi-creator',
       shoot_name: booking.shoot_name || '',
+      referral_code: normalizedReferralCode,
+      referral_discount_percent: normalizedReferralCode ? String(REFERRAL_DISCOUNT_PERCENT) : '0',
+      referral_discount_amount: normalizedReferralCode ? String(referralDiscountAmount) : '0',
+      referral_original_amount: normalizedReferralCode ? String(referralOriginalAmount) : '0',
+      referral_settled_total: normalizedReferralCode ? String(referralSettledTotal) : '0',
       use_credit: shouldUseCredit ? '1' : '0',
       credit_amount_used: shouldUseCredit ? String(requestedCreditAmount) : '0',
       payment_link_token: payment_link_token || '',
@@ -2966,7 +3126,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       ? (paymentState.isPaid || paymentState.dueAmount <= 0.009)
       : bookingAlreadyPaid;
     const payableAmount = paymentState.hasSummary ? paymentState.payableAmount : quoteTotal;
-    const isCreditCoveredCheckout =
+    let isCreditCoveredCheckout =
       shouldUseCredit &&
       requestedCreditAmount > 0 &&
       round2(payableAmount - requestedCreditAmount) <= 0;
@@ -2987,6 +3147,11 @@ exports.confirmPaymentMulti = async (req, res) => {
         });
       }
       normalizedReferralCode = referralAffiliate.referral_code;
+      const referralPayableAmount = applyReferralDiscount(payableAmount).finalAmount;
+      isCreditCoveredCheckout =
+        shouldUseCredit &&
+        requestedCreditAmount > 0 &&
+        round2(referralPayableAmount - requestedCreditAmount) <= 0;
     }
 
     let totalAmount = 0;
@@ -3274,6 +3439,9 @@ exports.confirmPaymentMulti = async (req, res) => {
         transaction
       });
     }
+    const referralSettledQuoteTotal = normalizedReferralCode
+      ? round2(totalAmount + Number(usedCreditEntry?.amount || 0))
+      : quoteTotal;
 
     // 7. Process referral commissions
     let primaryReferral = null;
@@ -3281,7 +3449,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       try {
         const commissionBaseAmount = getReferralCommissionBaseAmount(
           totalAmount,
-          booking.primary_quote?.total
+          quoteTotal || booking.primary_quote?.total
         );
         const referral = await affiliateController.processReferral(
           normalizedReferralCode,
@@ -3310,7 +3478,16 @@ exports.confirmPaymentMulti = async (req, res) => {
       await persistQuoteReferralDiscount({
         quote: booking.primary_quote,
         referralCode: normalizedReferralCode,
-        paidTotal: totalAmount,
+        paidTotal: referralSettledQuoteTotal,
+        transaction
+      });
+    }
+    if (normalizedReferralCode) {
+      await persistSalesQuoteReferralDiscount({
+        bookingId: booking_id,
+        referralCode: normalizedReferralCode,
+        paidTotal: referralSettledQuoteTotal,
+        referralDiscountAmount: Math.max(round2(quoteTotal - referralSettledQuoteTotal), 0),
         transaction
       });
     }
@@ -3365,13 +3542,15 @@ exports.confirmPaymentMulti = async (req, res) => {
       paymentId: payment.payment_id,
       paymentIntentId,
       paidAmount: totalAmount,
+      creditUsedAmount: usedCreditEntry?.amount || 0,
+      quoteTotalOverride: normalizedReferralCode ? referralSettledQuoteTotal : null,
       transaction
     });
 
     await saveStripePaymentSummary({
       bookingId: booking_id,
       salesQuoteId,
-      quoteTotal,
+      quoteTotal: referralSettledQuoteTotal,
       amountPaid: totalAmount,
       creditUsedAmount: usedCreditEntry?.amount || 0,
       transaction
@@ -3379,7 +3558,7 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     const updatedPaymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
-      quoteTotal,
+      quoteTotal: referralSettledQuoteTotal,
       transaction
     });
     const isFullyPaid = updatedPaymentState.isPaid || updatedPaymentState.dueAmount <= 0.009;
@@ -3396,7 +3575,7 @@ exports.confirmPaymentMulti = async (req, res) => {
     const reconciledPaymentState = await reconcileBookingPaymentSummaryFromReceipts({
       booking,
       bookingId: booking_id,
-      quoteTotal,
+      quoteTotal: referralSettledQuoteTotal,
       salesQuoteId,
       latestPaymentId: payment.payment_id,
       transaction
