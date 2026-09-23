@@ -21,8 +21,8 @@ const DATE_PRESETS = [
 const SENT_STATUSES = new Set(['sent', 'viewed', 'accepted', 'partially_paid', 'paid', 'rejected']);
 const ACTIVE_STATUSES = new Set(['sent', 'viewed', 'accepted', 'partially_paid']);
 const FULLY_PAID_STATUSES = new Set(['paid', 'no_payment_due', 'completed', 'success', 'succeeded']);
-const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
-const PAYMENT_STATUSES = ['unpaid', 'partially_paid', 'paid', 'refunded'];
+const QUOTE_STATUSES = ['accepted', 'draft', 'pending', 'rejected', 'sent', 'partially_paid', 'expired'];
+const PAYMENT_STATUSES = ['unpaid', 'partially_paid', 'paid'];
 const CUSTOMER_TYPES = ['new', 'returning'];
 const OVERDUE_HOURS = 48;
 
@@ -173,7 +173,7 @@ function parseNumberCsv(value, fieldName) {
 function normalizeFilterQuery(query = {}) {
   return {
     salesRepIds: parseNumberCsv(query.sales_rep_id, 'sales_rep_id'),
-    shootTypes: parseCsv(query.shoot_type),
+    services: parseCsv(query.service),
     quoteStatuses: parseCsv(query.quote_status),
     paymentStatuses: parseCsv(query.payment_status),
     leadSources: parseCsv(query.lead_source),
@@ -280,7 +280,7 @@ function resolvePaymentState({ quote, paymentSummary = null, invoiceHistory = nu
 function applyFilters(records, filters) {
   return records.filter((record) => {
     if (filters.salesRepIds.length && !filters.salesRepIds.includes(record.repId)) return false;
-    if (filters.shootTypes.length && !filters.shootTypes.includes(record.shootTypeKey)) return false;
+    if (filters.services.length && !record.serviceKeys.some((key) => filters.services.includes(key))) return false;  
     if (filters.quoteStatuses.length && !filters.quoteStatuses.includes(record.quoteStatus)) return false;
     if (filters.paymentStatuses.length && !filters.paymentStatuses.includes(record.paymentStatus)) return false;
     if (filters.leadSources.length && !filters.leadSources.includes(record.leadSourceKey)) return false;
@@ -465,8 +465,7 @@ async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
 
   const quoteIds = quotes.map((quote) => Number(quote.sales_quote_id));
   const leadIds = Array.from(new Set(quotes.map((quote) => Number(quote.lead_id || 0)).filter(Boolean)));
-  const [summaryRows, invoiceRows, leadRows, activityRows] = await Promise.all([
-    db.sequelize.query(
+  const [summaryRows, invoiceRows, leadRows, activityRows, serviceLineItems] = await Promise.all([    db.sequelize.query(
       `SELECT * FROM booking_payment_summary
        WHERE sales_quote_id IN (:quoteIds)
        ORDER BY updated_at DESC, booking_payment_summary_id DESC`,
@@ -490,7 +489,12 @@ async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
           order: [['created_at', 'DESC']],
           raw: true
         })
-      : []
+      : [],
+    db.sales_quote_line_items.findAll({
+      where: { sales_quote_id: { [Op.in]: quoteIds }, section_type: 'service' },
+      attributes: ['sales_quote_id', 'catalog_item_id', 'item_name'],
+      raw: true
+    })
   ]);
 
   const summariesByQuote = new Map();
@@ -517,8 +521,16 @@ async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
     }
   });
 
-  const earliestSentByCustomer = new Map();
-  quotes.forEach((quote) => {
+  const servicesByQuote = new Map();
+  serviceLineItems.forEach((item) => {
+    const quoteId = Number(item.sales_quote_id || 0);
+    const name = String(item.item_name || '').trim();
+    if (!quoteId || !name) return;
+    if (!servicesByQuote.has(quoteId)) servicesByQuote.set(quoteId, []);
+    servicesByQuote.get(quoteId).push(name);
+  });
+
+  const earliestSentByCustomer = new Map();  quotes.forEach((quote) => {
     const sentAt = getQuoteSentAt(quote);
     if (!sentAt) return;
     const key = getCustomerKey(quote);
@@ -539,7 +551,7 @@ async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
       paymentActivities: paymentActivitiesByLead.get(leadId) || []
     });
     const salesRep = quote.assigned_sales_rep || quote.created_by || null;
-    const shootType = String(quote.video_shoot_type || '').trim();
+    const services = servicesByQuote.get(quoteId) || [];
     const leadSource = String(lead?.lead_source || '').trim();
     const lastContactedAt = latestContactByLead.get(leadId) || lead?.contacted_sales_at || null;
 
@@ -551,8 +563,8 @@ async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
       sentAt,
       repId: getQuoteRepId(quote),
       salesRep,
-      shootType,
-      shootTypeKey: shootType.toLowerCase(),
+      services,
+      serviceKeys: services.map((name) => name.trim().toLowerCase()),
       leadSource,
       leadSourceKey: leadSource.toLowerCase(),
       customerType: sentAt && customerFirstSent && sentAt.getTime() > customerFirstSent.getTime() ? 'returning' : 'new',
@@ -577,7 +589,7 @@ function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
       start_date: range.start_date,
       end_date: range.end_date,
       sales_rep_id: filters.salesRepIds,
-      shoot_type: filters.shootTypes,
+      service: filters.services,
       quote_status: filters.quoteStatuses,
       payment_status: filters.paymentStatuses,
       lead_source: filters.leadSources,
@@ -616,13 +628,17 @@ function uniqueOptions(records, key, labelKey = key) {
 async function getAnalyticsFilters(user) {
   await expireQuotesPastValidUntil();
   const isClient = String(user?.role || '').trim().toLowerCase().replace(/\s+/g, '_') === 'client';
-  const [records, activeSalesReps] = await Promise.all([
+  const [records, activeSalesReps, activeServiceItems] = await Promise.all([
     loadAnalyticsRecords(user),
     isClient
       ? Promise.resolve([])
-      : leadAssignmentService.getActiveSalesReps({ attributes: ['id', 'name', 'email'] })
-  ]);
-  const reps = new Map();
+      : leadAssignmentService.getActiveSalesReps({ attributes: ['id', 'name', 'email'] }),
+    db.quote_catalog_items.findAll({
+      where: { is_active: 1, section_type: 'service' },
+      attributes: ['catalog_item_id', 'name'],
+      order: [['display_order', 'ASC'], ['catalog_item_id', 'ASC']]
+    })
+  ]);  const reps = new Map();
   activeSalesReps.map(toPlain).forEach((rep) => {
     reps.set(Number(rep.id), {
       id: Number(rep.id),
@@ -641,10 +657,12 @@ async function getAnalyticsFilters(user) {
   });
 
   return {
-    sales_reps: Array.from(reps.values()).sort((left, right) => left.name.localeCompare(right.name)),
-    shoot_types: uniqueOptions(records, 'shootType'),
-    quote_statuses: QUOTE_STATUSES.map((value) => ({ value, label: value.replace(/_/g, ' ') })),
-    payment_statuses: PAYMENT_STATUSES.map((value) => ({ value, label: value.replace(/_/g, ' ') })),
+     sales_reps: Array.from(reps.values()).sort((left, right) => left.name.localeCompare(right.name)),
+    services: activeServiceItems.map(toPlain).map((item) => ({
+      value: item.name.trim().toLowerCase(),
+      label: item.name
+    })),
+    quote_statuses: QUOTE_STATUSES.map((value) => ({ value, label: value.replace(/_/g, ' ') })),    payment_statuses: PAYMENT_STATUSES.map((value) => ({ value, label: value.replace(/_/g, ' ') })),
     lead_sources: uniqueOptions(records, 'leadSource'),
     customer_types: CUSTOMER_TYPES.map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) })),
     date_presets: DATE_PRESETS.map((value) => ({ value, label: value.replace(/_/g, ' ') }))
@@ -711,7 +729,7 @@ function toQuoteCard(record, nowValue = new Date()) {
     quote_status: record.quoteStatus,
     payment_status: record.paymentStatus,
     lead_source: record.leadSource || null,
-    shoot_type: record.shootType || null,
+    service: record.services && record.services.length ? record.services.join(', ') : null,
     sales_rep: record.salesRep ? {
       id: record.repId,
       name: record.salesRep.name || null,
@@ -734,10 +752,12 @@ async function listAnalyticsQuotes(query, user) {
     throw badRequest('bucket must be open_pipeline, overdue_follow_ups, or deals_won');
   }
 
+ const wantsAll = String(query.limit || '').trim().toLowerCase() === 'all';
   const page = Math.max(1, Number(query.page || 1));
-  const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-  if (!Number.isInteger(page) || !Number.isInteger(limit)) throw badRequest('page and limit must be integers');
-
+  const limit = wantsAll ? null : Math.min(100, Math.max(1, Number(query.limit || 20)));
+  if (!wantsAll && (!Number.isInteger(page) || !Number.isInteger(limit))) {
+    throw badRequest('page and limit must be integers');
+  }
   const nowValue = new Date();
   const records = await loadAnalyticsRecords(user, nowValue);
   const range = resolveDateRange(query, nowValue);
@@ -760,17 +780,17 @@ async function listAnalyticsQuotes(query, user) {
     matching = matching.filter((record) => isOverdue(record, nowValue));
   }
 
-  matching.sort((left, right) => new Date(right.sentAt || 0) - new Date(left.sentAt || 0));
-  const offset = (page - 1) * limit;
+matching.sort((left, right) => new Date(right.sentAt || 0) - new Date(left.sentAt || 0));
+  const rows = wantsAll ? matching : matching.slice((page - 1) * limit, (page - 1) * limit + limit);
   return {
     bucket,
     pagination: {
-      page,
-      limit,
+      page: wantsAll ? 1 : page,
+      limit: wantsAll ? matching.length : limit,
       total: matching.length,
-      total_pages: Math.ceil(matching.length / limit)
+      total_pages: wantsAll ? 1 : Math.ceil(matching.length / limit)
     },
-    rows: matching.slice(offset, offset + limit).map((record) => toQuoteCard(record, nowValue))
+    rows: rows.map((record) => toQuoteCard(record, nowValue))
   };
 }
 
