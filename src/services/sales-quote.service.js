@@ -4002,6 +4002,9 @@ async function syncConvertedQuoteArtifacts({
   const wasAlreadyConverted = Boolean(lead && booking);
   const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
   const bookingDateTimeValues = resolveBookingDateTimeValues(prefillData);
+  // An explicit quote acceptance/conversion creates a real shoot, not a draft.
+  // Payment-only flows can still create a draft until a payment is recorded.
+  const shouldFinalizeBooking = Boolean(markQuoteAccepted);
 
   if (!booking) {
     booking = await db.stream_project_booking.create({
@@ -4031,7 +4034,7 @@ async function syncConvertedQuoteArtifacts({
       video_edit_types: prefillData.video_edit_types,
       photo_edit_types: prefillData.photo_edit_types,
       special_instructions: prefillData.special_instructions,
-      is_draft: 1,
+      is_draft: shouldFinalizeBooking ? 0 : 1,
       is_completed: 0,
       is_cancelled: 0,
       is_active: 1
@@ -4067,7 +4070,8 @@ async function syncConvertedQuoteArtifacts({
       video_edit_types: prefillData.video_edit_types?.length ? prefillData.video_edit_types : booking.video_edit_types,
       photo_edit_types: prefillData.photo_edit_types?.length ? prefillData.photo_edit_types : booking.photo_edit_types,
       special_instructions: prefillData.special_instructions || booking.special_instructions || null,
-      is_active: 1
+      is_active: 1,
+      ...(shouldFinalizeBooking ? { is_draft: 0 } : {})
     }, { transaction });
   }
 
@@ -6836,6 +6840,27 @@ async function getQuoteDashboard(query, user) {
 async function updateQuoteStatus(salesQuoteId, status, user) {
   if (!QUOTE_STATUSES.includes(status)) {
     throw new Error('Invalid quote status');
+  }
+
+  // Never mark a quote accepted without creating/finalizing its booking.  The
+  // public and signature acceptance paths already use acceptQuoteById; route
+  // this administrative status-update path through it as well.
+  if (status === 'accepted') {
+    const accessibleQuote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      attributes: ['sales_quote_id']
+    });
+
+    if (!accessibleQuote) {
+      throw new Error('Quote not found');
+    }
+
+    return acceptQuoteById(salesQuoteId, {
+      activityMessage: 'Quote accepted by administrator',
+      activitySource: 'admin_status_update',
+      sendSalesEmail: true,
+      convertToBooking: true
+    });
   }
 
   const transaction = await db.sequelize.transaction();

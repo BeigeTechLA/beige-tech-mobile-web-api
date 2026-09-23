@@ -4787,6 +4787,18 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   }
   await lead.update(leadUpdate);
 
+  // A verified manual payment means this is a live booking.  Converted quotes
+  // can originate as payment-flow drafts, so finalize the booking here as well
+  // and make sure it is eligible for the Shoots module.
+  if (!isNet30Mode && amountToApply > 0) {
+    await stream_project_booking.update({
+      is_active: 1,
+      is_draft: 0,
+    }, {
+      where: { stream_project_booking_id: bookingId }
+    });
+  }
+
   const externalWorkspaceSync = await syncExternalWorkspaceAfterManualPayment(lead.booking);
   if (!isNet30Mode && amountToApply > 0) {
     const quoteCreatorRecipient = await getManualPaymentQuoteCreatorRecipient(resolvedSalesQuoteId);
