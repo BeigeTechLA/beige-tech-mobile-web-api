@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 const creator = require('../controllers/creator.contoller');
+const creatorCalendar = require('../controllers/creator-calendar.controller');
 const { checkCreatorVerification } = require('../middleware/creatorVerification');
 const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
@@ -52,6 +53,17 @@ router.post('/upcoming-accepted-project', authenticate, crewAvailabilityOrReques
 router.post('/accepted-shoots', authenticate, crewRequestShootsView, creator.getAcceptedShootsByCrew);
 router.post('/availability', authenticate, adminSalesRepresentativeAvailabilityView, creator.getCrewAvailability);
 router.post('/add-availability', authenticate, crewAvailabilityCreate, creator.setCrewAvailability);
+router.get('/availability-rules', authenticate, adminSalesRepresentativeAvailabilityView, creatorCalendar.getAvailabilityRules);
+router.put('/availability-rules', authenticate, crewAvailabilityCreate, creatorCalendar.replaceAvailabilityRules);
+router.get('/availability-blocks', authenticate, adminSalesRepresentativeAvailabilityView, creatorCalendar.getAvailabilityBlocks);
+router.post('/availability-blocks', authenticate, crewAvailabilityCreate, creatorCalendar.createManualBlock);
+router.delete('/availability-blocks/:id', authenticate, crewAvailabilityCreate, creatorCalendar.deleteManualBlock);
+router.post('/availability/calculate', authenticate, adminSalesRepresentativeAvailabilityView, creatorCalendar.getCalculatedAvailability);
+router.get('/calendar/google/status', authenticate, adminSalesRepresentativeAvailabilityView, creatorCalendar.getGoogleStatus);
+router.post('/calendar/google/connect', authenticate, crewAvailabilityCreate, creatorCalendar.startGoogleConnect);
+router.get('/calendar/google/callback', creatorCalendar.handleGoogleCallback);
+router.post('/calendar/google/sync', authenticate, crewAvailabilityCreate, creatorCalendar.syncGoogle);
+router.delete('/calendar/google', authenticate, crewAvailabilityCreate, creatorCalendar.disconnectGoogle);
 router.post('/status-count', authenticate, adminSalesRepresentativeView, creator.getDashboardRequestCounts);
 router.post('/get-crew-equipment', creator.getEquipmentOwnedByCrewMember);
 router.post('/get-crew-equipment-count', creator.getCrewEquipmentCounts);
