@@ -865,6 +865,7 @@ const matchShootStatusFilter = (booking, rawStatus) => {
   const today = getTodayDateOnlyString();
   const isCancelled = Number(booking?.is_cancelled || 0) === 1;
   const isDraft = Number(booking?.is_draft || 0) === 1;
+  const isDeleted = Number(booking?.is_active) === 0;
   const isFutureEvent = eventDate ? eventDate > today : false;
   const isTodayEvent = eventDate ? eventDate === today : false;
   const isPastEvent = eventDate ? eventDate < today : false;
@@ -889,6 +890,8 @@ const matchShootStatusFilter = (booking, rawStatus) => {
       return ![3, 4, 5].includes(bookingStatus) && isFutureEvent;
     case 'draft':
       return isDraft;
+    case 'deleted':
+      return isDeleted;
     default:
       return null;
   }
@@ -3910,6 +3913,7 @@ exports.updateProjectName = async (req, res) => {
 exports.getAllProjectDetails = async (req, res) => {
   try {
     let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only, board_view } = req.query;
+    const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
     const today = new Date();
     const isBoardView = String(board_view || '').toLowerCase() === 'true' || String(board_view) === '1';
     if (isBoardView) {
@@ -4130,7 +4134,7 @@ exports.getAllProjectDetails = async (req, res) => {
     ]));
 
     const paidOnlyFilter = {
-      is_active: 1,
+      is_active: isDeletedStatus ? 0 : 1,
       ...clientProjectFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
@@ -4810,6 +4814,7 @@ exports.exportShootsCsv = async (req, res) => {
       cp_assignment,
       production_filter,
     } = req.query;
+    const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
 
     const hasStartDate = Boolean(start_date);
     const hasEndDate = Boolean(end_date);
@@ -4956,7 +4961,7 @@ exports.exportShootsCsv = async (req, res) => {
     ]));
 
     const paidOnlyFilter = {
-      is_active: 1,
+      is_active: isDeletedStatus ? 0 : 1,
       ...clientProjectFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
@@ -11856,10 +11861,12 @@ exports.convertClientToCreativePartner = async (req, res) => {
 };
 
 exports.deleteProject = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
   try {
     const { project_id } = req.params;
 
     if (!project_id) {
+      await transaction.rollback();
       return res.status(400).json({
         success: false,
         message: 'Project ID is required'
@@ -11867,21 +11874,51 @@ exports.deleteProject = async (req, res) => {
     }
 
     const project = await stream_project_booking.findOne({
-      where: { stream_project_booking_id: project_id }
+      where: { stream_project_booking_id: project_id },
+      transaction
     });
 
     if (!project) {
+      await transaction.rollback();
       return res.status(404).json({
         success: false,
         message: 'Project not found'
       });
     }
 
-    await assigned_crew.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
-    await assigned_equipment.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
-    await assigned_post_production_member.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
+    if (Number(project.is_active) === 0) {
+      await transaction.rollback();
+      return res.status(409).json({
+        success: false,
+        message: 'Project is already deleted'
+      });
+    }
 
-    await project.update({ is_active: 0 });
+    const actor = await getRequestActor(req);
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    await assigned_crew.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id }, transaction });
+    await assigned_equipment.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id }, transaction });
+    await assigned_post_production_member.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id }, transaction });
+
+    await project.update({ is_active: 0, updated_by: actor.id }, { transaction });
+    await user_archive_history.create({
+      target_type: 'shoot',
+      target_id: project.stream_project_booking_id,
+      user_id: null,
+      action: 'deleted',
+      reason: 'Shoot deleted',
+      performed_by_user_id: actor.id,
+      performed_by_name: actor.name,
+      performed_by_role: actor.role,
+      previous_status: 'active',
+      new_status: 'deleted'
+    }, { transaction });
+
+    await transaction.commit();
 
     return res.status(200).json({
       success: true,
@@ -11889,12 +11926,110 @@ exports.deleteProject = async (req, res) => {
     });
 
   } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
     console.error('Error deleting project:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error during project deletion',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+exports.restoreProject = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const { project_id } = req.params;
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      transaction
+    });
+
+    if (!project) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Project not found' });
+    }
+
+    if (Number(project.is_active) === 1) {
+      await transaction.rollback();
+      return res.status(409).json({ success: false, message: 'Project is already active' });
+    }
+
+    const actor = await getRequestActor(req);
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    await project.update({ is_active: 1 }, { transaction });
+    await user_archive_history.create({
+      target_type: 'shoot',
+      target_id: project.stream_project_booking_id,
+      user_id: null,
+      action: 'restored',
+      reason: 'Shoot restored',
+      performed_by_user_id: actor.id,
+      performed_by_name: actor.name,
+      performed_by_role: actor.role,
+      previous_status: 'deleted',
+      new_status: 'active'
+    }, { transaction });
+
+    await transaction.commit();
+    return res.status(200).json({ success: true, message: 'Project restored successfully' });
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    console.error('Error restoring project:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during project restoration',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.getProjectHistory = async (req, res) => {
+  try {
+    const { project_id } = req.params;
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      attributes: ['stream_project_booking_id', 'project_name', 'is_active'],
+      raw: true
+    });
+
+    if (!project) {
+      return res.status(404).json({ success: false, message: 'Project not found' });
+    }
+
+    const history = await user_archive_history.findAll({
+      where: {
+        target_type: 'shoot',
+        target_id: project.stream_project_booking_id,
+        action: { [Op.in]: ['deleted', 'restored'] }
+      },
+      order: [['created_at', 'DESC']],
+      raw: true
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        project: {
+          id: project.stream_project_booking_id,
+          project_name: project.project_name,
+          is_active: Number(project.is_active) === 1
+        },
+        history: history.map((entry) => ({
+          history_id: entry.history_id,
+          action: entry.action,
+          performed_by_name: entry.performed_by_name,
+          created_at: entry.created_at
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching project history:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch project history' });
   }
 };
 
