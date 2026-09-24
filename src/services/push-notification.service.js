@@ -21,8 +21,19 @@ const normalizeString = (value) => {
 const resolveFcmRecipientAliases = async ({ userId, appUserType }) => {
   if (String(appUserType || "").trim() !== "2" || !db.crew_members || !userId) return [];
 
+  const user = await modelUsers.findByPk(userId, {
+    attributes: ["email"],
+    raw: true,
+  });
+  const email = normalizeString(user?.email)?.toLowerCase();
+  const identityConditions = [{ user_id: userId }];
+  if (email) identityConditions.push({ email });
+
   const crewMembers = await db.crew_members.findAll({
-    where: { user_id: userId, is_active: 1 },
+    where: {
+      is_active: 1,
+      [db.Sequelize.Op.or]: identityConditions,
+    },
     attributes: ["crew_member_id"],
     raw: true,
   });
