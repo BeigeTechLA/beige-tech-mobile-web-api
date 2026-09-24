@@ -18,6 +18,20 @@ const normalizeString = (value) => {
   return text || null;
 };
 
+const resolveFcmRecipientAliases = async ({ userId, appUserType }) => {
+  if (String(appUserType || "").trim() !== "2" || !db.crew_members || !userId) return [];
+
+  const crewMembers = await db.crew_members.findAll({
+    where: { user_id: userId, is_active: 1 },
+    attributes: ["crew_member_id"],
+    raw: true,
+  });
+
+  return [...new Set(crewMembers
+    .map((crewMember) => normalizeString(crewMember.crew_member_id))
+    .filter((crewMemberId) => crewMemberId && crewMemberId !== String(userId)))];
+};
+
 const normalizeBoolean = (value, fallback = true) => {
   if (value == null) return fallback;
   if (typeof value === 'boolean') return value;
@@ -312,6 +326,8 @@ exports.saveUserFcmToken = async ({
     throw error;
   }
 
+  const recipientIds = await resolveFcmRecipientAliases({ userId, appUserType });
+
   const result = await callThirdPartyPushApi({
     method: 'POST',
     path: '/v1/internal/push/tokens',
@@ -321,6 +337,7 @@ exports.saveUserFcmToken = async ({
       session_id: normalizeString(sessionId),
       device_type: normalizedDeviceType,
       app_user_type: appUserType,
+      recipient_ids: recipientIds,
       notification_preferences: notificationPreferences || undefined,
     },
   });
