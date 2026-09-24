@@ -1099,7 +1099,7 @@ const sendChatPushNotifications = async ({
         referenceType: 'chat_room',
         payload,
         actionLabel: 'View message',
-        sendPush: false,
+        sendPush: true,
       });
     }));
 

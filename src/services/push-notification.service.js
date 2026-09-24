@@ -555,7 +555,6 @@ exports.sendPushToUser = async ({
     throw error;
   }
 
-  /*
   return callThirdPartyPushApi({
     method: 'POST',
     path: '/v1/internal/push/send',
@@ -566,7 +565,4 @@ exports.sendPushToUser = async ({
       data,
     },
   });
-  */
-
-  return null;
 };
