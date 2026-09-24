@@ -19,7 +19,8 @@ const normalizeString = (value) => {
 };
 
 const resolveFcmRecipientAliases = async ({ userId, appUserType }) => {
-  if (String(appUserType || "").trim() !== "2" || !db.crew_members || !userId) return [];
+  const normalizedAppUserType = String(appUserType || "").trim();
+  if (!userId || !["2", "3"].includes(normalizedAppUserType)) return [];
 
   const user = await modelUsers.findByPk(userId, {
     attributes: ["email"],
@@ -29,18 +30,22 @@ const resolveFcmRecipientAliases = async ({ userId, appUserType }) => {
   const identityConditions = [{ user_id: userId }];
   if (email) identityConditions.push({ email });
 
-  const crewMembers = await db.crew_members.findAll({
+  const profileModel = normalizedAppUserType === "2" ? db.crew_members : db.clients;
+  const profileIdField = normalizedAppUserType === "2" ? "crew_member_id" : "client_id";
+  if (!profileModel) return [];
+
+  const profiles = await profileModel.findAll({
     where: {
       is_active: 1,
       [db.Sequelize.Op.or]: identityConditions,
     },
-    attributes: ["crew_member_id"],
+    attributes: [profileIdField],
     raw: true,
   });
 
-  return [...new Set(crewMembers
-    .map((crewMember) => normalizeString(crewMember.crew_member_id))
-    .filter((crewMemberId) => crewMemberId && crewMemberId !== String(userId)))];
+  return [...new Set(profiles
+    .map((profile) => normalizeString(profile[profileIdField]))
+    .filter((profileId) => profileId && profileId !== String(userId)))];
 };
 
 const normalizeBoolean = (value, fallback = true) => {
