@@ -2853,7 +2853,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
       payment_source,
       use_credit,
       credit_amount_used,
-      payment_link_token
+      payment_link_token,
+      apply_card_processing_fee
     } = req.body;
     const shouldUseCredit = Boolean(use_credit);
     const requestedCreditAmount = round2(credit_amount_used || 0);
@@ -2874,6 +2875,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
         message: 'Booking not found'
       });
     }
+    const bookingHasCardProcessingFee = /card processing fee:\s*4%/i.test(String(booking.special_instructions || ""));
+    const shouldApplyCardProcessingFee = bookingHasCardProcessingFee && Boolean(apply_card_processing_fee);
     let paymentLink = null;
     if (payment_link_token) {
       paymentLink = await db.payment_links.findOne({
@@ -2951,7 +2954,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       referralSettledTotal = referralPricing.finalAmount;
     }
 
-    const amountToCharge = normalizedReferralCode
+    const baseAmountToCharge = normalizedReferralCode
       ? round2(Math.max(referralSettledTotal - requestedCreditAmount, 0))
       : paymentState.hasSummary
         ? (
@@ -2960,6 +2963,10 @@ exports.createPaymentIntentMulti = async (req, res) => {
             : round2(Math.max(paymentState.payableAmount - requestedCreditAmount, 0))
         )
         : requestedAmount;
+    const cardProcessingFee = shouldApplyCardProcessingFee
+      ? round2(baseAmountToCharge * 0.04)
+      : 0;
+    const amountToCharge = round2(baseAmountToCharge + cardProcessingFee);
 
     // A positive client request must never be converted into a free checkout.
     // If the authoritative booking summary says there is no balance, stop and
@@ -3022,6 +3029,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
       use_credit: shouldUseCredit ? '1' : '0',
       credit_amount_used: shouldUseCredit ? String(requestedCreditAmount) : '0',
       payment_link_token: payment_link_token || '',
+      card_processing_fee: String(cardProcessingFee),
+      card_processing_fee_rate: shouldApplyCardProcessingFee ? '4' : '0',
       payment_link_amount: linkRequestedAmount ? String(linkRequestedAmount) : ''
     };
     const provider = getPaymentProvider();
@@ -3063,6 +3072,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
               } : {})
             }),
         amount: amountToCharge,
+        card_processing_fee: cardProcessingFee,
         isFree: false
       }
     });
