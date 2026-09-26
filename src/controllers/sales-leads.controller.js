@@ -1,5 +1,5 @@
 const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, sales_quotes, assigned_crew, crew_members,
-  quote_line_items, crew_member_files, assigned_equipment } = require('../models');
+  quote_line_items, crew_member_files, assigned_equipment, user_archive_history } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const multer = require('multer');
 const path = require('path');
@@ -1063,6 +1063,164 @@ function safeJsonStringify(val) {
   if (val == null) return null;
   if (typeof val === 'string') return val;
   try { return JSON.stringify(val); } catch { return String(val); }
+}
+
+async function getShootScheduleHistoryState(bookingId, transaction) {
+  const [booking, bookingDays] = await Promise.all([
+    stream_project_booking.findByPk(bookingId, {
+      attributes: ['event_date', 'start_time', 'end_time', 'time_zone', 'event_location'],
+      transaction,
+      raw: true
+    }),
+    stream_project_booking_days.findAll({
+      where: { stream_project_booking_id: bookingId },
+      attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+      order: [['event_date', 'ASC']],
+      transaction,
+      raw: true
+    })
+  ]);
+
+  return {
+    date: booking?.event_date ?? null,
+    start_time: booking?.start_time ?? null,
+    end_time: booking?.end_time ?? null,
+    time_zone: booking?.time_zone ?? null,
+    location: booking?.event_location ?? null,
+    booking_days: bookingDays
+  };
+}
+
+async function writeShootScheduleHistory({ req, bookingId, before, after, transaction }) {
+  const beforeBookingDays = Array.isArray(before?.booking_days) ? before.booking_days : [];
+  const afterBookingDays = Array.isArray(after?.booking_days) ? after.booking_days : [];
+  const beforeIsMultiDay = beforeBookingDays.length > 1;
+  const afterIsMultiDay = afterBookingDays.length > 1;
+  const toSingleDaySchedule = (state) => {
+    const day = {
+      event_date: state?.date ?? null,
+      start_time: state?.start_time ?? null,
+      end_time: state?.end_time ?? null,
+      time_zone: state?.time_zone ?? null
+    };
+    return Object.values(day).some((value) => value != null && value !== '') ? [day] : [];
+  };
+  // Single-day schedules live on the booking itself rather than in
+  // stream_project_booking_days. Convert either side to the same list shape
+  // when switching between single and multi-day schedules.
+  const isScheduleTypeConversion = beforeIsMultiDay !== afterIsMultiDay;
+  const historyBefore = isScheduleTypeConversion && !beforeIsMultiDay
+    ? { ...before, booking_days: toSingleDaySchedule(before) }
+    : before;
+  const historyAfter = isScheduleTypeConversion && !afterIsMultiDay
+    ? { ...after, booking_days: toSingleDaySchedule(after) }
+    : after;
+  const bookingDaysChanged = JSON.stringify(historyBefore?.booking_days ?? null) !==
+    JSON.stringify(historyAfter?.booking_days ?? null);
+  // The booking's top-level date/time values mirror the first multi-day row. Log
+  // only the day-list change so a multi-day edit is not reported twice.
+  const hasMultiDayScheduleChange = bookingDaysChanged && (beforeIsMultiDay || afterIsMultiDay);
+  const fields = hasMultiDayScheduleChange
+    ? ['location', 'booking_days']
+    : ['date', 'start_time', 'end_time', 'time_zone', 'location', 'booking_days'];
+  const changes = fields.reduce((items, field) => {
+    if (JSON.stringify(historyBefore?.[field] ?? null) !== JSON.stringify(historyAfter?.[field] ?? null)) {
+      items.push({
+        field,
+        old_value: historyBefore?.[field] ?? null,
+        new_value: historyAfter?.[field] ?? null
+      });
+    }
+    return items;
+  }, []);
+
+  if (changes.length === 0) return null;
+
+  const actorId = Number(req.user?.userId || req.userId || req.user?.id || 0);
+  if (!Number.isInteger(actorId) || actorId <= 0) return null;
+
+  const actor = await users.findByPk(actorId, {
+    attributes: ['id', 'name', 'email', 'role'],
+    transaction,
+    raw: true
+  });
+
+  return user_archive_history.create({
+    target_type: 'shoot',
+    target_id: bookingId,
+    user_id: null,
+    action: 'schedule_location_updated',
+    reason: 'Shoot date, time, or location updated',
+    performed_by_user_id: actorId,
+    performed_by_name: actor?.name || actor?.email || `User ${actorId}`,
+    performed_by_role: req.user?.userRole || req.userRole || actor?.role || null,
+    metadata: { changes }
+  }, { transaction });
+}
+
+async function getAssignedCrewHistoryState(bookingId, transaction) {
+  const assignments = await assigned_crew.findAll({
+    where: { project_id: bookingId, is_active: 1 },
+    attributes: ['crew_member_id'],
+    include: [{
+      model: crew_members,
+      as: 'crew_member',
+      attributes: ['first_name', 'last_name'],
+      required: false
+    }],
+    transaction
+  });
+
+  return assignments.map((assignment) => ({
+    crew_member_id: Number(assignment.crew_member_id),
+    crew_member_name: assignment.crew_member
+      ? [assignment.crew_member.first_name, assignment.crew_member.last_name].filter(Boolean).join(' ')
+      : `CP #${assignment.crew_member_id}`
+  }));
+}
+
+async function writeShootCrewHistory({ req, bookingId, before, after, transaction }) {
+  const beforeById = new Map(before.map((crew) => [crew.crew_member_id, crew]));
+  const afterById = new Map(after.map((crew) => [crew.crew_member_id, crew]));
+  const assigned = after.filter((crew) => !beforeById.has(crew.crew_member_id));
+  const removed = before.filter((crew) => !afterById.has(crew.crew_member_id));
+
+  if (assigned.length === 0 && removed.length === 0) return [];
+
+  const actorId = Number(req.user?.userId || req.userId || req.user?.id || 0);
+  if (!Number.isInteger(actorId) || actorId <= 0) return [];
+
+  const actor = await users.findByPk(actorId, {
+    attributes: ['id', 'name', 'email', 'role'],
+    transaction,
+    raw: true
+  });
+  const actorDetails = {
+    performed_by_user_id: actorId,
+    performed_by_name: actor?.name || actor?.email || `User ${actorId}`,
+    performed_by_role: req.user?.userRole || req.userRole || actor?.role || null
+  };
+
+  return Promise.all([
+    ...assigned.map((crew) => user_archive_history.create({
+      target_type: 'shoot',
+      target_id: bookingId,
+      user_id: null,
+      action: 'crew_assigned',
+      reason: 'Creative partner assigned from Edit Details',
+      ...actorDetails,
+      metadata: crew
+    }, { transaction })),
+    ...removed.map((crew) => user_archive_history.create({
+      target_type: 'shoot',
+      target_id: bookingId,
+      user_id: null,
+      action: 'crew_removed',
+      reason: 'Creative partner removed from Edit Details',
+      ...actorDetails,
+      metadata: crew
+    }, { transaction }))
+  ]);
 }
 
 function parseStartDateTime({ start_date_time, start_date, start_time }) {
@@ -7155,6 +7313,11 @@ exports.finalizeGuestBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    const [historyBefore, crewHistoryBefore] = await Promise.all([
+      getShootScheduleHistoryState(booking.stream_project_booking_id, tx),
+      getAssignedCrewHistoryState(booking.stream_project_booking_id, tx)
+    ]);
+
     // 2) Run shared finalize core
     const finalizeResult = await finalizeBookingCore({
       booking,
@@ -7187,6 +7350,23 @@ exports.finalizeGuestBooking = async (req, res) => {
         booking_days
       },
       tx
+    });
+
+    const historyAfter = await getShootScheduleHistoryState(booking.stream_project_booking_id, tx);
+    await writeShootScheduleHistory({
+      req,
+      bookingId: booking.stream_project_booking_id,
+      before: historyBefore,
+      after: historyAfter,
+      transaction: tx
+    });
+    const crewHistoryAfter = await getAssignedCrewHistoryState(booking.stream_project_booking_id, tx);
+    await writeShootCrewHistory({
+      req,
+      bookingId: booking.stream_project_booking_id,
+      before: crewHistoryBefore,
+      after: crewHistoryAfter,
+      transaction: tx
     });
 
     const linkedLead = await sales_leads.findOne({
@@ -7275,6 +7455,8 @@ exports.updateLeadBookingSchedule = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    const historyBefore = await getShootScheduleHistoryState(booking.stream_project_booking_id, tx);
+
     const result = await updateBookingScheduleAndLocationCore({
       booking,
       bookingId: booking.stream_project_booking_id,
@@ -7282,6 +7464,14 @@ exports.updateLeadBookingSchedule = async (req, res) => {
       tx
     });
 
+    const historyAfter = await getShootScheduleHistoryState(booking.stream_project_booking_id, tx);
+    await writeShootScheduleHistory({
+      req,
+      bookingId: booking.stream_project_booking_id,
+      before: historyBefore,
+      after: historyAfter,
+      transaction: tx
+    });
     await lead.update({ last_activity_at: new Date() }, { transaction: tx });
 
     await sales_lead_activities.create({
@@ -7381,6 +7571,11 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    const [historyBefore, crewHistoryBefore] = await Promise.all([
+      getShootScheduleHistoryState(booking.stream_project_booking_id, tx),
+      getAssignedCrewHistoryState(booking.stream_project_booking_id, tx)
+    ]);
+
     const assignedSalesRepId = await resolveAssignedSalesRepId({
       requestedSalesRepId: sales_rep_id,
       req,
@@ -7419,6 +7614,24 @@ exports.finalizeClientLeadBooking = async (req, res) => {
         booking_days
       },
       tx
+    });
+
+    const historyAfter = await getShootScheduleHistoryState(booking.stream_project_booking_id, tx);
+    await writeShootScheduleHistory({
+      req,
+      bookingId: booking.stream_project_booking_id,
+      before: historyBefore,
+      after: historyAfter,
+      transaction: tx
+    });
+
+    const crewHistoryAfter = await getAssignedCrewHistoryState(booking.stream_project_booking_id, tx);
+    await writeShootCrewHistory({
+      req,
+      bookingId: booking.stream_project_booking_id,
+      before: crewHistoryBefore,
+      after: crewHistoryAfter,
+      transaction: tx
     });
 
     if (clientLead.lead_status !== 'booked' && clientLead.lead_status !== 'abandoned') {
@@ -7511,11 +7724,22 @@ exports.updateClientLeadBookingSchedule = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    const historyBefore = await getShootScheduleHistoryState(booking.stream_project_booking_id, tx);
+
     const result = await updateBookingScheduleAndLocationCore({
       booking,
       bookingId: booking.stream_project_booking_id,
       payload: req.body || {},
       tx
+    });
+
+    const historyAfter = await getShootScheduleHistoryState(booking.stream_project_booking_id, tx);
+    await writeShootScheduleHistory({
+      req,
+      bookingId: booking.stream_project_booking_id,
+      before: historyBefore,
+      after: historyAfter,
+      transaction: tx
     });
 
     await clientLead.update({ last_activity_at: new Date() }, { transaction: tx });

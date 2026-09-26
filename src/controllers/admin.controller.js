@@ -3053,6 +3053,15 @@ exports.updateProjectDateLocation = async (req, res) => {
 
     transaction = await db.sequelize.transaction();
 
+    const previousProject = project.toJSON();
+    const previousBookingDays = await db.stream_project_booking_days.findAll({
+      where: { stream_project_booking_id: project.stream_project_booking_id },
+      attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+      order: [['event_date', 'ASC']],
+      transaction,
+      raw: true
+    });
+
     const sortedBookingDays = [...normalizedBookingDays].sort(
       (a, b) => new Date(a.event_date) - new Date(b.event_date)
     );
@@ -3175,6 +3184,62 @@ exports.updateProjectDateLocation = async (req, res) => {
     const refreshedProject = project.toJSON();
     refreshedProject.booking_days = bookingDays;
 
+    const historyChanges = [];
+    const addHistoryChange = (field, oldValue, newValue) => {
+      const oldNormalized = oldValue == null ? null : oldValue;
+      const newNormalized = newValue == null ? null : newValue;
+      if (JSON.stringify(oldNormalized) !== JSON.stringify(newNormalized)) {
+        historyChanges.push({ field, old_value: oldNormalized, new_value: newNormalized });
+      }
+    };
+
+    const beforeIsMultiDay = previousBookingDays.length > 1;
+    const afterIsMultiDay = bookingDays.length > 1;
+    const toSingleDaySchedule = (projectData) => {
+      const day = {
+        event_date: projectData?.event_date ?? null,
+        start_time: projectData?.start_time ?? null,
+        end_time: projectData?.end_time ?? null,
+        time_zone: projectData?.time_zone ?? null
+      };
+      return Object.values(day).some((value) => value != null && value !== '') ? [day] : [];
+    };
+    // A single-day schedule is stored on the booking, while a multi-day
+    // schedule is stored in booking_days. Use the same list shape for both
+    // sides of a conversion so the history displays the actual schedules.
+    const isScheduleTypeConversion = beforeIsMultiDay !== afterIsMultiDay;
+    const historyBeforeBookingDays = isScheduleTypeConversion && !beforeIsMultiDay
+      ? toSingleDaySchedule(previousProject)
+      : previousBookingDays;
+    const historyAfterBookingDays = isScheduleTypeConversion && !afterIsMultiDay
+      ? toSingleDaySchedule(refreshedProject)
+      : bookingDays;
+    const bookingDaysChanged = JSON.stringify(historyBeforeBookingDays) !== JSON.stringify(historyAfterBookingDays);
+    // event_date/start_time/end_time/time_zone are derived from the first day of a
+    // multi-day shoot, so keeping them would duplicate the booking_days history.
+    const hasMultiDayScheduleChange = bookingDaysChanged && (beforeIsMultiDay || afterIsMultiDay);
+
+    if (!hasMultiDayScheduleChange) {
+      addHistoryChange('date', previousProject.event_date, refreshedProject.event_date);
+      addHistoryChange('start_time', previousProject.start_time, refreshedProject.start_time);
+      addHistoryChange('end_time', previousProject.end_time, refreshedProject.end_time);
+      addHistoryChange('time_zone', previousProject.time_zone, refreshedProject.time_zone);
+    }
+    addHistoryChange('location', previousProject.event_location, refreshedProject.event_location);
+    addHistoryChange('booking_days', historyBeforeBookingDays, historyAfterBookingDays);
+
+    if (historyChanges.length > 0) {
+      const actor = await getRequestActor(req);
+      await writeShootHistory({
+        projectId: project.stream_project_booking_id,
+        action: 'schedule_location_updated',
+        actor,
+        reason: 'Shoot date, time, or location updated',
+        metadata: { changes: historyChanges },
+        transaction
+      });
+    }
+
     await transaction.commit();
 
     return res.status(200).json({
@@ -3209,6 +3274,7 @@ exports.updateProjectDateLocation = async (req, res) => {
 };
 
 exports.updateProjectName = async (req, res) => {
+  let transaction = null;
   try {
     const { project_id } = req.params;
     const projectName = String(req.body?.project_name || '').trim();
@@ -3241,9 +3307,31 @@ exports.updateProjectName = async (req, res) => {
       });
     }
 
+    const previousProjectName = project.project_name;
+    transaction = await db.sequelize.transaction();
     await project.update({
       project_name: projectName
-    });
+    }, { transaction });
+
+    if (String(previousProjectName || '') !== projectName) {
+      const actor = await getRequestActor(req);
+      await writeShootHistory({
+        projectId: project.stream_project_booking_id,
+        action: 'project_name_updated',
+        actor,
+        reason: 'Project name updated',
+        metadata: {
+          changes: [{
+            field: 'project_name',
+            old_value: previousProjectName || null,
+            new_value: projectName
+          }]
+        },
+        transaction
+      });
+    }
+
+    await transaction.commit();
 
     return res.status(200).json({
       success: true,
@@ -3254,6 +3342,7 @@ exports.updateProjectName = async (req, res) => {
       }
     });
   } catch (error) {
+    if (transaction && !transaction.finished) await transaction.rollback();
     console.error('Error updating project name:', error);
     return res.status(500).json({
       success: false,
@@ -10652,6 +10741,29 @@ const getRequestActor = async (req) => {
   };
 };
 
+const writeShootHistory = async ({
+  projectId,
+  action,
+  actor,
+  reason = null,
+  metadata = null,
+  transaction = null
+}) => {
+  if (!actor?.id) return null;
+
+  return user_archive_history.create({
+    target_type: 'shoot',
+    target_id: projectId,
+    user_id: null,
+    action,
+    reason,
+    performed_by_user_id: actor.id,
+    performed_by_name: actor.name,
+    performed_by_role: actor.role,
+    metadata
+  }, { transaction });
+};
+
 const writeArchiveHistory = async ({
   client,
   action,
@@ -12005,7 +12117,16 @@ exports.getProjectHistory = async (req, res) => {
       where: {
         target_type: 'shoot',
         target_id: project.stream_project_booking_id,
-        action: { [Op.in]: ['deleted', 'restored'] }
+        action: {
+          [Op.in]: [
+            'deleted',
+            'restored',
+            'crew_assigned',
+            'crew_removed',
+            'project_name_updated',
+            'schedule_location_updated'
+          ]
+        }
       },
       order: [['created_at', 'DESC']],
       raw: true
@@ -12022,7 +12143,10 @@ exports.getProjectHistory = async (req, res) => {
         history: history.map((entry) => ({
           history_id: entry.history_id,
           action: entry.action,
+          reason: entry.reason,
           performed_by_name: entry.performed_by_name,
+          performed_by_role: entry.performed_by_role,
+          metadata: entry.metadata,
           created_at: entry.created_at
         }))
       }
@@ -13659,6 +13783,20 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
+            const actor = await getRequestActor(req);
+            const assignedCrewIds = new Set(assignmentsToCreate.map((assignment) => Number(assignment.crew_member_id)));
+            await Promise.all(newCrewDetails
+              .filter((crew) => assignedCrewIds.has(Number(crew.crew_member_id)))
+              .map((crew) => writeShootHistory({
+                projectId: booking.stream_project_booking_id,
+                action: 'crew_assigned',
+                actor,
+                reason: 'Creative partner assigned',
+                metadata: {
+                  crew_member_id: crew.crew_member_id,
+                  crew_member_name: [crew.first_name, crew.last_name].filter(Boolean).join(' ') || `CP #${crew.crew_member_id}`
+                }
+              })));
             await activityModel.create({
                 lead_id: resolvedLeadId,
                 activity_type: 'assigned',
@@ -13789,6 +13927,18 @@ exports.removeAssignedCrew = async (req, res) => {
         const crewName = assignment.crew_member
             ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
             : `ID: ${crew_member_id}`;
+
+        const actor = await getRequestActor(req);
+        await writeShootHistory({
+            projectId: lead.booking_id,
+            action: 'crew_removed',
+            actor,
+            reason: 'Creative partner removed',
+            metadata: {
+                crew_member_id: Number(crew_member_id),
+                crew_member_name: crewName
+            }
+        });
 
         await LeadActivityModel.create({
             lead_id: lead_id || client_lead_id,
@@ -14899,6 +15049,21 @@ exports.assignProjectCrewBulk = async (req, res) => {
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
 
+            const actor = await getRequestActor(req);
+            const assignedCrewIds = new Set(assignmentsToCreate.map((assignment) => Number(assignment.crew_member_id)));
+            await Promise.all(newCrewDetails
+              .filter((crew) => assignedCrewIds.has(Number(crew.crew_member_id)))
+              .map((crew) => writeShootHistory({
+                projectId: booking.stream_project_booking_id,
+                action: 'crew_assigned',
+                actor,
+                reason: 'Creative partner assigned',
+                metadata: {
+                  crew_member_id: crew.crew_member_id,
+                  crew_member_name: [crew.first_name, crew.last_name].filter(Boolean).join(' ') || `CP #${crew.crew_member_id}`
+                }
+              })));
+
             if (leadId) {
                 await sales_lead_activities.create({
                     lead_id: leadId,
@@ -15002,6 +15167,21 @@ exports.removeProjectAssignedCrew = async (req, res) => {
         // 2. Set the assignment to inactive (Soft Delete)
         await assignment.update({ is_active: 0 });
 
+        const crewName = assignment.crew_member
+            ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
+            : `ID: ${crew_member_id}`;
+        const actor = await getRequestActor(req);
+        await writeShootHistory({
+            projectId: project_id,
+            action: 'crew_removed',
+            actor,
+            reason: 'Creative partner removed',
+            metadata: {
+                crew_member_id: Number(crew_member_id),
+                crew_member_name: crewName
+            }
+        });
+
         // 3. Optional: Log activity if a lead exists for this project
         const lead = await sales_leads.findOne({
             where: { booking_id: project_id },
@@ -15009,10 +15189,6 @@ exports.removeProjectAssignedCrew = async (req, res) => {
         });
 
         if (lead) {
-            const crewName = assignment.crew_member 
-                ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}` 
-                : `ID: ${crew_member_id}`;
-
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
                 activity_type: 'status_changed',
