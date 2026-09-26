@@ -4612,6 +4612,124 @@ exports.getAllProjectDetailsBoard = async (req, res) => {
   return exports.getAllProjectDetails(req, res);
 };
 
+const CALENDAR_DATE_FORMAT = 'YYYY-MM-DD';
+
+const getCalendarShootRange = (query, view) => {
+  if (view === 'month') {
+    const year = Number(query.year);
+    const month = Number(query.month);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) {
+      return null;
+    }
+
+    const start = moment.utc({ year, month: month - 1, date: 1 });
+    return { start: start.format(CALENDAR_DATE_FORMAT), end: start.clone().endOf('month').format(CALENDAR_DATE_FORMAT) };
+  }
+
+  const date = String(view === 'week' ? query.start_date : query.date || '').trim();
+  const start = moment.utc(date, CALENDAR_DATE_FORMAT, true);
+  if (!start.isValid()) return null;
+
+  return {
+    start: start.format(CALENDAR_DATE_FORMAT),
+    end: (view === 'week' ? start.clone().add(6, 'days') : start).format(CALENDAR_DATE_FORMAT),
+  };
+};
+
+// Mirrors the paid + active base condition used by getAllProjectDetails (list view).
+const getPaidActiveCalendarFilter = async (req) => {
+  const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
+  const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
+  const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
+    ? { user_id: requestUserId }
+    : {};
+
+  const [bookedSalesLeads, bookedClientLeads, salesManualPaymentActivities, clientManualPaymentActivities, collectedPaymentSummaryRows] = await Promise.all([
+    sales_leads.findAll({ where: { is_active: 1, lead_status: 'booked', booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true }),
+    client_leads.findAll({ where: { is_active: 1, lead_status: 'booked', booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true }),
+    sales_lead_activities.findAll({ where: { activity_type: 'payment_completed' }, attributes: ['lead_id'], raw: true }),
+    client_lead_activities.findAll({ where: { activity_type: 'payment_completed' }, attributes: ['lead_id'], raw: true }),
+    fetchCollectedBookingPaymentSummaries(),
+  ]);
+
+  const manualSalesLeadIds = Array.from(new Set(salesManualPaymentActivities.map((row) => Number(row.lead_id)).filter(Number.isFinite)));
+  const manualClientLeadIds = Array.from(new Set(clientManualPaymentActivities.map((row) => Number(row.lead_id)).filter(Number.isFinite)));
+  const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+    manualSalesLeadIds.length
+      ? sales_leads.findAll({ where: { is_active: 1, lead_id: { [Sequelize.Op.in]: manualSalesLeadIds }, booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true })
+      : Promise.resolve([]),
+    manualClientLeadIds.length
+      ? client_leads.findAll({ where: { is_active: 1, lead_id: { [Sequelize.Op.in]: manualClientLeadIds }, booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true })
+      : Promise.resolve([]),
+  ]);
+
+  const paidBookingIds = Array.from(new Set([
+    ...bookedSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+  ]));
+
+  return {
+    is_active: 1,
+    ...clientProjectFilter,
+    [Sequelize.Op.or]: [
+      { payment_id: { [Sequelize.Op.ne]: null } },
+      ...(paidBookingIds.length ? [{ stream_project_booking_id: { [Sequelize.Op.in]: paidBookingIds } }] : []),
+    ],
+  };
+};
+
+const getCalendarShoots = (view) => async (req, res) => {
+  try {
+    const range = getCalendarShootRange(req.query, view);
+    if (!range) {
+      return res.status(400).json({
+        success: false,
+        message: view === 'month'
+          ? 'A valid month (1-12) and year are required.'
+          : `A valid ${view === 'week' ? 'start_date' : 'date'} in YYYY-MM-DD format is required.`,
+      });
+    }
+
+    const paidActiveFilter = await getPaidActiveCalendarFilter(req);
+    const shoots = await stream_project_booking.findAll({
+      attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'start_time', 'end_time', 'time_zone'],
+      where: {
+        ...paidActiveFilter,
+        event_date: { [Op.between]: [range.start, range.end] },
+      },
+      order: [['event_date', 'ASC'], ['start_time', 'ASC'], ['stream_project_booking_id', 'ASC']],
+      raw: true,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        view,
+        range,
+        shoots: shoots.map((shoot) => ({
+          id: shoot.stream_project_booking_id,
+          title: shoot.project_name || 'Untitled Shoot',
+          date: shoot.event_date,
+          start_time: shoot.start_time,
+          end_time: shoot.end_time,
+          time_zone: shoot.time_zone,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error(`[admin/shoot-calendar/${view}] Failed to retrieve shoots:`, error);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve calendar shoots.' });
+  }
+};
+
+// Separate endpoints allow each calendar layout to load only the date range it needs.
+exports.getShootCalendarMonth = getCalendarShoots('month');
+exports.getShootCalendarWeek = getCalendarShoots('week');
+exports.getShootCalendarDay = getCalendarShoots('day');
+
 exports.getUpcomingEvents = async (req, res) => {
   try {
     const { search, event_type, status } = req.query;
