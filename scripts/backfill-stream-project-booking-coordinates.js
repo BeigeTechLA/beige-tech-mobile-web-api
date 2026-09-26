@@ -7,6 +7,44 @@ const { parseLocation } = require('../src/utils/locationHelpers');
 
 const { stream_project_booking: StreamProjectBooking } = models;
 
+async function findRecoverableLocation(bookingId) {
+  const formSubmission = await models.project_form_submissions.findOne({
+    where: {
+      project_id: bookingId,
+      is_active: 1,
+      location_address: { [Op.ne]: null },
+    },
+    attributes: ['location_address'],
+    order: [['created_at', 'DESC']],
+    raw: true,
+  });
+  const formLocation = String(formSubmission?.location_address || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (formLocation) return { location: formLocation, source: 'project_form' };
+
+  const lead = await models.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    order: [['lead_id', 'DESC']],
+    raw: true,
+  });
+  if (!lead?.lead_id) return null;
+
+  const quote = await models.sales_quotes.findOne({
+    where: {
+      lead_id: lead.lead_id,
+      client_address: { [Op.ne]: null },
+    },
+    attributes: ['client_address'],
+    order: [['sales_quote_id', 'DESC']],
+    raw: true,
+  });
+  const quoteLocation = String(quote?.client_address || '').trim();
+  return quoteLocation ? { location: quoteLocation, source: 'sales_quote' } : null;
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
 
@@ -29,6 +67,21 @@ function isValidCoordinate(lat, lng) {
 }
 
 function resolveLocation(locationValue) {
+  const rawLocation = typeof locationValue === 'string' ? locationValue.trim() : '';
+  const coordinateMatch = rawLocation.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (coordinateMatch) {
+    const latitude = Number(coordinateMatch[1]);
+    const longitude = Number(coordinateMatch[2]);
+
+    if (isValidCoordinate(latitude, longitude)) {
+      return {
+        address: rawLocation,
+        coordinates: { latitude, longitude },
+        source: 'coordinate_string',
+      };
+    }
+  }
+
   const parsed = parseLocation(locationValue);
   if (!parsed) return null;
 
@@ -105,10 +158,19 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
   }
 
   const where = {
-    event_location: { [Op.ne]: null },
-    [Op.or]: [
-      { event_latitude: null },
-      { event_longitude: null },
+    [Op.and]: [
+      {
+        [Op.or]: [
+          { event_latitude: null },
+          { event_longitude: null },
+        ],
+      },
+      {
+        [Op.or]: [
+          { event_location: { [Op.ne]: null } },
+          { is_draft: false },
+        ],
+      },
     ],
   };
 
@@ -120,6 +182,7 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
       'event_location',
       'event_latitude',
       'event_longitude',
+      'is_draft',
     ],
     order: [['stream_project_booking_id', 'ASC']],
     raw: true,
@@ -135,6 +198,7 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
   const stats = {
     scanned: bookings.length,
     alreadyHadCoordsInLocationPayload: 0,
+    recoveredLocation: 0,
     geocodedSuccess: 0,
     updated: 0,
     skippedNoAddress: 0,
@@ -147,21 +211,29 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
 
   try {
     for (const row of bookings) {
-      const resolved = resolveLocation(row.event_location);
+      const recoveredLocation = row.event_location
+        ? null
+        : await findRecoverableLocation(row.stream_project_booking_id);
+      const location = row.event_location || recoveredLocation?.location || null;
+      const resolved = resolveLocation(location);
 
       if (!resolved) {
         stats.skippedNoAddress += 1;
         failures.push({
           stream_project_booking_id: row.stream_project_booking_id,
           reason: 'missing_or_invalid_location',
-          event_location: row.event_location,
+          event_location: location,
         });
         continue;
       }
 
       let latitude = null;
       let longitude = null;
-      let source = resolved.source;
+      let source = recoveredLocation?.source || resolved.source;
+
+      if (recoveredLocation) {
+        stats.recoveredLocation += 1;
+      }
 
       if (resolved.coordinates) {
         latitude = resolved.coordinates.latitude;
@@ -175,7 +247,7 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
             failures.push({
               stream_project_booking_id: row.stream_project_booking_id,
               reason: 'geocode_not_found',
-              event_location: row.event_location,
+              event_location: location,
               address: resolved.address,
             });
             continue;
@@ -190,7 +262,7 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
             stream_project_booking_id: row.stream_project_booking_id,
             reason: 'geocode_error',
             error: error.message,
-            event_location: row.event_location,
+            event_location: location,
             address: resolved.address,
           });
           continue;
@@ -202,7 +274,7 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
         failures.push({
           stream_project_booking_id: row.stream_project_booking_id,
           reason: 'invalid_coordinates',
-          event_location: row.event_location,
+          event_location: location,
           latitude,
           longitude,
         });
@@ -215,7 +287,11 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
       if (!dryRun) {
         try {
           await StreamProjectBooking.update(
-            { event_latitude: nextLatitude, event_longitude: nextLongitude },
+            {
+              ...(recoveredLocation ? { event_location: recoveredLocation.location } : {}),
+              event_latitude: nextLatitude,
+              event_longitude: nextLongitude,
+            },
             {
               where: { stream_project_booking_id: row.stream_project_booking_id },
               transaction: txn,
@@ -227,7 +303,7 @@ async function backfillBookingCoordinates({ dryRun, limit, offset }) {
             stream_project_booking_id: row.stream_project_booking_id,
             reason: 'update_error',
             error: error.message,
-            event_location: row.event_location,
+            event_location: location,
           });
           continue;
         }

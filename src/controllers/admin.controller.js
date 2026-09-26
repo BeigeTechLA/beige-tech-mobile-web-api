@@ -3114,8 +3114,13 @@ exports.updateProjectDateLocation = async (req, res) => {
     }
 
     if (hasLocationUpdate) {
-      const latitude = req.body.latitude ?? null;
-      const longitude = req.body.longitude ?? null;
+      const incomingCoordinates = extractCoordinatesFromPayload(req.body, nextLocation);
+      const locationDidNotChange =
+        normalizeLocationForStorage(project.event_location) === normalizedLocation;
+      const latitude = incomingCoordinates.latitude ??
+        (locationDidNotChange ? project.event_latitude : null);
+      const longitude = incomingCoordinates.longitude ??
+        (locationDidNotChange ? project.event_longitude : null);
       updatePayload.event_location = normalizedLocation;
       updatePayload.event_latitude = latitude;
       updatePayload.event_longitude = longitude;
