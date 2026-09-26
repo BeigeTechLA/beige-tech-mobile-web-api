@@ -45,6 +45,35 @@ function formatExportDate(value) {
     : '';
 }
 
+function mapAnalyticsQuoteRowsForExport(rows = []) {
+  return rows.map((row) => ({
+    'Quote Number': escapeSpreadsheetFormula(row.quote_number),
+    'Client Name': escapeSpreadsheetFormula(row.client?.name),
+    'Client Email': escapeSpreadsheetFormula(row.client?.email),
+    'Client Phone': escapeSpreadsheetFormula(row.client?.phone),
+    'Project': escapeSpreadsheetFormula(row.project),
+    'Service': escapeSpreadsheetFormula(row.service),
+    'Booking Status': escapeSpreadsheetFormula(row.lead_source || 'Pending Booking'),
+    'Quote Status': escapeSpreadsheetFormula(row.quote_status),
+    'Payment Status': escapeSpreadsheetFormula(row.payment_status),
+    'Quote Value': Number(row.quote_value || 0).toFixed(2),
+    'Collected Amount': Number(row.collected_amount || 0).toFixed(2),
+    'Outstanding Amount': Number(row.outstanding_amount || 0).toFixed(2),
+    'Sales Rep': escapeSpreadsheetFormula(row.sales_rep?.name),
+    'Sales Rep Email': escapeSpreadsheetFormula(row.sales_rep?.email),
+    'Validity': formatExportDate(row.validity?.valid_until),
+    'Sent At': formatExportDate(row.sent_at),
+    'Last Follow Up': formatExportDate(row.last_follow_up_at),
+    'Days Open': row.days_open
+  }));
+}
+
+const ANALYTICS_QUOTE_EXPORT_FIELDS = [
+  'Quote Number', 'Client Name', 'Client Email', 'Client Phone', 'Project', 'Service',
+  'Booking Status', 'Quote Status', 'Payment Status', 'Quote Value', 'Collected Amount',
+  'Outstanding Amount', 'Sales Rep', 'Sales Rep Email', 'Validity', 'Sent At', 'Last Follow Up', 'Days Open'
+];
+
 function getLineItemNames(
   lineItems = [],
   sectionType,
@@ -633,8 +662,110 @@ exports.exportSalesQuotesCsv = async (req, res) => {
   }
 };
 
-exports.getQuoteDashboard = async (req, res) => {
+exports.exportOpenPipelineCsv = async (req, res) => {
   try {
+    const statusParam = String(req.query.status || 'sent,accepted,partially_paid');
+    const data = await quoteAnalyticsService.listAnalyticsQuotes(
+      { ...req.query, bucket: 'open_pipeline', status: statusParam, limit: 'all' },
+      getUserContext(req)
+    );
+
+    const rows = mapAnalyticsQuoteRowsForExport(data.rows);
+    const parser = new Parser({ fields: ANALYTICS_QUOTE_EXPORT_FIELDS, withBOM: true });
+    const csv = parser.parse(rows);
+
+    const fileName = `open-pipeline-${statusParam.replace(/,/g, '-')}-${moment().format('YYYY-MM-DD')}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    return res.status(constants.OK.code).send(csv);
+  } catch (error) {
+    console.error('Error exporting open pipeline:', error);
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to export open pipeline',
+      error.statusCode || constants.INTERNAL_SERVER_ERROR.code
+    );
+  }
+};
+
+exports.exportOverdueCsv = async (req, res) => {
+  try {
+    const data = await quoteAnalyticsService.listAnalyticsQuotes(
+      { ...req.query, bucket: 'overdue_follow_ups', limit: 'all' },
+      getUserContext(req)
+    );
+
+    const rows = mapAnalyticsQuoteRowsForExport(data.rows);
+    const parser = new Parser({ fields: ANALYTICS_QUOTE_EXPORT_FIELDS, withBOM: true });
+    const csv = parser.parse(rows);
+
+    const fileName = `quotes-overdue-${moment().format('YYYY-MM-DD')}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    return res.status(constants.OK.code).send(csv);
+  } catch (error) {
+    console.error('Error exporting overdue quotes:', error);
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to export overdue quotes',
+      error.statusCode || constants.INTERNAL_SERVER_ERROR.code
+    );
+  }
+};
+
+exports.exportQuoteAnalyticsRepsCsv = async (req, res) => {
+  try {
+    const analytics = await quoteAnalyticsService.getAnalytics(req.query, getUserContext(req));
+    const repRows = analytics.rep_performance || [];
+
+    const rows = repRows.map((rep) => ({
+      'Sales Rep': escapeSpreadsheetFormula(rep.rep_name),
+      'Email': escapeSpreadsheetFormula(rep.rep_email),
+      'Quotes Sent': rep.quotes_sent,
+      'Quote Value': Number(rep.quote_value || 0).toFixed(2),
+      'Deals Won': rep.deals_won,
+      'Win Rate (%)': rep.win_rate,
+      'Won Revenue': Number(rep.won_revenue || 0).toFixed(2),
+      'Avg Deal Size': Number(rep.average_deal_size || 0).toFixed(2),
+      'Open Pipeline Value': Number(rep.open_pipeline?.value || 0).toFixed(2),
+      'Overdue Follow-ups': rep.overdue_follow_ups?.count || 0
+    }));
+
+    const fields = [
+      'Sales Rep', 'Email', 'Quotes Sent', 'Quote Value', 'Deals Won', 'Win Rate (%)',
+      'Won Revenue', 'Avg Deal Size', 'Open Pipeline Value', 'Overdue Follow-ups'
+    ];
+
+    const parser = new Parser({ fields, withBOM: true });
+    const csv = parser.parse(rows);
+
+    const fileName = `quote-analytics-by-rep-${moment().format('YYYY-MM-DD')}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    return res.status(constants.OK.code).send(csv);
+  } catch (error) {
+    console.error('Error exporting rep analytics:', error);
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to export rep analytics',
+      error.statusCode || constants.INTERNAL_SERVER_ERROR.code
+    );
+  }
+};
+
+exports.getQuoteDashboard = async (req, res) => {  try {
     const data = await quoteService.getQuoteDashboard(req.query, getUserContext(req));
     return res.json({
       success: true,

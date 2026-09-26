@@ -484,6 +484,9 @@ router.delete('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricing
 router.get('/quotes/dashboard', authenticate, adminQuotesView, salesQuotesController.getQuoteDashboard);
 router.get('/quotes/analytics/filters', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalyticsFilters);
 router.get('/quotes/analytics/quotes', authenticate, adminQuotesView, salesQuotesController.listQuoteAnalyticsCards);
+router.get('/quotes/analytics/open-pipeline/export', authenticate, adminQuotesView, salesQuotesController.exportOpenPipelineCsv);
+router.get('/quotes/analytics/overdue/export', authenticate, adminQuotesView, salesQuotesController.exportOverdueCsv);
+router.get('/quotes/analytics/reps/export', authenticate, adminQuotesView, salesQuotesController.exportQuoteAnalyticsRepsCsv);
 router.get('/quotes/analytics/reps/:salesRepId', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalyticsByRep);
 router.get('/quotes/analytics', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalytics);
 router.get('/quotes', authenticate, adminQuotesView, salesQuotesController.listQuotes);
