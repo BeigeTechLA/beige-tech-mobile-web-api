@@ -63,10 +63,12 @@ router.get('/room/:bookingId', authenticate, shootMessagesView, externalChatCont
 router.post('/room/:roomId/participants', authenticate, shootMessagesEdit, externalChatController.addChatParticipants);
 router.delete('/room/:roomId/participants/:userId', authenticate, shootMessagesEdit, externalChatController.removeChatParticipant);
 router.patch('/room/:roomId/mark-read', authenticate, shootMessagesView, externalChatController.markChatRoomRead);
+router.patch('/room/:roomId/status', authenticate, shootMessagesEdit, externalChatController.updateChatRoomStatus);
 router.post('/messages/:roomId', authenticate, shootMessagesCreate, externalChatController.sendChatMessage);
 router.get('/messages/:roomId', authenticate, shootMessagesView, externalChatController.getChatMessages);
 router.post('/messages/:messageId/edit', authenticate, shootMessagesEdit, externalChatController.editChatMessage);
 router.post('/messages/:messageId/delete', authenticate, shootMessagesEdit, externalChatController.deleteChatMessage);
+router.post('/room/:roomId/messages/batch-delete', authenticate, shootMessagesEdit, externalChatController.batchDeleteChatMessages);
 router.post('/messages/:messageId/reaction', authenticate, shootMessagesCreate, externalChatController.reactToChatMessage);
 router.get('/participants/:roomId', authenticate, shootMessagesView, externalChatController.getChatParticipants);
 

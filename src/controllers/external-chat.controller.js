@@ -395,6 +395,11 @@ const isAdminRequestUser = (user = {}) => {
   return ['admin', 'administrator', 'sales_admin'].includes(role);
 };
 
+const isSuperAdminRequestUser = (user = {}) => {
+  const role = String(user?.userRole || user?.role || '').trim().toLowerCase();
+  return ['super_admin', 'superadmin', 'super-admin'].includes(role);
+};
+
 const resolveChatSender = async (requestUser = {}) => {
   const userId = Number(requestUser?.userId || requestUser?.id);
   const platformUser = Number.isFinite(userId) ? await getPlatformUserById(userId) : null;
@@ -2022,6 +2027,7 @@ exports.listChatRooms = async (req, res) => {
       'production_id',
       'order_id',
       'populate',
+      'status',
     ].forEach((key) => {
       const value = req.query[key];
       if (value == null || String(value).trim() === '') return;
@@ -2320,7 +2326,7 @@ exports.editChatMessage = async (req, res) => {
 exports.deleteChatMessage = async (req, res) => {
   try {
     const sender = await resolveChatSender(req.user);
-    const allowAnySender = isAdminRequestUser(req.user);
+    const allowAnySender = isSuperAdminRequestUser(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
@@ -2332,6 +2338,84 @@ exports.deleteChatMessage = async (req, res) => {
           email: sender.email || null,
           name: sender.name || sender.email || 'Beige User',
         },
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.batchDeleteChatMessages = async (req, res) => {
+  try {
+    const roomId = String(req.params.roomId || '').trim();
+    const messageIds = Array.isArray(req.body.messageIds)
+      ? [...new Set(req.body.messageIds.map((id) => String(id || '').trim()).filter(Boolean))]
+      : [];
+
+    if (!roomId) {
+      return res.status(400).json({ success: false, message: 'roomId is required' });
+    }
+    if (!messageIds.length) {
+      return res.status(400).json({ success: false, message: 'messageIds are required' });
+    }
+    if (messageIds.length > 100) {
+      return res.status(400).json({ success: false, message: 'You can delete at most 100 messages at once' });
+    }
+
+    const sender = await resolveChatSender(req.user);
+    const allowAnySender = isSuperAdminRequestUser(req.user);
+
+    const result = await proxyRequest(`/room/${roomId}/messages/batch-delete`, {
+      method: 'POST',
+      body: JSON.stringify({
+        messageIds,
+        allowAnySender,
+        sender: {
+          id: sender.id != null ? String(sender.id) : null,
+          email: sender.email || null,
+          name: sender.name || sender.email || 'Beige User',
+        },
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.updateChatRoomStatus = async (req, res) => {
+  try {
+    if (!isSuperAdminRequestUser(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only super admins can archive or restore chats' });
+    }
+
+    const roomId = String(req.params.roomId || '').trim();
+    const status = String(req.body.status || '').trim().toLowerCase();
+    if (!roomId) {
+      return res.status(400).json({ success: false, message: 'roomId is required' });
+    }
+    if (!['active', 'read_only', 'archived'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    const adminUser = await getPlatformUserById(req.user?.userId || null);
+    const result = await proxyRequest(`/rooms/${roomId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status,
+        adminId: req.user?.userId != null ? String(req.user.userId) : null,
+        adminUser: adminUser
+          ? { id: String(adminUser.id), email: adminUser.email, name: adminUser.name, role: 'admin' }
+          : null,
       }),
     });
 
