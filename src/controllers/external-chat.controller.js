@@ -1410,6 +1410,7 @@ const getCreativePartnerDirectory = async (search = '') => {
     const profilePhoto = Array.isArray(plain.crew_member_files) ? plain.crew_member_files[0] : null;
     return {
       id: String(plain.user_id || plain.crew_member_id),
+      crew_member_id: String(plain.crew_member_id),
       name: `${plain.first_name || ''} ${plain.last_name || ''}`.trim() || plain.email || `CP ${plain.crew_member_id}`,
       email: plain.email || null,
       role: 'cp',
