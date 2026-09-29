@@ -281,7 +281,7 @@ const collectMeetingPushParticipants = async (state = {}, booking = null, explic
   return targets;
 };
 
-const formatMeetingDateForPush = (meeting) => {
+const formatMeetingDateForPush = (meeting, recipientTimezone = 'UTC') => {
   if (!meeting?.meeting_date_time) return '';
   const date = new Date(meeting.meeting_date_time);
   if (Number.isNaN(date.getTime())) return '';
@@ -290,15 +290,15 @@ const formatMeetingDateForPush = (meeting) => {
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    timeZone: recipientTimezone,
+    timeZoneName: 'short',
   };
-  const timezone = normalizeMeetingTimezone(meeting.meeting_timezone);
-  if (timezone) options.timeZone = timezone;
   return date.toLocaleString('en-US', options);
 };
 
-const buildMeetingPushContent = ({ meeting, type }) => {
+const buildMeetingPushContent = ({ meeting, type, recipientTimezone }) => {
   const title = truncateText(meeting?.meeting_title || 'Meeting', 70);
-  const dateLabel = formatMeetingDateForPush(meeting);
+  const dateLabel = formatMeetingDateForPush(meeting, recipientTimezone);
 
   if (type === 'meeting_cancelled') {
     return { title: 'Meeting cancelled', body: `${title} has been cancelled.` };
@@ -338,12 +338,20 @@ const sendMeetingPushNotifications = async ({
   try {
     const targets = await collectMeetingPushParticipants(state, booking, explicitParticipants);
     if (!targets.length) return;
+    const timezoneRows = await db.users.findAll({
+      where: { id: { [Op.in]: targets.map(({ userId }) => userId) } },
+      attributes: ['id', 'timezone'],
+      raw: true,
+    });
+    const timezoneByUserId = new Map(timezoneRows.map((user) => [String(user.id), normalizeMeetingTimezone(user.timezone)]));
+    const fallbackTimezone = normalizeMeetingTimezone(meeting?.meeting_timezone) || 'UTC';
 
-    const content = buildMeetingPushContent({ meeting, type });
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const bookingId = String(plainBooking?.stream_project_booking_id || meeting?.booking_id || '');
 
     const results = await Promise.allSettled(targets.map(({ userId }) => {
+      const recipientTimezone = timezoneByUserId.get(String(userId)) || fallbackTimezone;
+      const content = buildMeetingPushContent({ meeting, type, recipientTimezone });
       const payload = {
         topic: 'meetings',
         category: 'meetings',
@@ -351,6 +359,8 @@ const sendMeetingPushNotifications = async ({
         meeting_id: String(meeting?.meeting_id || ''),
         booking_id: bookingId,
         meeting_status: String(meeting?.meeting_status || ''),
+        starts_at: meeting?.meeting_date_time ? new Date(meeting.meeting_date_time).toISOString() : '',
+        display_timezone: recipientTimezone,
       };
 
       return appNotificationService.createAndPushNotification({
