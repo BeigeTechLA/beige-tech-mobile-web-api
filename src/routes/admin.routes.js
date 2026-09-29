@@ -192,6 +192,9 @@ router.get('/get-active-projects', admin.getActiveProjects);
 router.get('/recent-activity', authMiddleware, dashboardView, admin.getRecentActivity);
 router.get('/get-projects', authMiddleware, projectListView, admin.getAllProjectDetails);
 router.get('/get-projects-board', authMiddleware, projectListView, admin.getAllProjectDetailsBoard);
+router.get('/shoots/calendar/month', authMiddleware, projectListView, admin.getShootCalendarMonth);
+router.get('/shoots/calendar/week', authMiddleware, projectListView, admin.getShootCalendarWeek);
+router.get('/shoots/calendar/day', authMiddleware, projectListView, admin.getShootCalendarDay);
 router.get(
   '/shoots/export',
   authMiddleware,
