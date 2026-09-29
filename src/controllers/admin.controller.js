@@ -4705,6 +4705,166 @@ exports.getAllProjectDetailsBoard = async (req, res) => {
   return exports.getAllProjectDetails(req, res);
 };
 
+// ==================== GLOBAL SHOOTS API ====================
+
+// Filters: upcoming (default), all, tbd, today, next_7_days, next_15_days, next_30_days,
+// last_7_days, last_15_days, last_30_days, custom (start_date + end_date)
+// Only is_active = 1 shoots are returned.
+const GLOBAL_SHOOT_DATE_COL = 'stream_project_booking.event_date';
+
+const buildGlobalShootRangeFilter = (rawRange, start_date, end_date) => {
+  const dateCol = Sequelize.fn('DATE', Sequelize.col(GLOBAL_SHOOT_DATE_COL));
+  const curdate = Sequelize.fn('CURDATE');
+  const between = (from, to) => Sequelize.where(dateCol, { [Op.between]: [from, to] });
+
+  // Custom range: start_date + end_date
+  if (start_date && end_date) {
+    return [between(start_date, end_date)];
+  }
+
+  const range = String(rawRange || 'upcoming').toLowerCase().trim();
+
+  switch (range) {
+    case 'all':
+      return [];
+    case 'tbd':
+      return [Sequelize.where(Sequelize.col(GLOBAL_SHOOT_DATE_COL), { [Op.is]: null })];
+    case 'today':
+      return [Sequelize.where(dateCol, curdate)];
+    case 'next_7_days':
+      return [between(curdate, Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 7 DAY)'))];
+    case 'next_15_days':
+      return [between(curdate, Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 15 DAY)'))];
+    case 'next_30_days':
+      return [between(curdate, Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 30 DAY)'))];
+    case 'last_7_days':
+      return [between(Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 7 DAY)'), curdate)];
+    case 'last_15_days':
+      return [between(Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 15 DAY)'), curdate)];
+    case 'last_30_days':
+      return [between(Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 30 DAY)'), curdate)];
+    case 'upcoming':
+    default:
+      // Today + all future shoots
+      return [Sequelize.where(dateCol, { [Op.gte]: curdate })];
+  }
+};
+
+exports.getGlobalShoots = async (req, res) => {
+  try {
+    const { range, start_date, end_date } = req.query;
+
+    // Paid-shoots base filter (same as getAllProjectDetails, client-role scoping included)
+    const paidFilter = await getPaidCalendarFilter(req);
+
+    // Only active shoots (is_active = 1). Deleted shoots are never returned.
+    const whereConditions = { ...paidFilter, is_active: 1 };
+    const andConditions = buildGlobalShootRangeFilter(range, start_date, end_date);
+    if (andConditions.length) {
+      whereConditions[Op.and] = andConditions;
+    }
+
+    const rows = await stream_project_booking.findAll({
+      where: whereConditions,
+      attributes: [
+        'stream_project_booking_id',
+        'project_name',
+        'is_active',
+        'event_date',
+        'start_time',
+        'end_time',
+        'time_zone',
+        'duration_hours',
+        'event_location',
+        'event_latitude',
+        'event_longitude',
+      ],
+      include: [
+        {
+          model: db.stream_project_booking_days,
+          as: 'booking_days',
+          required: false,
+          attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+        },
+        {
+          model: assigned_crew,
+          as: 'assigned_crews',
+          where: { is_active: 1 },
+          required: false,
+          attributes: ['project_id', 'crew_member_id'],
+        },
+      ],
+      order: [
+        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN 0 ELSE 1 END'), 'ASC'],
+        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN `stream_project_booking`.`event_date` END'), 'ASC'],
+        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) < CURDATE() THEN `stream_project_booking`.`event_date` END'), 'DESC'],
+      ],
+    });
+
+    const projects = rows.map((row) => {
+      const shoot = row.toJSON();
+
+      const bookingDays = (Array.isArray(shoot.booking_days) ? shoot.booking_days : [])
+        .sort((a, b) => {
+          const d = String(a.event_date || '').localeCompare(String(b.event_date || ''));
+          return d !== 0 ? d : String(a.start_time || '').localeCompare(String(b.start_time || ''));
+        })
+        .map((day) => ({
+          event_date: day.event_date,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          duration_hours: day.duration_hours,
+          time_zone: day.time_zone || null,
+        }));
+
+      let eventLocation = shoot.event_location || null;
+      if (typeof eventLocation === 'string' && (eventLocation.startsWith('{') || eventLocation.startsWith('['))) {
+        try {
+          const parsed = JSON.parse(eventLocation);
+          eventLocation = parsed.address || eventLocation;
+        } catch (_) { /* keep original */ }
+      }
+
+      return {
+        project: {
+          stream_project_booking_id: shoot.stream_project_booking_id,
+          project_name: shoot.project_name || null,
+          is_active: Number(shoot.is_active) === 1,
+          event_date: shoot.event_date,
+          start_time: shoot.start_time,
+          end_time: shoot.end_time,
+          time_zone: shoot.time_zone || null,
+          duration_hours: shoot.duration_hours,
+          booking_days: bookingDays,
+          event_location: eventLocation,
+          event_latitude: shoot.event_latitude ?? null,
+          event_longitude: shoot.event_longitude ?? null,
+        },
+        assignedCrew: (Array.isArray(shoot.assigned_crews) ? shoot.assigned_crews : []).map((ac) => ({
+          project_id: ac.project_id,
+          crew_member_id: ac.crew_member_id,
+        })),
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Global shoots retrieved successfully',
+      data: {
+        total_records: projects.length,
+        projects,
+      },
+    });
+  } catch (error) {
+    console.error('[admin/global-shoots] Failed to retrieve shoots:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Failed to retrieve global shoots.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
 const CALENDAR_DATE_FORMAT = 'YYYY-MM-DD';
 
 const getCalendarShootRange = (query, view) => {
