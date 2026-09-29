@@ -4729,8 +4729,9 @@ const getCalendarShootRange = (query, view) => {
   };
 };
 
-// Mirrors the paid + active base condition used by getAllProjectDetails (list view).
-const getPaidActiveCalendarFilter = async (req) => {
+// Mirrors the paid base condition used by getAllProjectDetails (list view).
+// is_active is applied separately in the calendar query.
+const getPaidCalendarFilter = async (req) => {
   const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
   const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
   const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
@@ -4765,13 +4766,66 @@ const getPaidActiveCalendarFilter = async (req) => {
   ]));
 
   return {
-    is_active: 1,
     ...clientProjectFilter,
     [Sequelize.Op.or]: [
       { payment_id: { [Sequelize.Op.ne]: null } },
       ...(paidBookingIds.length ? [{ stream_project_booking_id: { [Sequelize.Op.in]: paidBookingIds } }] : []),
     ],
   };
+};
+
+const getEffectiveCalendarMeetingStatus = (meeting) => {
+  const stored = String(meeting.meeting_status || 'pending').toLowerCase();
+  if (['cancelled', 'change_request', 'rescheduled'].includes(stored)) return stored;
+
+  const now = Date.now();
+  const start = meeting.meeting_date_time ? new Date(meeting.meeting_date_time).getTime() : NaN;
+  const end = meeting.meeting_end_time ? new Date(meeting.meeting_end_time).getTime() : NaN;
+
+  if (!Number.isNaN(end) && end <= now) return 'completed';
+  if (!Number.isNaN(start) && !Number.isNaN(end) && start <= now && end > now) return 'ongoing';
+  if (stored === 'in_progress') return 'ongoing';
+  if (stored === 'confirmed') return 'pending';
+  return stored;
+};
+
+const fetchCalendarMeetings = async (req, range) => {
+  const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
+  const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
+  const isClient = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0;
+
+  const rows = await db.project_meetings.findAll({
+    where: {
+      meeting_date_time: {
+        [Op.between]: [`${range.start} 00:00:00`, `${range.end} 23:59:59`],
+      },
+    },
+    include: [{
+      model: db.stream_project_booking,
+      as: 'booking',
+      required: true,
+      attributes: ['stream_project_booking_id', 'project_name', 'is_active'],
+      ...(isClient ? { where: { user_id: requestUserId } } : {}),
+    }],
+    order: [['meeting_date_time', 'ASC'], ['meeting_id', 'ASC']],
+  });
+
+  return rows.map((row) => {
+    const meeting = row.get({ plain: true });
+    return {
+      id: meeting.meeting_id,
+      title: meeting.meeting_title || 'Untitled Meeting',
+      meeting_type: meeting.meeting_type,
+      meeting_status: getEffectiveCalendarMeetingStatus(meeting),
+      meeting_date_time: meeting.meeting_date_time,
+      meeting_end_time: meeting.meeting_end_time,
+      meeting_timezone: meeting.meeting_timezone,
+      meet_link: meeting.meet_link || null,
+      booking_id: meeting.booking_id,
+      booking_name: meeting.booking?.project_name || `Project #${meeting.booking_id}`,
+      booking_is_active: Number(meeting.booking?.is_active) === 1,
+    };
+  });
 };
 
 const getCalendarShoots = (view) => async (req, res) => {
@@ -4786,30 +4840,43 @@ const getCalendarShoots = (view) => async (req, res) => {
       });
     }
 
-    const paidActiveFilter = await getPaidActiveCalendarFilter(req);
-    const shoots = await stream_project_booking.findAll({
-      attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'start_time', 'end_time', 'time_zone'],
+    const paidFilter = await getPaidCalendarFilter(req);
+
+    const fetchShoots = (isActive) => stream_project_booking.findAll({
+      attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'start_time', 'end_time', 'time_zone', 'is_active'],
       where: {
-        ...paidActiveFilter,
+        ...paidFilter,
+        is_active: isActive,
         event_date: { [Op.between]: [range.start, range.end] },
       },
       order: [['event_date', 'ASC'], ['start_time', 'ASC'], ['stream_project_booking_id', 'ASC']],
       raw: true,
     });
 
+    const formatShoot = (shoot) => ({
+      id: shoot.stream_project_booking_id,
+      title: shoot.project_name || 'Untitled Shoot',
+      date: shoot.event_date,
+      start_time: shoot.start_time,
+      end_time: shoot.end_time,
+      time_zone: shoot.time_zone,
+      is_active: Number(shoot.is_active) === 1,
+    });
+
+    const [activeRows, deletedRows, meetings] = await Promise.all([
+      fetchShoots(1),
+      fetchShoots(0),
+      fetchCalendarMeetings(req, range),
+    ]);
+
     return res.status(200).json({
       success: true,
       data: {
         view,
         range,
-        shoots: shoots.map((shoot) => ({
-          id: shoot.stream_project_booking_id,
-          title: shoot.project_name || 'Untitled Shoot',
-          date: shoot.event_date,
-          start_time: shoot.start_time,
-          end_time: shoot.end_time,
-          time_zone: shoot.time_zone,
-        })),
+        active_shoots: activeRows.map(formatShoot),
+        deleted_shoots: deletedRows.map(formatShoot),
+        meetings,
       },
     });
   } catch (error) {
