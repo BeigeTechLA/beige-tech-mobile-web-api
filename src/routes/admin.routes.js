@@ -279,6 +279,8 @@ router.put('/edit-client/:client_id', admin.editClient);
 router.delete('/delete-client/:client_id', authMiddleware, adminClientsDelete, admin.deleteClient);
 router.post('/restore-client/:client_id', authMiddleware, adminClientsDelete, admin.restoreClient);
 router.post('/convert-client-to-creative-partner/:client_id', authMiddleware, adminClientsEdit, admin.convertClientToCreativePartner);
+router.get('/shoots/:project_id/history', authMiddleware, shootsView, admin.getProjectHistory);
+router.post('/restore-project/:project_id', authMiddleware, shootsDelete, admin.restoreProject);
 router.delete('/delete-project/:project_id', authMiddleware, shootsDelete, admin.deleteProject);
 router.post('/upload-profile-photo', admin.uploadProfilePhoto);
 router.get('/get-client-by-id/:id', authMiddleware, adminClientsView, admin.getClientById);
