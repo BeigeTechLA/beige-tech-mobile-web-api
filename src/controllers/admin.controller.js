@@ -62,9 +62,59 @@ const getFrontendBaseUrl = () =>
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
+const POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES = [
+  'Post Production Manager',
+  'Producer',
+  'super_admin'
+];
 const normalizePhoneNumber = (number) => String(number || '').replace(/\D/g, '');
 
 const isAdminProfileRole = (role) => ADMIN_PROFILE_ROLES.has(normalizeAdminRole(role));
+
+const getAssignedProjectIdsForPostProductionUser = async (userId) => {
+  const selectedUser = await users.findOne({
+    where: {
+      id: userId,
+      is_active: 1
+    },
+    attributes: ['id', 'email'],
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: [],
+        required: true,
+        where: {
+          user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES },
+          is_active: 1
+        }
+      }
+    ]
+  });
+
+  if (!selectedUser?.email) return [];
+
+  const assignedProjects = await assigned_post_production_member.findAll({
+    where: { is_active: 1 },
+    attributes: ['project_id'],
+    include: [
+      {
+        model: post_production_members,
+        as: 'post_production_member',
+        attributes: [],
+        required: true,
+        where: { email: selectedUser.email }
+      }
+    ],
+    raw: true
+  });
+
+  return Array.from(new Set(
+    assignedProjects
+      .map((assignment) => Number(assignment.project_id))
+      .filter((projectId) => Number.isInteger(projectId) && projectId > 0)
+  ));
+};
 
 const formatAdminProfile = (adminUser) => ({
   id: adminUser.id,
@@ -3123,8 +3173,13 @@ exports.updateProjectDateLocation = async (req, res) => {
     }
 
     if (hasLocationUpdate) {
-      const latitude = req.body.latitude ?? null;
-      const longitude = req.body.longitude ?? null;
+      const incomingCoordinates = extractCoordinatesFromPayload(req.body, nextLocation);
+      const locationDidNotChange =
+        normalizeLocationForStorage(project.event_location) === normalizedLocation;
+      const latitude = incomingCoordinates.latitude ??
+        (locationDidNotChange ? project.event_latitude : null);
+      const longitude = incomingCoordinates.longitude ??
+        (locationDidNotChange ? project.event_longitude : null);
       updatePayload.event_location = normalizedLocation;
       updatePayload.event_latitude = latitude;
       updatePayload.event_longitude = longitude;
@@ -4001,7 +4056,7 @@ exports.updateProjectName = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only, board_view } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, post_production_user_id, summary_only, board_view } = req.query;
     const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
     const today = new Date();
     const isBoardView = String(board_view || '').toLowerCase() === 'true' || String(board_view) === '1';
@@ -4359,6 +4414,29 @@ exports.getAllProjectDetails = async (req, res) => {
         [Sequelize.Op.and]: [
           ...(whereConditions[Sequelize.Op.and] || []),
           searchCondition
+        ]
+      };
+    }
+
+    if (post_production_user_id && post_production_user_id !== 'all') {
+      const selectedPostProductionUserId = Number(post_production_user_id);
+      if (!Number.isInteger(selectedPostProductionUserId) || selectedPostProductionUserId <= 0) {
+        return res.status(400).json({
+          error: true,
+          message: 'post_production_user_id must be a positive integer'
+        });
+      }
+
+      const assignedProjectIds = await getAssignedProjectIdsForPostProductionUser(selectedPostProductionUserId);
+      whereConditions = {
+        ...whereConditions,
+        [Sequelize.Op.and]: [
+          ...(whereConditions[Sequelize.Op.and] || []),
+          {
+            stream_project_booking_id: {
+              [Sequelize.Op.in]: assignedProjectIds.length ? assignedProjectIds : [-1]
+            }
+          }
         ]
       };
     }
@@ -5247,6 +5325,7 @@ exports.exportShootsCsv = async (req, res) => {
       category,
       cp_assignment,
       production_filter,
+      post_production_user_id,
     } = req.query;
     const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
 
@@ -5394,9 +5473,29 @@ exports.exportShootsCsv = async (req, res) => {
       ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id)).filter(Number.isFinite),
     ]));
 
+    let postProductionAssignmentFilter = {};
+    if (post_production_user_id && post_production_user_id !== 'all') {
+      const selectedPostProductionUserId = Number(post_production_user_id);
+      if (!Number.isInteger(selectedPostProductionUserId) || selectedPostProductionUserId <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: true,
+          message: 'post_production_user_id must be a positive integer'
+        });
+      }
+
+      const assignedProjectIds = await getAssignedProjectIdsForPostProductionUser(selectedPostProductionUserId);
+      postProductionAssignmentFilter = {
+        stream_project_booking_id: {
+          [Sequelize.Op.in]: assignedProjectIds.length ? assignedProjectIds : [-1]
+        }
+      };
+    }
+
     const paidOnlyFilter = {
       is_active: isDeletedStatus ? 0 : 1,
       ...clientProjectFilter,
+      ...postProductionAssignmentFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
         ...(bookedBookingIds.length > 0
@@ -10870,6 +10969,60 @@ exports.getShootByCategory = async (req, res) => {
   }
 };
 
+// Fetch active internal users who can be assigned to a post-production team.
+// Role names are used intentionally so this does not depend on environment-specific role IDs.
+exports.getPostProductionTeamOptions = async (req, res) => {
+  try {
+    const activeRoles = await db.user_type.findAll({
+      where: {
+        user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES },
+        is_active: 1
+      },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true
+    });
+
+    const roleNameById = new Map(
+      activeRoles.map((role) => [Number(role.user_type_id), role.user_role])
+    );
+    const roleIds = Array.from(roleNameById.keys());
+
+    if (!roleIds.length) {
+      return res.status(200).json({
+        success: true,
+        data: []
+      });
+    }
+
+    const activeUsers = await db.users.scope('all').findAll({
+      where: {
+        user_type: { [Op.in]: roleIds },
+        is_active: 1
+      },
+      attributes: ['id', 'name', 'email', 'user_type', 'is_active'],
+      order: [['name', 'ASC']],
+      raw: true
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: activeUsers.map((user) => ({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role_name: roleNameById.get(Number(user.user_type)) || null,
+        is_active: user.is_active
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching post-production team options:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch post-production team options'
+    });
+  }
+};
+
 // Controller to fetch all post production members
 exports.getPostProductionMembers = async (req, res) => {
   try {
@@ -10945,21 +11098,32 @@ exports.assignPostProductionMember = async (req, res) => {
       });
     }
 
-    // Resolve selected member from internal users first.
+    // Resolve the selected member by an allowed active role name rather than a
+    // hard-coded role ID, since role IDs differ between environments.
     const selectedUser = await users.findOne({
       where: {
         id: post_production_member_id,
-        is_active: 1,
-        assign_lead: 1,
-        user_type: 1
+        is_active: 1
       },
-      attributes: ['id', 'name', 'email', 'role']
+      attributes: ['id', 'name', 'email', 'role', 'user_type'],
+      include: [
+        {
+          model: db.user_type,
+          as: 'userType',
+          attributes: ['user_role'],
+          required: true,
+          where: {
+            user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES },
+            is_active: 1
+          }
+        }
+      ]
     });
 
     if (!selectedUser) {
       return res.status(404).json({
         error: true,
-        message: 'Selected internal member not found or inactive',
+        message: 'Selected member is inactive or does not have an allowed post-production role',
       });
     }
 

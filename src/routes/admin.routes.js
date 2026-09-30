@@ -269,6 +269,7 @@ router.get('/dashboard/top-creative-partners', authMiddleware, dashboardView, ad
 router.post('/dashboard-detail', authMiddleware, dashboardView, admin.getDashboardDetails);
 router.post('/verify-crew-member', authMiddleware, adminCreativePartnersEdit, admin.verifyCrewMember);
 router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
+router.get('/post-production-team-options', authMiddleware, shootsView, admin.getPostProductionTeamOptions);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
 router.get('/get-clients', authMiddleware, adminClientsView, admin.getClients);
