@@ -1,4 +1,5 @@
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
 const db = require('../models');
@@ -352,17 +353,49 @@ const generateTokens = (userId, userRole, permissionsVersion, userTypeId) => {
   const token = jwt.sign(
     { userId, userRole, permissionsVersion, userTypeId },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    { expiresIn: config.jwtExpiresIn }
   );
 
-  const refreshToken = jwt.sign(
-    { userId, userRole, permissionsVersion, userTypeId, type: 'refresh' },
-    process.env.JWT_SECRET,
-    { expiresIn: '30d' }
-  );
-
-  return { token, refreshToken };
+  return { token };
 };
+
+const REFRESH_COOKIE = 'revure_refresh_session';
+const hashSessionToken = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const getRefreshCookie = (req) => String(req.headers.cookie || '').split(';').map((part) => part.trim())
+  .find((part) => part.startsWith(REFRESH_COOKIE + '='))?.slice(REFRESH_COOKIE.length + 1) || null;
+const refreshCookieOptions = () => ({
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax',
+  path: '/v1/auth',
+  maxAge: config.refreshSessionDays * 24 * 60 * 60 * 1000
+});
+const clearRefreshCookieOptions = () => ({
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax',
+  path: '/v1/auth'
+});
+
+async function startWebSession(res, req, userId) {
+  const rawToken = crypto.randomBytes(48).toString('base64url');
+  const now = new Date();
+  await db.user_sessions.create({
+    user_id: userId,
+    token_hash: hashSessionToken(rawToken),
+    expires_at: new Date(now.getTime() + config.refreshSessionDays * 24 * 60 * 60 * 1000),
+    last_used_at: now,
+    user_agent: String(req.get('user-agent') || '').slice(0, 512) || null,
+    ip_address: String(req.ip || '').slice(0, 64) || null,
+    created_at: now
+  });
+  res.cookie(REFRESH_COOKIE, rawToken, refreshCookieOptions());
+}
+
+async function rotateWebSession(res, req, session) {
+  await session.update({ revoked_at: new Date(), last_used_at: new Date() });
+  await startWebSession(res, req, session.user_id);
+}
 
 /**
  * Get permissions for a role
@@ -576,14 +609,13 @@ async function buildAuthenticatedUserResponse(user) {
   });
   affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-  const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
+  const { token } = generateTokens(user.id, role, user.permissions_version, user_type_id);
   const permissions = await getCombinedUserPermissions(user.id, user.user_type);
 
   return {
     role,
     user_type_id,
     token,
-    refreshToken,
     permissions,
     user: {
       id: user.id,
@@ -1049,7 +1081,7 @@ exports.verifyEmail = async (req, res) => {
     });
 
     const role = userTypeRecord?.user_role || 'client';
-    const { token, refreshToken } = generateTokens(user.id, role);
+    const { token } = generateTokens(user.id, role);
     const permissions = getPermissionsForRole(role);
 
     return res.status(200).json({
@@ -1062,8 +1094,7 @@ exports.verifyEmail = async (req, res) => {
         role: role
       },
       token,
-      refreshToken,
-      permissions
+        permissions
     });
 
   } catch (error) {
@@ -1156,6 +1187,50 @@ const getCombinedUserPermissions = async (userId, roleId) => {
   });
 
   return formattedPermissions;
+};
+
+exports.refreshSession = async (req, res) => {
+  try {
+    const rawToken = getRefreshCookie(req);
+    if (!rawToken) return res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
+    const session = await db.user_sessions.findOne({
+      where: { token_hash: hashSessionToken(rawToken), revoked_at: null, expires_at: { [Op.gt]: new Date() } }
+    });
+    if (!session) {
+      res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
+      return res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
+    }
+    const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
+    const user = await UserAll.findOne({
+      where: { id: session.user_id, is_active: 1 },
+      include: [{ model: UserType, as: 'userType', attributes: ['user_type_id', 'user_role'] }]
+    });
+    if (!user) {
+      await session.update({ revoked_at: new Date() });
+      res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
+      return res.status(401).json({ success: false, message: 'Session is no longer valid.' });
+    }
+    await rotateWebSession(res, req, session);
+    const role = user.userType?.user_role || 'client';
+    const userTypeId = user.userType?.user_type_id || user.user_type || null;
+    const { token } = generateTokens(user.id, role, user.permissions_version, userTypeId);
+    return res.status(200).json({ success: true, token });
+  } catch (error) {
+    console.error('Refresh session error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to refresh session.' });
+  }
+};
+
+exports.logout = async (req, res) => {
+  try {
+    const rawToken = getRefreshCookie(req);
+    if (rawToken) await db.user_sessions.update({ revoked_at: new Date() }, { where: { token_hash: hashSessionToken(rawToken), revoked_at: null } });
+    res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Logout error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to log out.' });
+  }
 };
 
 /**
@@ -1258,7 +1333,7 @@ exports.login = async (req, res) => {
       affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
       // Generate tokens
-      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
+      const { token } = generateTokens(user.id, role, user.permissions_version, user_type_id);
 
       const permissions = await getCombinedUserPermissions(
         user.id,
@@ -1267,6 +1342,8 @@ exports.login = async (req, res) => {
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
       // const permissions = getPermissionsForRole(role);
+
+      await startWebSession(res, req, user.id);
 
       return res.status(200).json({
         success: true,
@@ -1291,8 +1368,7 @@ exports.login = async (req, res) => {
           has_password: Boolean(user.password_hash)
         },
         token,
-        refreshToken,
-        permissions,
+            permissions,
       });
     }
 
@@ -1408,7 +1484,7 @@ const affiliate = await Affiliate.findOne({
 });
 affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version);
+      const { token } = generateTokens(user.id, role, user.permissions_version);
       
       const permissions = await getCombinedUserPermissions(
         user.id,
@@ -1440,8 +1516,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
         },
 
         token,
-        refreshToken,
-        permissions,
+            permissions,
       });
     }
 
@@ -1828,6 +1903,7 @@ exports.googleLogin = async (req, res) => {
     }
 
     const authPayload = await buildAuthenticatedUserResponse(user);
+    await startWebSession(res, req, user.id);
 
     return res.status(isSignup && (createdClientId || createdCrewMemberId) ? 201 : 200).json({
       success: true,
@@ -2340,7 +2416,7 @@ exports.quickRegister = async (req, res) => {
     // If user exists, return user info
     if (existingUser) {
       const role = existingUser.userType?.user_role || 'client';
-      const { token, refreshToken } = generateTokens(existingUser.id, role);
+      const { token } = generateTokens(existingUser.id, role);
       const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
@@ -2354,8 +2430,7 @@ exports.quickRegister = async (req, res) => {
           role: role
         },
         token,
-        refreshToken,
-        permissions
+            permissions
       });
     }
 
@@ -2408,7 +2483,7 @@ exports.quickRegister = async (req, res) => {
     });
 
     // Generate tokens
-    const { token, refreshToken } = generateTokens(newUser.id, 'client');
+    const { token } = generateTokens(newUser.id, 'client');
     const permissions = getPermissionsForRole('client');
 
     return res.status(201).json({
@@ -2424,8 +2499,7 @@ exports.quickRegister = async (req, res) => {
       affiliate: affiliateData,
       linked_bookings_count: linkedBookingsCount,
       token,
-      refreshToken,
-      permissions,
+        permissions,
       tempPassword: tempPassword // Send temp password for user to set new one
     });
 
