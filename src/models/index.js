@@ -15,6 +15,7 @@ const assignmentHistoryFactory = require('./assignment_history');
 const creatorAvailabilityRulesFactory = require('./creator_availability_rules');
 const creatorAvailabilityBlocksFactory = require('./creator_availability_blocks');
 const creatorCalendarConnectionsFactory = require('./creator_calendar_connections');
+const userSessionsFactory = require('./user_sessions');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -28,6 +29,12 @@ models.signup_credit_promo_history = signupCreditPromoHistoryFactory(sequelize, 
 models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
+models.user_sessions = userSessionsFactory(sequelize, DataTypes);
+
+if (models.user_sessions && models.users) {
+  models.user_sessions.belongsTo(models.users, { foreignKey: 'user_id', as: 'user' });
+  models.users.hasMany(models.user_sessions, { foreignKey: 'user_id', as: 'sessions' });
+}
 models.creator_availability_rules = creatorAvailabilityRulesFactory(sequelize, DataTypes);
 models.creator_availability_blocks = creatorAvailabilityBlocksFactory(sequelize, DataTypes);
 models.creator_calendar_connections = creatorCalendarConnectionsFactory(sequelize, DataTypes);

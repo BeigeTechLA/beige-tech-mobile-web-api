@@ -4,7 +4,8 @@ module.exports = {
   port: process.env.PORT || 5001,
   nodeEnv: process.env.NODE_ENV || 'development',
   jwtSecret: process.env.JWT_SECRET,
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  jwtExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '30m',
+  refreshSessionDays: Number(process.env.REFRESH_SESSION_DAYS || 365),
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   db: {
     host: process.env.DATABASE_HOST,
