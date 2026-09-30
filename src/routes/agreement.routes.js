@@ -15,6 +15,7 @@ const cpAgreementEdit = requireAnyPermission(['creative_partner_agreements.edit'
 router.post('/admin/general-agreements', authMiddleware, agreementsCreate, agreementController.createGeneralAgreement);
 router.put('/admin/general-agreements/:id', authMiddleware, agreementsEdit, agreementController.updateGeneralAgreement);
 router.get('/admin/general-agreements/history', authMiddleware, agreementsView, agreementController.getGeneralAgreementHistory);
+router.get('/admin/general-agreements/:id/pdf', authMiddleware, agreementsView, agreementController.downloadAdminGeneralAgreementPdf);
 router.get('/admin/general-agreements/:id', authMiddleware, agreementsView, agreementController.getGeneralAgreement);
 router.post('/admin/general-agreements/:id/send', authMiddleware, agreementsEdit, agreementController.sendGeneralAgreement);
 router.post('/admin/shoot-requests', authMiddleware, agreementsCreate, agreementController.createShootRequest);
@@ -25,6 +26,7 @@ router.get('/admin/shoot-agreements/:id', authMiddleware, agreementsView, agreem
 router.post('/admin/shoot-agreements/:id/send', authMiddleware, agreementsEdit, agreementController.sendShootAgreement);
 router.get('/cp/general-agreement/current', authMiddleware, cpAgreementView, agreementController.getCurrentGeneralAgreement);
 router.post('/cp/general-agreement/:versionId/accept', authMiddleware, cpAgreementEdit, agreementController.acceptCurrentGeneralAgreement);
+router.get('/cp/general-agreement/:id/pdf', authMiddleware, cpAgreementView, agreementController.downloadCurrentGeneralAgreementPdf);
 router.get('/cp/shoot-requests', authMiddleware, cpAgreementView, agreementController.getMyShootRequests);
 router.get('/cp/shoot-requests/:id', authMiddleware, cpAgreementView, agreementController.getMyShootRequest);
 router.get('/cp/shoot-agreements/:id', authMiddleware, cpAgreementView, agreementController.getMyShootAgreement);

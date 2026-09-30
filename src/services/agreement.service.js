@@ -1,5 +1,6 @@
 const db = require('../models');
 const { Op } = db.Sequelize;
+const { generateGeneralAgreementPdfBuffer } = require('../utils/agreementPdf');
 
 const GENERAL_SELECT = { is_deleted: 0 };
 const shootSnapshot = (agreement) => ({
@@ -20,6 +21,77 @@ const shootSnapshot = (agreement) => ({
 
 const failure = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 const nextVersion = (version) => `v${(Number(String(version || 'v0.0').replace(/^v/, '').split('.')[0]) || 0) + 1}.0`;
+
+function historyDateRange(query) {
+  const startDate = query.start_date || query.date_on;
+  const endDate = query.end_date || query.date_on;
+  if (!startDate && !endDate) return null;
+
+  const start = new Date(`${startDate || endDate}T00:00:00`);
+  const end = new Date(`${endDate || startDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) throw failure('Invalid history date filter', 400);
+  end.setDate(end.getDate() + 1);
+  return { [Op.gte]: start, [Op.lt]: end };
+}
+
+async function getGeneralHistory(query = {}) {
+  const page = Math.max(Number(query.page) || 1, 1);
+  const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 100);
+  const where = { ...GENERAL_SELECT };
+  const versionWhere = { ...GENERAL_SELECT };
+  const agreementWhere = { ...GENERAL_SELECT };
+  const creativePartnerId = query.creative_partner_id || query.cp;
+  const dateRange = historyDateRange(query);
+  if (query.status) where.status = String(query.status).toLowerCase();
+  if (creativePartnerId) where.creative_partner_id = Number(creativePartnerId);
+  if (query.version) versionWhere.version_number = String(query.version).replace(/^v?/, 'v');
+  if (query.project) where.project_id = Number(query.project) || query.project;
+  if (dateRange) where.created_at = dateRange;
+  if (query.search) {
+    agreementWhere[Op.or] = [
+      { agreement_name: { [Op.like]: `%${query.search}%` } },
+      { agreement_title: { [Op.like]: `%${query.search}%` } }
+    ];
+  }
+  const result = await db.cp_general_agreement_acceptance.findAndCountAll({
+    where,
+    include: [
+      { model: db.crew_members, as: 'creative_partner', required: false, attributes: ['crew_member_id', 'first_name', 'last_name', 'email'] },
+      { model: db.agreement_versions, required: true, where: versionWhere, include: [{ model: db.agreements, as: 'agreement', required: true, where: agreementWhere }] }
+    ],
+    limit,
+    offset: (page - 1) * limit,
+    order: [['created_at', 'DESC']],
+    distinct: true
+  });
+  return { items: result.rows, pagination: { page, limit, total: result.count } };
+}
+
+async function getShootHistory(query = {}) {
+  const page = Math.max(Number(query.page) || 1, 1);
+  const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 100);
+  const where = { ...GENERAL_SELECT };
+  const requestWhere = { ...GENERAL_SELECT };
+  const creativePartnerId = query.creative_partner_id || query.cp;
+  const dateRange = historyDateRange(query);
+  if (query.status) where.status = String(query.status).toLowerCase();
+  if (creativePartnerId) where.creative_partner_id = Number(creativePartnerId);
+  if (dateRange) where.created_at = dateRange;
+  if (query.project) requestWhere.project_name = String(query.project);
+  if (query.search) where[Op.or] = [{ assignment_id: { [Op.like]: `%${query.search}%` } }, { role: { [Op.like]: `%${query.search}%` } }];
+  const result = await db.shoot_agreements.findAndCountAll({
+    where,
+    include: [
+      { model: db.crew_members, as: 'creative_partner', required: false, attributes: ['crew_member_id', 'first_name', 'last_name', 'email'] },
+      { model: db.shoot_requests, required: true, where: requestWhere }
+    ],
+    limit,
+    offset: (page - 1) * limit,
+    order: [['created_at', 'DESC']],
+    distinct: true
+  });
+  return { items: result.rows, pagination: { page, limit, total: result.count } };
+}
 
 function requireAuthenticatedUserId(userId) {
   const normalizedUserId = Number(userId);
@@ -98,7 +170,7 @@ async function updateGeneral(id, payload, actorId) {
   });
 }
 
-async function sendGeneral(id, crewMemberIds, actorId) {
+async function sendGeneral(id, crewMemberIds, actorId, metadata = {}) {
   actorId = requireAuthenticatedUserId(actorId);
   if (!Array.isArray(crewMemberIds) || !crewMemberIds.length) throw failure('crew_member_ids is required', 400);
   return db.sequelize.transaction(async (transaction) => {
@@ -109,9 +181,9 @@ async function sendGeneral(id, crewMemberIds, actorId) {
       if (!crewMember) throw failure(`Creative partner ${creative_partner_id} not found`, 404);
       const acceptance = await db.cp_general_agreement_acceptance.findOne({ where: { creative_partner_id, agreement_version_id: agreement.current_version_id, ...GENERAL_SELECT }, transaction });
       if (acceptance) {
-        await acceptance.update({ status: 'pending', accepted_at: null }, { transaction });
+        await acceptance.update({ status: 'pending', accepted_at: null, role: metadata.role ?? null, project_id: metadata.project_id ?? null }, { transaction });
       } else {
-        await db.cp_general_agreement_acceptance.create({ creative_partner_id, agreement_version_id: agreement.current_version_id, status: 'pending', accepted_at: null, is_deleted: 0 }, { transaction });
+        await db.cp_general_agreement_acceptance.create({ creative_partner_id, agreement_version_id: agreement.current_version_id, role: metadata.role ?? null, project_id: metadata.project_id ?? null, status: 'pending', accepted_at: null, is_deleted: 0 }, { transaction });
       }
     }
     await log({ agreement_type: 'general', agreement_ref_id: id, actor_type: 'admin', actor_id: actorId, action: 'Sent to CP' }, transaction);
@@ -199,6 +271,8 @@ async function sendShoot(id, actorId) {
 async function acceptGeneral(versionId, creativePartnerId, actorId, confirmed) {
   actorId = requireAuthenticatedUserId(actorId);
   if (!confirmed) throw failure('confirmation is required', 400);
+  versionId = Number(versionId);
+  if (!Number.isInteger(versionId) || versionId <= 0) throw failure('Valid agreement version id is required', 400);
   return db.sequelize.transaction(async (transaction) => {
     const acceptance = await db.cp_general_agreement_acceptance.findOne({ where: { agreement_version_id: versionId, creative_partner_id: creativePartnerId, ...GENERAL_SELECT }, transaction, lock: transaction.LOCK.UPDATE });
     if (!acceptance) throw failure('General agreement was not sent to this CP', 404);
@@ -208,6 +282,56 @@ async function acceptGeneral(versionId, creativePartnerId, actorId, confirmed) {
     await log({ agreement_type: 'general', agreement_ref_id: version.agreement_id, version_number: version.version_number, actor_type: 'cp', actor_id: actorId, action: 'Accepted' }, transaction);
     return acceptance;
   });
+}
+
+async function getCurrentGeneralForCreativePartner(creativePartnerId) {
+  const acceptance = await db.cp_general_agreement_acceptance.findOne({
+    where: { creative_partner_id: creativePartnerId, ...GENERAL_SELECT },
+    include: [{
+      model: db.agreement_versions,
+      required: true,
+      where: GENERAL_SELECT,
+      include: [{ model: db.agreements, as: 'agreement', required: true, where: { ...GENERAL_SELECT, status: 'active' } }]
+    }],
+    order: [['created_at', 'DESC']]
+  });
+  if (!acceptance) throw failure('No general agreement has been sent to this CP', 404);
+
+  const version = acceptance.agreement_version;
+  const sections = await db.agreement_sections.findAll({
+    where: { agreement_version_id: version.id, ...GENERAL_SELECT },
+    order: [['section_order', 'ASC']]
+  });
+  return { agreement: version.agreement, current_version: version, sections, acceptance };
+}
+
+async function downloadGeneralAgreementPdf(id, creativePartnerId = null) {
+  const agreement = await db.agreements.findOne({ where: { id, ...GENERAL_SELECT } });
+  if (!agreement || !agreement.current_version_id) throw failure('General agreement not found', 404);
+
+  const version = await db.agreement_versions.findOne({ where: { id: agreement.current_version_id, ...GENERAL_SELECT } });
+  if (!version) throw failure('General agreement version not found', 404);
+
+  const sections = await db.agreement_sections.findAll({
+    where: { agreement_version_id: version.id, ...GENERAL_SELECT },
+    order: [['section_order', 'ASC']]
+  });
+
+  let acceptance = null;
+  let creativePartner = null;
+  if (creativePartnerId) {
+    acceptance = await db.cp_general_agreement_acceptance.findOne({
+      where: { creative_partner_id: creativePartnerId, agreement_version_id: version.id, ...GENERAL_SELECT }
+    });
+    if (!acceptance) throw failure('General agreement was not sent to this CP', 404);
+    creativePartner = await db.crew_members.findOne({
+      where: { crew_member_id: creativePartnerId, is_active: 1 },
+      attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+    });
+  }
+
+  const buffer = await generateGeneralAgreementPdfBuffer({ agreement, version, sections, acceptance, creativePartner });
+  return { buffer, filename: `general-agreement-${version.version_number}.pdf` };
 }
 
 async function decideShoot(id, creativePartnerId, actorId, action) {
@@ -239,4 +363,4 @@ async function listMyRequests(creativePartnerId, status) {
   return { summary: counts.reduce((result, item) => ({ ...result, [item.status]: Number(item.count) }), { pending: 0, confirmed: 0, completed: 0, declined: 0 }), items: items.map((item) => ({ ...item.toJSON(), agreement: byRequest.get(Number(item.id)) || null })) };
 }
 
-module.exports = { createGeneral, getGeneral, updateGeneral, sendGeneral, createShootRequest, createShootAgreement, getShootAgreement, updateShootAgreement, sendShoot, acceptGeneral, decideShoot, listMyRequests, resolveCreativePartnerId };
+module.exports = { createGeneral, getGeneral, getGeneralHistory, updateGeneral, sendGeneral, createShootRequest, createShootAgreement, getShootAgreement, getShootHistory, updateShootAgreement, sendShoot, acceptGeneral, getCurrentGeneralForCreativePartner, downloadGeneralAgreementPdf, decideShoot, listMyRequests, resolveCreativePartnerId };

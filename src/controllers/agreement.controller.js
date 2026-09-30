@@ -1,5 +1,5 @@
 const agreementService = require('../services/agreement.service');
-const { agreements, agreement_versions, cp_general_agreement_acceptance, shoot_agreements, shoot_requests, Sequelize } = require('../models');
+const { agreements, agreement_versions, cp_general_agreement_acceptance, shoot_agreements, shoot_requests, crew_members, Sequelize } = require('../models');
 
 const getAuthenticatedUserId = (req) => {
   const userId = Number(req.user?.userId || req.user?.id || req.userId);
@@ -39,24 +39,30 @@ exports.getGeneralAgreement = async (req, res) => {
   } catch (error) { return respondError(res, error, 'Get General Agreement Error'); }
 };
 
+exports.downloadAdminGeneralAgreementPdf = async (req, res) => {
+  try {
+    const data = await agreementService.downloadGeneralAgreementPdf(req.params.id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${data.filename}"`);
+    return res.send(data.buffer);
+  } catch (error) { return respondError(res, error, 'Download Admin General Agreement PDF Error'); }
+};
+
 exports.sendGeneralAgreement = async (req, res) => {
   try {
     const actorId = getAuthenticatedUserId(req);
-    await agreementService.sendGeneral(req.params.id, req.body.crew_member_ids, actorId);
+    await agreementService.sendGeneral(req.params.id, req.body.crew_member_ids, actorId, {
+      role: req.body.role,
+      project_id: req.body.project_id
+    });
     return res.status(200).json({ error: false, message: 'General agreement sent successfully', data: null });
   } catch (error) { return respondError(res, error, 'Send General Agreement Error'); }
 };
 
 exports.getGeneralAgreementHistory = async (req, res) => {
   try {
-    const page = Math.max(Number(req.query.page) || 1, 1);
-    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
-    const where = { is_deleted: 0 };
-    if (req.query.status) where.status = req.query.status;
-    if (req.query.cp) where.creative_partner_id = req.query.cp;
-    if (req.query.version) where.agreement_version_id = req.query.version;
-    const result = await cp_general_agreement_acceptance.findAndCountAll({ where, include: [{ model: agreement_versions, required: false, where: { is_deleted: 0 }, include: [{ model: agreements, as: 'agreement', required: false, where: { is_deleted: 0 } }] }], limit, offset: (page - 1) * limit, order: [['created_at', 'DESC']], distinct: true });
-    return res.status(200).json({ error: false, message: 'General agreement history fetched successfully', data: { items: result.rows, pagination: { page, limit, total: result.count } } });
+    const data = await agreementService.getGeneralHistory(req.query);
+    return res.status(200).json({ error: false, message: 'General agreement history fetched successfully', data });
   } catch (error) { return respondError(res, error, 'Get General Agreement History Error'); }
 };
 
@@ -101,25 +107,16 @@ exports.sendShootAgreement = async (req, res) => {
 
 exports.getShootAgreementHistory = async (req, res) => {
   try {
-    const page = Math.max(Number(req.query.page) || 1, 1);
-    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
-    const where = { is_deleted: 0 };
-    if (req.query.status) where.status = String(req.query.status).toLowerCase();
-    if (req.query.cp) where.creative_partner_id = req.query.cp;
-    if (req.query.search) where[Sequelize.Op.or] = [{ assignment_id: { [Sequelize.Op.like]: `%${req.query.search}%` } }, { role: { [Sequelize.Op.like]: `%${req.query.search}%` } }];
-    const result = await shoot_agreements.findAndCountAll({ where, include: [{ model: shoot_requests, required: false }], limit, offset: (page - 1) * limit, order: [['created_at', 'DESC']], distinct: true });
-    return res.status(200).json({ error: false, message: 'Shoot agreement history fetched successfully', data: { items: result.rows, pagination: { page, limit, total: result.count } } });
+    const data = await agreementService.getShootHistory(req.query);
+    return res.status(200).json({ error: false, message: 'Shoot agreement history fetched successfully', data });
   } catch (error) { return respondError(res, error, 'Get Shoot Agreement History Error'); }
 };
 
 exports.getCurrentGeneralAgreement = async (req, res) => {
   try {
     const actorId = getAuthenticatedUserId(req);
-    const agreement = await agreements.findOne({ where: { status: 'active', is_deleted: 0 }, order: [['updated_at', 'DESC']] });
-    if (!agreement) return res.status(404).json({ error: true, message: 'No active general agreement found', data: null });
-    const data = await agreementService.getGeneral(agreement.id);
     const crewMemberId = await agreementService.resolveCreativePartnerId(actorId);
-    data.acceptance = await cp_general_agreement_acceptance.findOne({ where: { creative_partner_id: crewMemberId, agreement_version_id: agreement.current_version_id, is_deleted: 0 } });
+    const data = await agreementService.getCurrentGeneralForCreativePartner(crewMemberId);
     return res.status(200).json({ error: false, message: 'Current general agreement fetched successfully', data });
   } catch (error) { return respondError(res, error, 'Get Current General Agreement Error'); }
 };
@@ -131,6 +128,17 @@ exports.acceptCurrentGeneralAgreement = async (req, res) => {
     const data = await agreementService.acceptGeneral(req.params.versionId, crewMemberId, actorId, req.body.confirmed === true);
     return res.status(200).json({ error: false, message: 'General agreement accepted successfully', data });
   } catch (error) { return respondError(res, error, 'Accept General Agreement Error'); }
+};
+
+exports.downloadCurrentGeneralAgreementPdf = async (req, res) => {
+  try {
+    const actorId = getAuthenticatedUserId(req);
+    const crewMemberId = await agreementService.resolveCreativePartnerId(actorId);
+    const data = await agreementService.downloadGeneralAgreementPdf(req.params.id, crewMemberId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${data.filename}"`);
+    return res.send(data.buffer);
+  } catch (error) { return respondError(res, error, 'Download CP General Agreement PDF Error'); }
 };
 
 exports.getMyShootRequests = async (req, res) => {
@@ -186,7 +194,13 @@ exports.getProfileAgreements = async (req, res) => {
     const actorId = getAuthenticatedUserId(req);
     const crewMemberId = await agreementService.resolveCreativePartnerId(actorId);
     const general = await cp_general_agreement_acceptance.findAll({ where: { creative_partner_id: crewMemberId, is_deleted: 0 }, include: [{ model: agreement_versions, required: false }] });
-    const shoots = await shoot_agreements.findAll({ where: { creative_partner_id: crewMemberId, is_deleted: 0 }, attributes: ['id', 'assignment_id', 'status', 'current_version_id', 'created_at'] });
+    const shoots = await shoot_agreements.findAll({
+      where: { creative_partner_id: crewMemberId, is_deleted: 0 },
+      include: [
+        { model: crew_members, as: 'creative_partner', required: false, attributes: ['crew_member_id', 'first_name', 'last_name', 'email'] },
+        { model: shoot_requests, required: false }
+      ]
+    });
     return res.status(200).json({ error: false, message: 'Profile agreements fetched successfully', data: { general_agreements: general, shoot_agreements: shoots } });
   } catch (error) { return respondError(res, error, 'Get Profile Agreements Error'); }
 };
