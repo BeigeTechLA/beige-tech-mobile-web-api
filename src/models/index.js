@@ -12,6 +12,7 @@ const signupCreditPromoHistoryFactory = require('./signup_credit_promo_history')
 const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
 const assignmentHistoryFactory = require('./assignment_history');
+const userSessionsFactory = require('./user_sessions');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -25,6 +26,12 @@ models.signup_credit_promo_history = signupCreditPromoHistoryFactory(sequelize, 
 models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
+models.user_sessions = userSessionsFactory(sequelize, DataTypes);
+
+if (models.user_sessions && models.users) {
+  models.user_sessions.belongsTo(models.users, { foreignKey: 'user_id', as: 'user' });
+  models.users.hasMany(models.user_sessions, { foreignKey: 'user_id', as: 'sessions' });
+}
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
