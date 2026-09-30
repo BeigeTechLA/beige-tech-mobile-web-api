@@ -363,6 +363,47 @@ function summarizeCohort(records) {
   };
 }
 
+function calculateGrowthPercent(current, previous) {
+  const curr = Number(current || 0);
+  const prev = Number(previous || 0);
+  if (prev === 0) return curr === 0 ? 0 : null; // null = no baseline to compare against
+  return roundPercent(((curr - prev) / prev) * 100);
+}
+
+function buildMonthOverMonthGrowth(records, nowValue = new Date()) {
+  const today = startOfDay(nowValue);
+  const currentStart = startOfMonth(today);
+  const currentEndExclusive = addDays(today, 1);
+
+  // Compare the same elapsed days of last month (capped to its length).
+  const previousStart = addMonths(currentStart, -1);
+  const daysInPreviousMonth = new Date(currentStart.getFullYear(), currentStart.getMonth(), 0).getDate();
+  const comparableDays = Math.min(today.getDate(), daysInPreviousMonth);
+  const previousEndExclusive = addDays(previousStart, comparableDays);
+
+  const inWindow = (record, start, end) => {
+    if (!record.sentAt) return false;
+    const date = new Date(record.sentAt);
+    return date >= start && date < end;
+  };
+
+  const current = summarizeCohort(records.filter((r) => inWindow(r, currentStart, currentEndExclusive)));
+  const previous = summarizeCohort(records.filter((r) => inWindow(r, previousStart, previousEndExclusive)));
+
+  return {
+    period: {
+      current_start: formatDate(currentStart),
+      current_end: formatDate(today),
+      previous_start: formatDate(previousStart),
+      previous_end: formatDate(addDays(previousEndExclusive, -1))
+    },
+    quote_value: calculateGrowthPercent(current.quote_value, previous.quote_value),
+    quotes_sent: calculateGrowthPercent(current.quotes_sent, previous.quotes_sent),
+    deals_won: calculateGrowthPercent(current.deals_won, previous.deals_won),
+    won_revenue: calculateGrowthPercent(current.won_revenue, previous.won_revenue)
+  };
+}
+
 function createSixMonthChartBuckets(nowValue = new Date()) {
   const currentMonth = startOfMonth(nowValue);
   const start = addMonths(currentMonth, -5);
@@ -420,6 +461,7 @@ function getDefinitions() {
     win_rate: 'Deals won divided by quotes sent, multiplied by 100.',
     quote_to_cash_conversion: 'Actual collected revenue, including partial payments, divided by quote value, multiplied by 100.',
     average_deal_size: 'Won revenue divided by deals won.',
+    growth: 'Percentage change of this month to date versus the same number of days last month. Null means last month had no data to compare against.',
     open_pipeline: 'Current outstanding value of sent, accepted, or partially paid quotes that are not paid, rejected, or expired.',
     overdue_follow_ups: `Current active unpaid quotes whose last sales contact (or sent time when never contacted) is at least ${OVERDUE_HOURS} hours old.`
   };
@@ -597,7 +639,8 @@ function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
     },
     overview: {
       ...summarizeCohort(cohortRecords),
-      ...currentState
+      ...currentState,
+      growth: buildMonthOverMonthGrowth(segmentedRecords, nowValue)
     },
     // This visualization is intentionally a rolling six-month trend. Date
     // filters continue to control the dashboard totals above it; non-date
@@ -806,6 +849,8 @@ module.exports = {
     summarizeCurrentState,
     buildAnalyticsData,
     getQuoteSentAt,
-    isOverdue
+    isOverdue,
+    calculateGrowthPercent,
+    buildMonthOverMonthGrowth
   }
 };
