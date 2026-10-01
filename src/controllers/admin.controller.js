@@ -4280,8 +4280,8 @@ exports.getAllProjectDetails = async (req, res) => {
     ]));
 
     const paidOnlyFilter = {
-      is_active: isDeletedStatus ? 0 : 1,
-      ...clientProjectFilter,
+  is_active: isDeletedStatus ? 0 : { [Sequelize.Op.in]: [0, 1] },
+  ...clientProjectFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
         ...(bookedBookingIds.length > 0
