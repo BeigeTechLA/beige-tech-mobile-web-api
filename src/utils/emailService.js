@@ -2194,11 +2194,21 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
   try {
     const to = process.env.SALES_NOTIFICATION_EMAIL;
     const normalizedPaymentType = String(paymentData?.payment_type || paymentData?.paymentType || '').toLowerCase();
+    const normalizedPaymentSource = String(paymentData?.payment_source || paymentData?.paymentSource || '').toLowerCase();
+    // An additional quote invoice is issued only after the booking has already
+    // received a payment. Keep Book a Shoot and first quote payments on the
+    // existing "Payment Confirmed" template.
+    const isAdditionalPayment =
+      paymentData?.is_additional_payment === true ||
+      paymentData?.isAdditionalPayment === true ||
+      normalizedPaymentType === 'additional' ||
+      normalizedPaymentSource === 'additional_invoice';
     const isPartialPayment =
       paymentData?.is_partial_payment === true ||
       paymentData?.isPartialPayment === true ||
       normalizedPaymentType === 'partial';
-    const templateId = isPartialPayment
+    const useAdditionalPaymentTemplate = isAdditionalPayment || isPartialPayment;
+    const templateId = useAdditionalPaymentTemplate
       ? SALES_NOTIF_PARTIAL_PAYMENT_RECEIVED_TEMPLATE_ID
       : SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID;
     const formatOptionalAmount = (value) => (
@@ -2252,7 +2262,9 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
 
     return await sendEmail({
       to: recipients,
-      subject: isPartialPayment ? 'Partial Payment Received' : 'Payment Received',
+      subject: useAdditionalPaymentTemplate
+        ? 'Additional Payment Received - Accounts Receivable Update'
+        : 'Payment Confirmed - A new booking has been finalized',
       templateId,
       dynamicTemplateData: {
         first_name: paymentData?.first_name || firstName,
@@ -2267,7 +2279,8 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
         total_paid: totalPaid,
         pending_amount: remainingBalance,
         remaining_balance: remainingBalance,
-        payment_type: isPartialPayment ? 'Partial' : 'Full',
+        payment_type: isAdditionalPayment ? 'Additional' : (isPartialPayment ? 'Partial' : 'Initial'),
+        payment_source: normalizedPaymentSource,
         payment_mode: paymentMethod,
         payment_method: paymentMethod,
         shootType: formatShootTypes(paymentData?.shootType) || 'N/A',
@@ -2286,7 +2299,7 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
         view_details_url: viewDetailsUrl,
         booking_url: viewDetailsUrl,
         year: new Date().getFullYear(),
-        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
+        frontend_url: viewDetailsUrl,
       }
     });
   } catch (error) {
