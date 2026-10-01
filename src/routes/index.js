@@ -35,6 +35,7 @@ router.use('/bookings', require('./bookings.routes'));
 router.use('/guest-bookings', require('./guest-bookings.routes'));
 router.use('/book-a-shoot/v4', require('./book-a-shoot-v4.routes'));
 router.use('/payments', require('./payments.routes'));
+router.use('/finance', require('./finance-analytics.routes'));
 router.use('/finance', require('./finance.routes'));
 router.use('/creator-earnings', require('./creator-earnings.routes'));
 router.use('/waitlist', require('./waitlist.routes'));
