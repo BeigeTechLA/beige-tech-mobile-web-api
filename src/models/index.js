@@ -16,8 +16,6 @@ const userSessionsFactory = require('./user_sessions');
 const creatorAvailabilityRulesFactory = require('./creator_availability_rules');
 const creatorAvailabilityBlocksFactory = require('./creator_availability_blocks');
 const creatorCalendarConnectionsFactory = require('./creator_calendar_connections');
-=========
->>>>>>>>> Temporary merge branch 2
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
