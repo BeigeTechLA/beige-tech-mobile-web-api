@@ -10869,6 +10869,20 @@ exports.assignPostProductionMember = async (req, res) => {
       is_active: 1,
     });
 
+    const actor = await getRequestActor(req);
+    await writeShootHistory({
+      projectId: Number(project_id),
+      action: 'post_production_member_assigned',
+      actor,
+      reason: 'Post production member assigned',
+      metadata: {
+        post_production_member_id: postProductionMember.post_production_member_id,
+        post_production_member_name:
+          fullName || `${postProductionMember.first_name || ''} ${postProductionMember.last_name || ''}`.trim(),
+        post_production_member_email: postProductionMember.email || null
+      }
+    });
+
     try {
       const emailClientName = await resolveAdminBookingClientName(project);
       const emailShootAmount = await resolveAdminBookingShootAmount(project);
@@ -10949,6 +10963,19 @@ exports.removePostProductionMember = async (req, res) => {
     const memberName =
       `${memberProfile?.first_name || ''} ${memberProfile?.last_name || ''}`.trim() ||
       `ID: ${post_production_member_id}`;
+
+    const actor = await getRequestActor(req);
+    await writeShootHistory({
+      projectId: Number(project_id),
+      action: 'post_production_member_removed',
+      actor,
+      reason: 'Post production member removed',
+      metadata: {
+        post_production_member_id: Number(post_production_member_id),
+        post_production_member_name: memberName,
+        post_production_member_email: memberProfile?.email || null
+      }
+    });
 
     const lead = await sales_leads.findOne({
       where: { booking_id: project_id },
@@ -12392,6 +12419,8 @@ exports.getProjectHistory = async (req, res) => {
             'restored',
             'crew_assigned',
             'crew_removed',
+            'post_production_member_assigned',
+            'post_production_member_removed',
             'project_name_updated',
             'schedule_location_updated'
           ]
