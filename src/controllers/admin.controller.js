@@ -2356,6 +2356,8 @@ exports.getProjectDetails = async (req, res) => {
         {
           model: assigned_post_production_member,
           as: 'assigned_post_production_members',
+          where: { is_active: 1 },
+          required: false,
           include: [{ model: post_production_members, as: 'post_production_member' }]
         },
         // Include the Lead associated with this project
@@ -10539,6 +10541,7 @@ exports.getShootByCategory = async (req, res) => {
 // Role names are used intentionally so this does not depend on environment-specific role IDs.
 exports.getPostProductionTeamOptions = async (req, res) => {
   try {
+    const projectId = Number(req.query?.project_id);
     const activeRoles = await db.user_type.findAll({
       where: {
         user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES },
@@ -10570,9 +10573,36 @@ exports.getPostProductionTeamOptions = async (req, res) => {
       raw: true
     });
 
+    // When options are being requested for one shoot, do not offer members
+    // who are already actively assigned to that shoot.
+    let assignedEmails = new Set();
+    if (Number.isInteger(projectId) && projectId > 0) {
+      const assignedMembers = await assigned_post_production_member.findAll({
+        where: { project_id: projectId, is_active: 1 },
+        attributes: [],
+        include: [{
+          model: post_production_members,
+          as: 'post_production_member',
+          required: true,
+          attributes: ['email']
+        }],
+        raw: true
+      });
+
+      assignedEmails = new Set(
+        assignedMembers
+          .map((member) => String(member['post_production_member.email'] || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+    }
+
+    const availableUsers = activeUsers.filter(
+      (user) => !assignedEmails.has(String(user.email || '').trim().toLowerCase())
+    );
+
     return res.status(200).json({
       success: true,
-      data: activeUsers.map((user) => ({
+      data: availableUsers.map((user) => ({
         id: user.id,
         name: user.name,
         email: user.email,
@@ -10786,6 +10816,81 @@ exports.assignPostProductionMember = async (req, res) => {
     return res.status(500).json({
       error: true,
       message: 'Internal server error',
+    });
+  }
+};
+
+exports.removePostProductionMember = async (req, res) => {
+  try {
+    const assigned_by_user_id = req.user?.userId;
+    const { project_id, post_production_member_id } = req.body;
+
+    if (!project_id || !post_production_member_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'project_id and post_production_member_id are required.'
+      });
+    }
+
+    // Keep this flow aligned with removeProjectAssignedCrew: find the active
+    // assignment, soft-delete it, then write the optional lead activity.
+    const assignment = await assigned_post_production_member.findOne({
+      where: {
+        project_id,
+        post_production_member_id,
+        is_active: 1
+      },
+      include: [{
+        model: post_production_members,
+        as: 'post_production_member',
+        attributes: ['first_name', 'last_name', 'email']
+      }]
+    });
+
+    if (!assignment) {
+      return res.status(404).json({
+        success: false,
+        message: 'This post production member is not currently assigned to this project or is already inactive.'
+      });
+    }
+
+    await assignment.update({ is_active: 0 });
+
+    const memberProfile = assignment.post_production_member;
+    const memberName =
+      `${memberProfile?.first_name || ''} ${memberProfile?.last_name || ''}`.trim() ||
+      `ID: ${post_production_member_id}`;
+
+    const lead = await sales_leads.findOne({
+      where: { booking_id: project_id },
+      attributes: ['lead_id']
+    });
+
+    if (lead) {
+      await sales_lead_activities.create(
+        {
+          lead_id: lead.lead_id,
+          activity_type: 'status_changed',
+          activity_data: {
+            action: 'post_production_member_removed',
+            notes: `Removed ${memberName} from the project via Project ID.`,
+            post_production_member_id
+          },
+          performed_by_user_id: assigned_by_user_id,
+          created_at: new Date()
+        }
+      );
+    }
+
+    return res.json({
+      success: true,
+      message: 'Post production member removed from project successfully.'
+    });
+  } catch (error) {
+    console.error('Remove Post Production Member Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
