@@ -272,6 +272,7 @@ router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin
 router.get('/post-production-team-options', authMiddleware, shootsView, admin.getPostProductionTeamOptions);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
+router.post('/remove-post-production-member', authMiddleware, shootsEdit, admin.removePostProductionMember);
 router.get('/get-clients', authMiddleware, adminClientsView, admin.getClients);
 router.get(
   '/clients/export',
