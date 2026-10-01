@@ -4830,52 +4830,89 @@ const buildGlobalShootRangeFilter = (rawRange, start_date, end_date) => {
 
 exports.getGlobalShoots = async (req, res) => {
   try {
-    const { range, start_date, end_date } = req.query;
+    const { range, start_date, end_date, post_production_user_id, } = req.query;
 
-    // Paid-shoots base filter (same as getAllProjectDetails, client-role scoping included)
     const paidFilter = await getPaidCalendarFilter(req);
 
-    // Only active shoots (is_active = 1). Deleted shoots are never returned.
-    const whereConditions = { ...paidFilter, is_active: 1 };
+    let whereConditions = { ...paidFilter, is_active: 1};
     const andConditions = buildGlobalShootRangeFilter(range, start_date, end_date);
     if (andConditions.length) {
       whereConditions[Op.and] = andConditions;
     }
 
+    if (
+      post_production_user_id &&
+      post_production_user_id !== "all"
+    ) {
+      const selectedPostProductionUserId = Number(
+        post_production_user_id
+      );
+
+      if (
+        !Number.isInteger(selectedPostProductionUserId) ||
+        selectedPostProductionUserId <= 0
+      ) {
+        return res.status(400).json({
+          error: true,
+          message:
+            "post_production_user_id must be a positive integer",
+        });
+      }
+
+      const assignedProjectIds =
+        await getAssignedProjectIdsForPostProductionUser(
+          selectedPostProductionUserId
+        );
+
+      whereConditions = {
+        ...whereConditions,
+        [Op.and]: [
+          ...(whereConditions[Op.and] || []),
+          {
+            stream_project_booking_id: {
+              [Op.in]: assignedProjectIds.length
+                ? assignedProjectIds
+                : [-1],
+            },
+          },
+        ],
+      };
+    }
+
     const rows = await stream_project_booking.findAll({
       where: whereConditions,
       attributes: [
-        'stream_project_booking_id',
-        'project_name',
-        'is_active',
-        'event_date',
-        'start_time',
-        'end_time',
-        'time_zone',
-        'duration_hours',
-        'event_location',
-        'event_latitude',
-        'event_longitude',
+        "stream_project_booking_id",
+        "project_name",
+        "is_active",
+        "event_date",
+        "start_time",
+        "end_time",
+        "time_zone",
+        "duration_hours",
+        "event_location",
+        "event_latitude",
+        "event_longitude",
       ],
       include: [
         {
           model: db.stream_project_booking_days,
-          as: 'booking_days',
+          as: "booking_days",
           required: false,
-          attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+          attributes: ["event_date", "start_time", "end_time", "duration_hours", "time_zone"],
         },
         {
           model: assigned_crew,
-          as: 'assigned_crews',
-          where: { is_active: 1 },
+          as: "assigned_crews",
+          where: { is_active: 1},
           required: false,
-          attributes: ['project_id', 'crew_member_id'],
+          attributes: ["project_id", "crew_member_id"],
         },
       ],
       order: [
-        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN 0 ELSE 1 END'), 'ASC'],
-        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN `stream_project_booking`.`event_date` END'), 'ASC'],
-        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) < CURDATE() THEN `stream_project_booking`.`event_date` END'), 'DESC'],
+        [Sequelize.literal("CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN 0 ELSE 1 END"), "ASC"],
+        [Sequelize.literal("CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN `stream_project_booking`.`event_date` END"), "ASC"],
+        [Sequelize.literal("CASE WHEN DATE(`stream_project_booking`.`event_date`) < CURDATE() THEN `stream_project_booking`.`event_date` END"), "DESC"],
       ],
     });
 
@@ -4884,8 +4921,8 @@ exports.getGlobalShoots = async (req, res) => {
 
       const bookingDays = (Array.isArray(shoot.booking_days) ? shoot.booking_days : [])
         .sort((a, b) => {
-          const d = String(a.event_date || '').localeCompare(String(b.event_date || ''));
-          return d !== 0 ? d : String(a.start_time || '').localeCompare(String(b.start_time || ''));
+          const dateDifference = String(a.event_date || "").localeCompare(String(b.event_date || ""));
+          return dateDifference !== 0 ? dateDifference : String(a.start_time || "").localeCompare(String(b.start_time || ""));
         })
         .map((day) => ({
           event_date: day.event_date,
@@ -4896,11 +4933,11 @@ exports.getGlobalShoots = async (req, res) => {
         }));
 
       let eventLocation = shoot.event_location || null;
-      if (typeof eventLocation === 'string' && (eventLocation.startsWith('{') || eventLocation.startsWith('['))) {
+      if (typeof eventLocation === "string" && (eventLocation.startsWith("{") || eventLocation.startsWith("["))) {
         try {
           const parsed = JSON.parse(eventLocation);
           eventLocation = parsed.address || eventLocation;
-        } catch (_) { /* keep original */ }
+        } catch (_) {}
       }
 
       return {
@@ -4918,27 +4955,27 @@ exports.getGlobalShoots = async (req, res) => {
           event_latitude: shoot.event_latitude ?? null,
           event_longitude: shoot.event_longitude ?? null,
         },
-        assignedCrew: (Array.isArray(shoot.assigned_crews) ? shoot.assigned_crews : []).map((ac) => ({
-          project_id: ac.project_id,
-          crew_member_id: ac.crew_member_id,
+        assignedCrew: (Array.isArray(shoot.assigned_crews) ? shoot.assigned_crews : []).map((assignedCrew) => ({
+          project_id: assignedCrew.project_id,
+          crew_member_id: assignedCrew.crew_member_id,
         })),
       };
     });
 
     return res.status(200).json({
       error: false,
-      message: 'Global shoots retrieved successfully',
+      message: "Global shoots retrieved successfully",
       data: {
         total_records: projects.length,
         projects,
       },
     });
   } catch (error) {
-    console.error('[admin/global-shoots] Failed to retrieve shoots:', error);
+    console.error("[admin/global-shoots] Failed to retrieve shoots:", error);
     return res.status(500).json({
       error: true,
-      message: 'Failed to retrieve global shoots.',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message:"Failed to retrieve global shoots.",
+      details: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
