@@ -12,10 +12,12 @@ const signupCreditPromoHistoryFactory = require('./signup_credit_promo_history')
 const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
 const assignmentHistoryFactory = require('./assignment_history');
+const userSessionsFactory = require('./user_sessions');
 const creatorAvailabilityRulesFactory = require('./creator_availability_rules');
 const creatorAvailabilityBlocksFactory = require('./creator_availability_blocks');
 const creatorCalendarConnectionsFactory = require('./creator_calendar_connections');
-const userSessionsFactory = require('./user_sessions');
+=========
+>>>>>>>>> Temporary merge branch 2
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
