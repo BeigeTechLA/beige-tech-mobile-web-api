@@ -13,6 +13,7 @@ const REMINDER_2H_WINDOW_MAX = parseInt(process.env.SHOOT_REMINDER_2H_WINDOW_MAX
 const FINAL_NUDGE_DAYS_AFTER = parseInt(process.env.SHOOT_FINAL_NUDGE_DAYS_AFTER || '7', 10);
 const CP_PAYMENT_DUE_DAYS_AFTER_SHOOT = parseInt(process.env.CP_PAYMENT_DUE_DAYS_AFTER_SHOOT || '15', 10);
 const DEFAULT_SHOOT_TIME_ZONE = process.env.SHOOT_REMINDER_TIME_ZONE || process.env.APP_TIME_ZONE || 'Asia/Kolkata';
+const CP_COMPENSATION_PAYMENT_URL = `${String(process.env.FRONTEND_URL || 'https://dev.beige.app').replace(/\/+$/, '')}/admin/finances/cpCompensation`;
 
 let isRunning5d = false;
 let isRunning2h = false;
@@ -1006,8 +1007,6 @@ const runShootCompletedPaymentDueJob = async () => {
 
         const shootDate = toIsoDateLocal(booking.event_date);
         const paymentDueDate = addDaysToIsoDate(shootDate, CP_PAYMENT_DUE_DAYS_AFTER_SHOOT);
-        const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
-        const dashboardLink = `${frontendBaseUrl}/admin/finances/cp-compensation?creator_earning_id=${encodeURIComponent(earning.creator_earning_id)}`;
         const result = await emailService.sendShootCompletedPaymentDueEmail({
           to: recipients,
           data: {
@@ -1018,7 +1017,7 @@ const runShootCompletedPaymentDueJob = async () => {
             shoot_date: formatDate(booking.event_date),
             cp_compensation: Number(earning.net_earning_amount || 0).toFixed(2),
             payment_due_date: formatDate(paymentDueDate),
-            dashboard_link: dashboardLink
+            dashboard_link: CP_COMPENSATION_PAYMENT_URL
           }
         });
 
@@ -1038,7 +1037,7 @@ const runShootCompletedPaymentDueJob = async () => {
     isRunningCpPaymentDue = false;
   }
 };
-
+ 
 const runCPPaymentDue7DaysJob = async () => {
   if (isRunningCpPaymentDue7Days) return;
   isRunningCpPaymentDue7Days = true;
@@ -1096,7 +1095,6 @@ const runCPPaymentDue7DaysJob = async () => {
         });
         const shootDate = toIsoDateLocal(booking.event_date);
         const paymentDueDate = addDaysToIsoDate(shootDate, CP_PAYMENT_DUE_DAYS_AFTER_SHOOT);
-        const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
         const result = await emailService.sendCPPaymentDue7DaysEmail({
           to: recipients,
           data: {
@@ -1107,7 +1105,7 @@ const runCPPaymentDue7DaysJob = async () => {
             shoot_date: formatDate(booking.event_date),
             cp_compensation: Number(earning.net_earning_amount || 0).toFixed(2),
             payment_due_date: formatDate(paymentDueDate),
-            dashboard_link: `${frontendBaseUrl}/admin/finances/cp-compensation?creator_earning_id=${encodeURIComponent(earning.creator_earning_id)}`
+            dashboard_link: CP_COMPENSATION_PAYMENT_URL
           }
         });
 
@@ -1177,7 +1175,6 @@ const runCPPaymentOverdue1DayJob = async () => {
         });
         const shootDate = toIsoDateLocal(booking.event_date);
         const paymentDueDate = addDaysToIsoDate(shootDate, CP_PAYMENT_DUE_DAYS_AFTER_SHOOT);
-        const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
         const result = await emailService.sendCPPaymentOverdue1DayEmail({
           to: recipients,
           data: {
@@ -1188,7 +1185,7 @@ const runCPPaymentOverdue1DayJob = async () => {
             shoot_date: formatDate(booking.event_date),
             cp_compensation: Number(earning.net_earning_amount || 0).toFixed(2),
             payment_due_date: formatDate(paymentDueDate),
-            dashboard_link: `${frontendBaseUrl}/admin/finances/cp-compensation?creator_earning_id=${encodeURIComponent(earning.creator_earning_id)}`
+            dashboard_link: CP_COMPENSATION_PAYMENT_URL
           }
         });
 
@@ -1258,7 +1255,6 @@ const runCPPaymentOverdue3DaysJob = async () => {
         });
         const shootDate = toIsoDateLocal(booking.event_date);
         const paymentDueDate = addDaysToIsoDate(shootDate, CP_PAYMENT_DUE_DAYS_AFTER_SHOOT);
-        const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
         const result = await emailService.sendCPPaymentOverdue3DaysEmail({
           to: recipients,
           data: {
@@ -1269,7 +1265,7 @@ const runCPPaymentOverdue3DaysJob = async () => {
             shoot_date: formatDate(booking.event_date),
             cp_compensation: Number(earning.net_earning_amount || 0).toFixed(2),
             payment_due_date: formatDate(paymentDueDate),
-            dashboard_link: `${frontendBaseUrl}/admin/finances/cp-compensation?creator_earning_id=${encodeURIComponent(earning.creator_earning_id)}`
+            dashboard_link: CP_COMPENSATION_PAYMENT_URL
           }
         });
 
