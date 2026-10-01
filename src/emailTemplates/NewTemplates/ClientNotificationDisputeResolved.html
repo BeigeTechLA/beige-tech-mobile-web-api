@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Force light mode rendering context -->
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+
+  <title>Your Dispute Has Been Resolved</title>
+
+  <style>
+    /* Enforce light theme styles for supporting email apps */
+    :root {
+      color-scheme: light;
+      supported-color-schemes: light;
+    }
+
+    /* Force background and text colors in strict dark mode environments */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-table {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-card {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .white-bg-wrapper,
+      .details-table,
+      .inner-card-bg {
+        background-color: #FFFFFF !important;
+      }
+
+      .accent-banner-bg {
+        background-color: #FDEED7 !important;
+      }
+
+      h1,
+      h2,
+      h3,
+      .dark-text,
+      .link-text {
+        color: #000000 !important;
+      }
+
+      p,
+      .muted-text {
+        color: rgba(0, 0, 0, 0.70) !important;
+      }
+
+      .footer-text {
+        color: #3C3B3B !important;
+      }
+
+      .btn-bg {
+        background-color: #000000 !important;
+      }
+
+      .btn-text {
+        color: #E8D1AB !important;
+      }
+    }
+
+    /* Target Outlook App specific dark mode overrides */
+    [data-ogsc] body,
+    [data-ogsc] .body-table {
+      background-color: #F7F7F7 !important;
+      color: #484848 !important;
+    }
+
+    [data-ogsc] .main-card {
+      background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+    }
+
+    [data-ogsc] .white-bg-wrapper,
+    [data-ogsc] .details-table,
+    [data-ogsc] .inner-card-bg {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .accent-banner-bg {
+      background-color: #FDEED7 !important;
+    }
+
+    [data-ogsc] h1,
+    [data-ogsc] h2,
+    [data-ogsc] h3,
+    [data-ogsc] .dark-text,
+    [data-ogsc] .link-text {
+      color: #000000 !important;
+    }
+
+    [data-ogsc] p,
+    [data-ogsc] .muted-text {
+      color: rgba(0, 0, 0, 0.70) !important;
+    }
+
+    [data-ogsc] .footer-text {
+      color: #3C3B3B !important;
+    }
+
+    [data-ogsc] .btn-bg {
+      background-color: #000000 !important;
+    }
+
+    [data-ogsc] .btn-text {
+      color: #E8D1AB !important;
+    }
+  </style>
+</head>
+
+<body class="body-table"
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848;">
+  <table width="100%" cellpadding="0" cellspacing="0" class="body-table"
+    style="background-color: #F7F7F7; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="500" class="main-card"
+          style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
+
+          <!-- Beige Logo -->
+          <tr>
+            <td align="center" style="padding: 40px 0 28px;">
+              <div class="white-bg-wrapper"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="110" style="display: block; border: 0;">
+              </div>
+              <div style="padding: 36px 40px 0;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+              </div>
+            </td>
+          </tr>
+
+          <!-- Header -->
+          <tr>
+            <td style="padding: 0 20px 28px; text-align: center;">
+              <h1 class="dark-text" style="margin: 0; color: #000000; font-size: 27px;">Hello {{client_name}},</h1>
+              <p style="color: #403E3E; font-size: 17px; line-height: 1.5; margin-bottom: 0; text-align: center;">
+                Your dispute for Booking <span style="color: #000000; font-weight: 600;">{{booking_id}}</span> has been
+                reviewed
+                by our team and action has been taken.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Summary -->
+          <tr>
+            <td style="padding: 0;">
+              <table border="0" cellpadding="0" cellspacing="0" width="100%" class="details-table">
+                <tr>
+                  <td style="background-color: #000000; padding: 27px 50px;">
+                    <p
+                      style="color: #E8D1AB; font-size: 19px; font-weight: 600; font-style: italic; text-align: center; margin: 0;">
+                      Summary
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding: 0;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%"
+                      style="background-color: #FFFFFF; box-shadow: 0 16px 36px rgba(0,0,0,0.07); padding: 0;">
+                      <tr>
+                        <td style="padding: 0 28px;">
+                          <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                            <tr>
+                              <td width="54" style="padding: 20px 0;">
+                                <div
+                                  style="width: 42px; height: 42px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BgCircleNew.svg') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                                  <img
+                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BillListBlack.svg"
+                                    style="margin-top: 10px; display: inline-block; border: 0; max-width: 100%;">
+                                </div>
+                              </td>
+                              <td class="force-info-text"
+                                style="font-size: 14px; color: #262525 !important; font-weight: 400; line-height: 2; padding: 8px 0;">
+                                Resolution</td>
+                              <td class="force-black-text" align="right"
+                                style="font-size: 14px; color: #000000 !important; font-weight: 600; line-height: 2; padding: 8px 0;">
+                                #{{resolution_summary}}
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td align="center" style="padding: 16px 40px; background-color: #FFEAC7;">
+                          <p
+                            style="font-size: 19px; font-weight: 500; color: #000000 !important; letter-spacing: 1px; line-height: 1; margin:0;">
+                            You can view the complete details and resolution
+                            on your Beige dashboard.
+                          </p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td align="center" style="padding: 28px 20px ;">
+                          <a href="{{view_details_url}}" target="_blank"
+                            style="background-color: #000000; font-size: 19px; font-weight: 500; color: #E8D1AB !important; letter-spacing: 1px; line-height: 1; margin: 0; text-decoration: none; padding: 16px 40px; border-radius: 100px; display: inline-block;">
+                            View Resolution &nbsp;➔
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Image Div -->
+          <tr>
+            <td>
+              <div style="padding:0;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/MockLaptopImage.png"
+                  alt="Laptop Image" width="100%"
+                  style="display: block; border: 0; object-fit: cover; object-position: top; " height="400px" />
+              </div>
+            </td>
+          </tr>
+
+          <!-- Signoff  -->
+          <tr>
+            <td align="center" style="padding-top: 20px;">
+              <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="width: 100%;">
+                <tr>
+                  <td align="center" valign="middle">
+                    <p class="text-black"
+                      style="margin: 0; color: #000000; font-size: 19px; font-style: italic; font-weight: 600; padding: 0 30px 20px;">
+                      If you have any questions, please reach
+                      out to our team.</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" valign="middle">
+                    <p class="text-black" style="margin: 0 0 10px; color: #000000; font-size: 17px;">
+                      Warm regards,</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" valign="middle" height="100"
+                    style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLineThroughTab.png'); background-size: contain; background-repeat: no-repeat; background-position: center; height: 100px;">
+                    <div>
+                      <p class="text-brand-gold"
+                        style="margin: 0; color: #E8D1AB; font-size: 19px; font-weight: 700; font-style: italic; letter-spacing: 1.5px; line-height: 100px;">
+                        The Beige Team
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+
+</html>
