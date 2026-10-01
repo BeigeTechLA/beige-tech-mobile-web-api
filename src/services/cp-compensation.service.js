@@ -3,6 +3,7 @@ const config = require('../config/config');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const bookingPricingService = require('./booking-pricing.service');
 const emailService = require('../utils/emailService');
+const pushNotificationService = require('./push-notification.service');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -1425,6 +1426,14 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
 
     let emailResults = [];
     let newShootRequestEmailResults = [];
+    const newShootRequestCreatorIds = payload.new_shoot_request_creator_ids ?? payload.newShootRequestCreatorIds;
+    const newShootRequestPushResults = !externalTransaction
+      ? await sendNewShootRequestPushNotifications({
+        bookingId,
+        creatorIds: newShootRequestCreatorIds,
+        creators
+      })
+      : [];
     if (!externalTransaction && parseBooleanFlag(payload.send_email ?? payload.sendEmail)) {
       emailResults = await sendCreatorCompensationEmails({
         bookingId,
@@ -1447,7 +1456,9 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
       email_sent: emailResults.some((result) => result.success),
       email_results: emailResults,
       new_shoot_request_email_sent: newShootRequestEmailResults.some((result) => result.success),
-      new_shoot_request_email_results: newShootRequestEmailResults
+      new_shoot_request_email_results: newShootRequestEmailResults,
+      new_shoot_request_push_sent: newShootRequestPushResults.some((result) => result.success),
+      new_shoot_request_push_results: newShootRequestPushResults
     };
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
@@ -1614,6 +1625,59 @@ async function sendCreatorCompensationEmails({ bookingId, creators = [], approva
       success: false,
       error: error?.message || 'Failed to send creator compensation email'
     }));
+  }
+}
+
+async function sendNewShootRequestPushNotifications({ bookingId, creatorIds, creators = [] }) {
+  const ids = [...new Set((Array.isArray(creatorIds) ? creatorIds : []).map(Number).filter(Boolean))];
+  if (!bookingId || !ids.length) return [];
+
+  try {
+    const [booking, crewMembers] = await Promise.all([
+      db.stream_project_booking.findByPk(bookingId, { attributes: ['stream_project_booking_id', 'project_name', 'event_date'] }),
+      db.crew_members.findAll({ where: { crew_member_id: { [db.Sequelize.Op.in]: ids } }, attributes: ['crew_member_id', 'user_id', 'email'] })
+    ]);
+    const shootName = booking?.project_name || `Shoot #${bookingId}`;
+    const creatorById = new Map(creators.map((creator) => [Number(creator.creator_id), creator]));
+
+    const crewEmails = crewMembers.map((crew) => String(crew.email || '').trim().toLowerCase()).filter(Boolean);
+    const usersByEmail = new Map((await db.users.findAll({
+      where: { email: { [db.Sequelize.Op.in]: crewEmails }, is_active: 1 },
+      attributes: ['id', 'email'],
+      raw: true
+    })).map((user) => [String(user.email || '').trim().toLowerCase(), user.id]));
+
+    return Promise.all(ids.map(async (creatorId) => {
+      const crew = crewMembers.find((item) => Number(item.crew_member_id) === creatorId);
+      const creator = creatorById.get(creatorId);
+      const recipientUserId = crew?.user_id || usersByEmail.get(String(crew?.email || '').trim().toLowerCase());
+      if (!recipientUserId || !creator) return { creator_id: creatorId, success: false, skipped: true, error: 'CP user or compensation record not found' };
+
+      const estimatedEarnings = Number(creator.total_compensation || 0).toFixed(2);
+      try {
+        await pushNotificationService.sendPushToUser({
+          userId: recipientUserId,
+          title: 'New shoot request',
+          body: `${shootName} has been assigned to you. Estimated earnings: $${estimatedEarnings}.`,
+          data: {
+            topic: 'shoots',
+            category: 'shoots',
+            type: 'new_shoot_request',
+            booking_id: String(bookingId),
+            project_id: String(bookingId),
+            estimated_earnings: estimatedEarnings,
+            event_date: booking?.event_date ? String(booking.event_date) : ''
+          }
+        });
+        return { creator_id: creatorId, success: true };
+      } catch (error) {
+        console.warn('[cp-compensation] new shoot request push failed:', { booking_id: bookingId, creator_id: creatorId, error: error?.message || error });
+        return { creator_id: creatorId, success: false, error: error?.message || 'Failed to send new shoot request push' };
+      }
+    }));
+  } catch (error) {
+    console.warn('[cp-compensation] new shoot request push batch failed:', { booking_id: bookingId, error: error?.message || error });
+    return ids.map((creatorId) => ({ creator_id: creatorId, success: false, error: error?.message || 'Failed to send new shoot request push' }));
   }
 }
 

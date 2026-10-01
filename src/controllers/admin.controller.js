@@ -15605,10 +15605,8 @@ exports.assignProjectCrewBulk = async (req, res) => {
             }
 
             try {
-              if (deferNewShootRequestEmail) {
-                return;
-              }
-              const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+              if (!deferNewShootRequestEmail) {
+                const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
                 const crews = await crew_members.findAll({
                     where: { crew_member_id: createdIds },
                     attributes: ['user_id', 'first_name', 'last_name', 'email']
@@ -15644,6 +15642,7 @@ exports.assignProjectCrewBulk = async (req, res) => {
                         })
                     )
                 );
+              }
             } catch (mailErr) {
                 console.error('Mail trigger error:', mailErr);
             }
