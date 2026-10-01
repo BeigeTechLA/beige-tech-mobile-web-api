@@ -62,9 +62,59 @@ const getFrontendBaseUrl = () =>
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
+const POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES = [
+  'Post Production Manager',
+  'Producer',
+  'super_admin'
+];
 const normalizePhoneNumber = (number) => String(number || '').replace(/\D/g, '');
 
 const isAdminProfileRole = (role) => ADMIN_PROFILE_ROLES.has(normalizeAdminRole(role));
+
+const getAssignedProjectIdsForPostProductionUser = async (userId) => {
+  const selectedUser = await users.findOne({
+    where: {
+      id: userId,
+      is_active: 1
+    },
+    attributes: ['id', 'email'],
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: [],
+        required: true,
+        where: {
+          user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES },
+          is_active: 1
+        }
+      }
+    ]
+  });
+
+  if (!selectedUser?.email) return [];
+
+  const assignedProjects = await assigned_post_production_member.findAll({
+    where: { is_active: 1 },
+    attributes: ['project_id'],
+    include: [
+      {
+        model: post_production_members,
+        as: 'post_production_member',
+        attributes: [],
+        required: true,
+        where: { email: selectedUser.email }
+      }
+    ],
+    raw: true
+  });
+
+  return Array.from(new Set(
+    assignedProjects
+      .map((assignment) => Number(assignment.project_id))
+      .filter((projectId) => Number.isInteger(projectId) && projectId > 0)
+  ));
+};
 
 const formatAdminProfile = (adminUser) => ({
   id: adminUser.id,
@@ -865,6 +915,7 @@ const matchShootStatusFilter = (booking, rawStatus) => {
   const today = getTodayDateOnlyString();
   const isCancelled = Number(booking?.is_cancelled || 0) === 1;
   const isDraft = Number(booking?.is_draft || 0) === 1;
+  const isDeleted = Number(booking?.is_active) === 0;
   const isFutureEvent = eventDate ? eventDate > today : false;
   const isTodayEvent = eventDate ? eventDate === today : false;
   const isPastEvent = eventDate ? eventDate < today : false;
@@ -889,6 +940,8 @@ const matchShootStatusFilter = (booking, rawStatus) => {
       return ![3, 4, 5].includes(bookingStatus) && isFutureEvent;
     case 'draft':
       return isDraft;
+    case 'deleted':
+      return isDeleted;
     default:
       return null;
   }
@@ -3050,6 +3103,15 @@ exports.updateProjectDateLocation = async (req, res) => {
 
     transaction = await db.sequelize.transaction();
 
+    const previousProject = project.toJSON();
+    const previousBookingDays = await db.stream_project_booking_days.findAll({
+      where: { stream_project_booking_id: project.stream_project_booking_id },
+      attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+      order: [['event_date', 'ASC']],
+      transaction,
+      raw: true
+    });
+
     const sortedBookingDays = [...normalizedBookingDays].sort(
       (a, b) => new Date(a.event_date) - new Date(b.event_date)
     );
@@ -3111,8 +3173,13 @@ exports.updateProjectDateLocation = async (req, res) => {
     }
 
     if (hasLocationUpdate) {
-      const latitude = req.body.latitude ?? null;
-      const longitude = req.body.longitude ?? null;
+      const incomingCoordinates = extractCoordinatesFromPayload(req.body, nextLocation);
+      const locationDidNotChange =
+        normalizeLocationForStorage(project.event_location) === normalizedLocation;
+      const latitude = incomingCoordinates.latitude ??
+        (locationDidNotChange ? project.event_latitude : null);
+      const longitude = incomingCoordinates.longitude ??
+        (locationDidNotChange ? project.event_longitude : null);
       updatePayload.event_location = normalizedLocation;
       updatePayload.event_latitude = latitude;
       updatePayload.event_longitude = longitude;
@@ -3172,6 +3239,62 @@ exports.updateProjectDateLocation = async (req, res) => {
     const refreshedProject = project.toJSON();
     refreshedProject.booking_days = bookingDays;
 
+    const historyChanges = [];
+    const addHistoryChange = (field, oldValue, newValue) => {
+      const oldNormalized = oldValue == null ? null : oldValue;
+      const newNormalized = newValue == null ? null : newValue;
+      if (JSON.stringify(oldNormalized) !== JSON.stringify(newNormalized)) {
+        historyChanges.push({ field, old_value: oldNormalized, new_value: newNormalized });
+      }
+    };
+
+    const beforeIsMultiDay = previousBookingDays.length > 1;
+    const afterIsMultiDay = bookingDays.length > 1;
+    const toSingleDaySchedule = (projectData) => {
+      const day = {
+        event_date: projectData?.event_date ?? null,
+        start_time: projectData?.start_time ?? null,
+        end_time: projectData?.end_time ?? null,
+        time_zone: projectData?.time_zone ?? null
+      };
+      return Object.values(day).some((value) => value != null && value !== '') ? [day] : [];
+    };
+    // A single-day schedule is stored on the booking, while a multi-day
+    // schedule is stored in booking_days. Use the same list shape for both
+    // sides of a conversion so the history displays the actual schedules.
+    const isScheduleTypeConversion = beforeIsMultiDay !== afterIsMultiDay;
+    const historyBeforeBookingDays = isScheduleTypeConversion && !beforeIsMultiDay
+      ? toSingleDaySchedule(previousProject)
+      : previousBookingDays;
+    const historyAfterBookingDays = isScheduleTypeConversion && !afterIsMultiDay
+      ? toSingleDaySchedule(refreshedProject)
+      : bookingDays;
+    const bookingDaysChanged = JSON.stringify(historyBeforeBookingDays) !== JSON.stringify(historyAfterBookingDays);
+    // event_date/start_time/end_time/time_zone are derived from the first day of a
+    // multi-day shoot, so keeping them would duplicate the booking_days history.
+    const hasMultiDayScheduleChange = bookingDaysChanged && (beforeIsMultiDay || afterIsMultiDay);
+
+    if (!hasMultiDayScheduleChange) {
+      addHistoryChange('date', previousProject.event_date, refreshedProject.event_date);
+      addHistoryChange('start_time', previousProject.start_time, refreshedProject.start_time);
+      addHistoryChange('end_time', previousProject.end_time, refreshedProject.end_time);
+      addHistoryChange('time_zone', previousProject.time_zone, refreshedProject.time_zone);
+    }
+    addHistoryChange('location', previousProject.event_location, refreshedProject.event_location);
+    addHistoryChange('booking_days', historyBeforeBookingDays, historyAfterBookingDays);
+
+    if (historyChanges.length > 0) {
+      const actor = await getRequestActor(req);
+      await writeShootHistory({
+        projectId: project.stream_project_booking_id,
+        action: 'schedule_location_updated',
+        actor,
+        reason: 'Shoot date, time, or location updated',
+        metadata: { changes: historyChanges },
+        transaction
+      });
+    }
+
     await transaction.commit();
 
     return res.status(200).json({
@@ -3206,6 +3329,7 @@ exports.updateProjectDateLocation = async (req, res) => {
 };
 
 exports.updateProjectName = async (req, res) => {
+  let transaction = null;
   try {
     const { project_id } = req.params;
     const projectName = String(req.body?.project_name || '').trim();
@@ -3238,9 +3362,31 @@ exports.updateProjectName = async (req, res) => {
       });
     }
 
+    const previousProjectName = project.project_name;
+    transaction = await db.sequelize.transaction();
     await project.update({
       project_name: projectName
-    });
+    }, { transaction });
+
+    if (String(previousProjectName || '') !== projectName) {
+      const actor = await getRequestActor(req);
+      await writeShootHistory({
+        projectId: project.stream_project_booking_id,
+        action: 'project_name_updated',
+        actor,
+        reason: 'Project name updated',
+        metadata: {
+          changes: [{
+            field: 'project_name',
+            old_value: previousProjectName || null,
+            new_value: projectName
+          }]
+        },
+        transaction
+      });
+    }
+
+    await transaction.commit();
 
     return res.status(200).json({
       success: true,
@@ -3251,6 +3397,7 @@ exports.updateProjectName = async (req, res) => {
       }
     });
   } catch (error) {
+    if (transaction && !transaction.finished) await transaction.rollback();
     console.error('Error updating project name:', error);
     return res.status(500).json({
       success: false,
@@ -3909,7 +4056,8 @@ exports.updateProjectName = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only, board_view } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, post_production_user_id, summary_only, board_view } = req.query;
+    const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
     const today = new Date();
     const isBoardView = String(board_view || '').toLowerCase() === 'true' || String(board_view) === '1';
     if (isBoardView) {
@@ -4130,7 +4278,7 @@ exports.getAllProjectDetails = async (req, res) => {
     ]));
 
     const paidOnlyFilter = {
-      is_active: 1,
+      is_active: isDeletedStatus ? 0 : 1,
       ...clientProjectFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
@@ -4266,6 +4414,29 @@ exports.getAllProjectDetails = async (req, res) => {
         [Sequelize.Op.and]: [
           ...(whereConditions[Sequelize.Op.and] || []),
           searchCondition
+        ]
+      };
+    }
+
+    if (post_production_user_id && post_production_user_id !== 'all') {
+      const selectedPostProductionUserId = Number(post_production_user_id);
+      if (!Number.isInteger(selectedPostProductionUserId) || selectedPostProductionUserId <= 0) {
+        return res.status(400).json({
+          error: true,
+          message: 'post_production_user_id must be a positive integer'
+        });
+      }
+
+      const assignedProjectIds = await getAssignedProjectIdsForPostProductionUser(selectedPostProductionUserId);
+      whereConditions = {
+        ...whereConditions,
+        [Sequelize.Op.and]: [
+          ...(whereConditions[Sequelize.Op.and] || []),
+          {
+            stream_project_booking_id: {
+              [Sequelize.Op.in]: assignedProjectIds.length ? assignedProjectIds : [-1]
+            }
+          }
         ]
       };
     }
@@ -4612,6 +4783,351 @@ exports.getAllProjectDetailsBoard = async (req, res) => {
   return exports.getAllProjectDetails(req, res);
 };
 
+// ==================== GLOBAL SHOOTS API ====================
+
+// Filters: upcoming (default), all, tbd, today, next_7_days, next_15_days, next_30_days,
+// last_7_days, last_15_days, last_30_days, custom (start_date + end_date)
+// Only is_active = 1 shoots are returned.
+const GLOBAL_SHOOT_DATE_COL = 'stream_project_booking.event_date';
+
+const buildGlobalShootRangeFilter = (rawRange, start_date, end_date) => {
+  const dateCol = Sequelize.fn('DATE', Sequelize.col(GLOBAL_SHOOT_DATE_COL));
+  const curdate = Sequelize.fn('CURDATE');
+  const between = (from, to) => Sequelize.where(dateCol, { [Op.between]: [from, to] });
+
+  // Custom range: start_date + end_date
+  if (start_date && end_date) {
+    return [between(start_date, end_date)];
+  }
+
+  const range = String(rawRange || 'upcoming').toLowerCase().trim();
+
+  switch (range) {
+    case 'all':
+      return [];
+    case 'tbd':
+      return [Sequelize.where(Sequelize.col(GLOBAL_SHOOT_DATE_COL), { [Op.is]: null })];
+    case 'today':
+      return [Sequelize.where(dateCol, curdate)];
+    case 'next_7_days':
+      return [between(curdate, Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 7 DAY)'))];
+    case 'next_15_days':
+      return [between(curdate, Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 15 DAY)'))];
+    case 'next_30_days':
+      return [between(curdate, Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 30 DAY)'))];
+    case 'last_7_days':
+      return [between(Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 7 DAY)'), curdate)];
+    case 'last_15_days':
+      return [between(Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 15 DAY)'), curdate)];
+    case 'last_30_days':
+      return [between(Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 30 DAY)'), curdate)];
+    case 'upcoming':
+    default:
+      // Today + all future shoots
+      return [Sequelize.where(dateCol, { [Op.gte]: curdate })];
+  }
+};
+
+exports.getGlobalShoots = async (req, res) => {
+  try {
+    const { range, start_date, end_date } = req.query;
+
+    // Paid-shoots base filter (same as getAllProjectDetails, client-role scoping included)
+    const paidFilter = await getPaidCalendarFilter(req);
+
+    // Only active shoots (is_active = 1). Deleted shoots are never returned.
+    const whereConditions = { ...paidFilter, is_active: 1 };
+    const andConditions = buildGlobalShootRangeFilter(range, start_date, end_date);
+    if (andConditions.length) {
+      whereConditions[Op.and] = andConditions;
+    }
+
+    const rows = await stream_project_booking.findAll({
+      where: whereConditions,
+      attributes: [
+        'stream_project_booking_id',
+        'project_name',
+        'is_active',
+        'event_date',
+        'start_time',
+        'end_time',
+        'time_zone',
+        'duration_hours',
+        'event_location',
+        'event_latitude',
+        'event_longitude',
+      ],
+      include: [
+        {
+          model: db.stream_project_booking_days,
+          as: 'booking_days',
+          required: false,
+          attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+        },
+        {
+          model: assigned_crew,
+          as: 'assigned_crews',
+          where: { is_active: 1 },
+          required: false,
+          attributes: ['project_id', 'crew_member_id'],
+        },
+      ],
+      order: [
+        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN 0 ELSE 1 END'), 'ASC'],
+        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN `stream_project_booking`.`event_date` END'), 'ASC'],
+        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) < CURDATE() THEN `stream_project_booking`.`event_date` END'), 'DESC'],
+      ],
+    });
+
+    const projects = rows.map((row) => {
+      const shoot = row.toJSON();
+
+      const bookingDays = (Array.isArray(shoot.booking_days) ? shoot.booking_days : [])
+        .sort((a, b) => {
+          const d = String(a.event_date || '').localeCompare(String(b.event_date || ''));
+          return d !== 0 ? d : String(a.start_time || '').localeCompare(String(b.start_time || ''));
+        })
+        .map((day) => ({
+          event_date: day.event_date,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          duration_hours: day.duration_hours,
+          time_zone: day.time_zone || null,
+        }));
+
+      let eventLocation = shoot.event_location || null;
+      if (typeof eventLocation === 'string' && (eventLocation.startsWith('{') || eventLocation.startsWith('['))) {
+        try {
+          const parsed = JSON.parse(eventLocation);
+          eventLocation = parsed.address || eventLocation;
+        } catch (_) { /* keep original */ }
+      }
+
+      return {
+        project: {
+          stream_project_booking_id: shoot.stream_project_booking_id,
+          project_name: shoot.project_name || null,
+          is_active: Number(shoot.is_active) === 1,
+          event_date: shoot.event_date,
+          start_time: shoot.start_time,
+          end_time: shoot.end_time,
+          time_zone: shoot.time_zone || null,
+          duration_hours: shoot.duration_hours,
+          booking_days: bookingDays,
+          event_location: eventLocation,
+          event_latitude: shoot.event_latitude ?? null,
+          event_longitude: shoot.event_longitude ?? null,
+        },
+        assignedCrew: (Array.isArray(shoot.assigned_crews) ? shoot.assigned_crews : []).map((ac) => ({
+          project_id: ac.project_id,
+          crew_member_id: ac.crew_member_id,
+        })),
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Global shoots retrieved successfully',
+      data: {
+        total_records: projects.length,
+        projects,
+      },
+    });
+  } catch (error) {
+    console.error('[admin/global-shoots] Failed to retrieve shoots:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Failed to retrieve global shoots.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+const CALENDAR_DATE_FORMAT = 'YYYY-MM-DD';
+
+const getCalendarShootRange = (query, view) => {
+  if (view === 'month') {
+    const year = Number(query.year);
+    const month = Number(query.month);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) {
+      return null;
+    }
+
+    const start = moment.utc({ year, month: month - 1, date: 1 });
+    return { start: start.format(CALENDAR_DATE_FORMAT), end: start.clone().endOf('month').format(CALENDAR_DATE_FORMAT) };
+  }
+
+  const date = String(view === 'week' ? query.start_date : query.date || '').trim();
+  const start = moment.utc(date, CALENDAR_DATE_FORMAT, true);
+  if (!start.isValid()) return null;
+
+  return {
+    start: start.format(CALENDAR_DATE_FORMAT),
+    end: (view === 'week' ? start.clone().add(6, 'days') : start).format(CALENDAR_DATE_FORMAT),
+  };
+};
+
+// Mirrors the paid base condition used by getAllProjectDetails (list view).
+// is_active is applied separately in the calendar query.
+const getPaidCalendarFilter = async (req) => {
+  const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
+  const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
+  const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
+    ? { user_id: requestUserId }
+    : {};
+
+  const [bookedSalesLeads, bookedClientLeads, salesManualPaymentActivities, clientManualPaymentActivities, collectedPaymentSummaryRows] = await Promise.all([
+    sales_leads.findAll({ where: { is_active: 1, lead_status: 'booked', booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true }),
+    client_leads.findAll({ where: { is_active: 1, lead_status: 'booked', booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true }),
+    sales_lead_activities.findAll({ where: { activity_type: 'payment_completed' }, attributes: ['lead_id'], raw: true }),
+    client_lead_activities.findAll({ where: { activity_type: 'payment_completed' }, attributes: ['lead_id'], raw: true }),
+    fetchCollectedBookingPaymentSummaries(),
+  ]);
+
+  const manualSalesLeadIds = Array.from(new Set(salesManualPaymentActivities.map((row) => Number(row.lead_id)).filter(Number.isFinite)));
+  const manualClientLeadIds = Array.from(new Set(clientManualPaymentActivities.map((row) => Number(row.lead_id)).filter(Number.isFinite)));
+  const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+    manualSalesLeadIds.length
+      ? sales_leads.findAll({ where: { is_active: 1, lead_id: { [Sequelize.Op.in]: manualSalesLeadIds }, booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true })
+      : Promise.resolve([]),
+    manualClientLeadIds.length
+      ? client_leads.findAll({ where: { is_active: 1, lead_id: { [Sequelize.Op.in]: manualClientLeadIds }, booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true })
+      : Promise.resolve([]),
+  ]);
+
+  const paidBookingIds = Array.from(new Set([
+    ...bookedSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+  ]));
+
+  return {
+    ...clientProjectFilter,
+    [Sequelize.Op.or]: [
+      { payment_id: { [Sequelize.Op.ne]: null } },
+      ...(paidBookingIds.length ? [{ stream_project_booking_id: { [Sequelize.Op.in]: paidBookingIds } }] : []),
+    ],
+  };
+};
+
+const getEffectiveCalendarMeetingStatus = (meeting) => {
+  const stored = String(meeting.meeting_status || 'pending').toLowerCase();
+  if (['cancelled', 'change_request', 'rescheduled'].includes(stored)) return stored;
+
+  const now = Date.now();
+  const start = meeting.meeting_date_time ? new Date(meeting.meeting_date_time).getTime() : NaN;
+  const end = meeting.meeting_end_time ? new Date(meeting.meeting_end_time).getTime() : NaN;
+
+  if (!Number.isNaN(end) && end <= now) return 'completed';
+  if (!Number.isNaN(start) && !Number.isNaN(end) && start <= now && end > now) return 'ongoing';
+  if (stored === 'in_progress') return 'ongoing';
+  if (stored === 'confirmed') return 'pending';
+  return stored;
+};
+
+const fetchCalendarMeetings = async (req, range) => {
+  const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
+  const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
+  const isClient = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0;
+
+  const rows = await db.project_meetings.findAll({
+    where: {
+      meeting_date_time: {
+        [Op.between]: [`${range.start} 00:00:00`, `${range.end} 23:59:59`],
+      },
+    },
+    include: [{
+      model: db.stream_project_booking,
+      as: 'booking',
+      required: true,
+      attributes: ['stream_project_booking_id', 'project_name', 'is_active'],
+      ...(isClient ? { where: { user_id: requestUserId } } : {}),
+    }],
+    order: [['meeting_date_time', 'ASC'], ['meeting_id', 'ASC']],
+  });
+
+  return rows.map((row) => {
+    const meeting = row.get({ plain: true });
+    return {
+      id: meeting.meeting_id,
+      title: meeting.meeting_title || 'Untitled Meeting',
+      meeting_type: meeting.meeting_type,
+      meeting_status: getEffectiveCalendarMeetingStatus(meeting),
+      meeting_date_time: meeting.meeting_date_time,
+      meeting_end_time: meeting.meeting_end_time,
+      meeting_timezone: meeting.meeting_timezone,
+      meet_link: meeting.meet_link || null,
+      booking_id: meeting.booking_id,
+      booking_name: meeting.booking?.project_name || `Project #${meeting.booking_id}`,
+      booking_is_active: Number(meeting.booking?.is_active) === 1,
+    };
+  });
+};
+
+const getCalendarShoots = (view) => async (req, res) => {
+  try {
+    const range = getCalendarShootRange(req.query, view);
+    if (!range) {
+      return res.status(400).json({
+        success: false,
+        message: view === 'month'
+          ? 'A valid month (1-12) and year are required.'
+          : `A valid ${view === 'week' ? 'start_date' : 'date'} in YYYY-MM-DD format is required.`,
+      });
+    }
+
+    const paidFilter = await getPaidCalendarFilter(req);
+
+    const fetchShoots = (isActive) => stream_project_booking.findAll({
+      attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'start_time', 'end_time', 'time_zone', 'is_active'],
+      where: {
+        ...paidFilter,
+        is_active: isActive,
+        event_date: { [Op.between]: [range.start, range.end] },
+      },
+      order: [['event_date', 'ASC'], ['start_time', 'ASC'], ['stream_project_booking_id', 'ASC']],
+      raw: true,
+    });
+
+    const formatShoot = (shoot) => ({
+      id: shoot.stream_project_booking_id,
+      title: shoot.project_name || 'Untitled Shoot',
+      date: shoot.event_date,
+      start_time: shoot.start_time,
+      end_time: shoot.end_time,
+      time_zone: shoot.time_zone,
+      is_active: Number(shoot.is_active) === 1,
+    });
+
+    const [activeRows, deletedRows, meetings] = await Promise.all([
+      fetchShoots(1),
+      fetchShoots(0),
+      fetchCalendarMeetings(req, range),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        view,
+        range,
+        active_shoots: activeRows.map(formatShoot),
+        deleted_shoots: deletedRows.map(formatShoot),
+        meetings,
+      },
+    });
+  } catch (error) {
+    console.error(`[admin/shoot-calendar/${view}] Failed to retrieve shoots:`, error);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve calendar shoots.' });
+  }
+};
+
+// Separate endpoints allow each calendar layout to load only the date range it needs.
+exports.getShootCalendarMonth = getCalendarShoots('month');
+exports.getShootCalendarWeek = getCalendarShoots('week');
+exports.getShootCalendarDay = getCalendarShoots('day');
+
 exports.getUpcomingEvents = async (req, res) => {
   try {
     const { search, event_type, status } = req.query;
@@ -4809,7 +5325,9 @@ exports.exportShootsCsv = async (req, res) => {
       category,
       cp_assignment,
       production_filter,
+      post_production_user_id,
     } = req.query;
+    const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
 
     const hasStartDate = Boolean(start_date);
     const hasEndDate = Boolean(end_date);
@@ -4955,9 +5473,29 @@ exports.exportShootsCsv = async (req, res) => {
       ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id)).filter(Number.isFinite),
     ]));
 
+    let postProductionAssignmentFilter = {};
+    if (post_production_user_id && post_production_user_id !== 'all') {
+      const selectedPostProductionUserId = Number(post_production_user_id);
+      if (!Number.isInteger(selectedPostProductionUserId) || selectedPostProductionUserId <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: true,
+          message: 'post_production_user_id must be a positive integer'
+        });
+      }
+
+      const assignedProjectIds = await getAssignedProjectIdsForPostProductionUser(selectedPostProductionUserId);
+      postProductionAssignmentFilter = {
+        stream_project_booking_id: {
+          [Sequelize.Op.in]: assignedProjectIds.length ? assignedProjectIds : [-1]
+        }
+      };
+    }
+
     const paidOnlyFilter = {
-      is_active: 1,
+      is_active: isDeletedStatus ? 0 : 1,
       ...clientProjectFilter,
+      ...postProductionAssignmentFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
         ...(bookedBookingIds.length > 0
@@ -10431,6 +10969,60 @@ exports.getShootByCategory = async (req, res) => {
   }
 };
 
+// Fetch active internal users who can be assigned to a post-production team.
+// Role names are used intentionally so this does not depend on environment-specific role IDs.
+exports.getPostProductionTeamOptions = async (req, res) => {
+  try {
+    const activeRoles = await db.user_type.findAll({
+      where: {
+        user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES },
+        is_active: 1
+      },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true
+    });
+
+    const roleNameById = new Map(
+      activeRoles.map((role) => [Number(role.user_type_id), role.user_role])
+    );
+    const roleIds = Array.from(roleNameById.keys());
+
+    if (!roleIds.length) {
+      return res.status(200).json({
+        success: true,
+        data: []
+      });
+    }
+
+    const activeUsers = await db.users.scope('all').findAll({
+      where: {
+        user_type: { [Op.in]: roleIds },
+        is_active: 1
+      },
+      attributes: ['id', 'name', 'email', 'user_type', 'is_active'],
+      order: [['name', 'ASC']],
+      raw: true
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: activeUsers.map((user) => ({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role_name: roleNameById.get(Number(user.user_type)) || null,
+        is_active: user.is_active
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching post-production team options:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch post-production team options'
+    });
+  }
+};
+
 // Controller to fetch all post production members
 exports.getPostProductionMembers = async (req, res) => {
   try {
@@ -10506,21 +11098,32 @@ exports.assignPostProductionMember = async (req, res) => {
       });
     }
 
-    // Resolve selected member from internal users first.
+    // Resolve the selected member by an allowed active role name rather than a
+    // hard-coded role ID, since role IDs differ between environments.
     const selectedUser = await users.findOne({
       where: {
         id: post_production_member_id,
-        is_active: 1,
-        assign_lead: 1,
-        user_type: 1
+        is_active: 1
       },
-      attributes: ['id', 'name', 'email', 'role']
+      attributes: ['id', 'name', 'email', 'role', 'user_type'],
+      include: [
+        {
+          model: db.user_type,
+          as: 'userType',
+          attributes: ['user_role'],
+          required: true,
+          where: {
+            user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES },
+            is_active: 1
+          }
+        }
+      ]
     });
 
     if (!selectedUser) {
       return res.status(404).json({
         error: true,
-        message: 'Selected internal member not found or inactive',
+        message: 'Selected member is inactive or does not have an allowed post-production role',
       });
     }
 
@@ -10645,6 +11248,29 @@ const getRequestActor = async (req) => {
     name: actor?.name || actor?.email || `User ${actorId}`,
     role: req.user?.userRole || req.userRole || actor?.role || null
   };
+};
+
+const writeShootHistory = async ({
+  projectId,
+  action,
+  actor,
+  reason = null,
+  metadata = null,
+  transaction = null
+}) => {
+  if (!actor?.id) return null;
+
+  return user_archive_history.create({
+    target_type: 'shoot',
+    target_id: projectId,
+    user_id: null,
+    action,
+    reason,
+    performed_by_user_id: actor.id,
+    performed_by_name: actor.name,
+    performed_by_role: actor.role,
+    metadata
+  }, { transaction });
 };
 
 const writeArchiveHistory = async ({
@@ -11856,10 +12482,12 @@ exports.convertClientToCreativePartner = async (req, res) => {
 };
 
 exports.deleteProject = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
   try {
     const { project_id } = req.params;
 
     if (!project_id) {
+      await transaction.rollback();
       return res.status(400).json({
         success: false,
         message: 'Project ID is required'
@@ -11867,21 +12495,51 @@ exports.deleteProject = async (req, res) => {
     }
 
     const project = await stream_project_booking.findOne({
-      where: { stream_project_booking_id: project_id }
+      where: { stream_project_booking_id: project_id },
+      transaction
     });
 
     if (!project) {
+      await transaction.rollback();
       return res.status(404).json({
         success: false,
         message: 'Project not found'
       });
     }
 
-    await assigned_crew.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
-    await assigned_equipment.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
-    await assigned_post_production_member.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
+    if (Number(project.is_active) === 0) {
+      await transaction.rollback();
+      return res.status(409).json({
+        success: false,
+        message: 'Project is already deleted'
+      });
+    }
 
-    await project.update({ is_active: 0 });
+    const actor = await getRequestActor(req);
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    await assigned_crew.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id }, transaction });
+    await assigned_equipment.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id }, transaction });
+    await assigned_post_production_member.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id }, transaction });
+
+    await project.update({ is_active: 0, updated_by: actor.id }, { transaction });
+    await user_archive_history.create({
+      target_type: 'shoot',
+      target_id: project.stream_project_booking_id,
+      user_id: null,
+      action: 'deleted',
+      reason: 'Shoot deleted',
+      performed_by_user_id: actor.id,
+      performed_by_name: actor.name,
+      performed_by_role: actor.role,
+      previous_status: 'active',
+      new_status: 'deleted'
+    }, { transaction });
+
+    await transaction.commit();
 
     return res.status(200).json({
       success: true,
@@ -11889,12 +12547,122 @@ exports.deleteProject = async (req, res) => {
     });
 
   } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
     console.error('Error deleting project:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error during project deletion',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+exports.restoreProject = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const { project_id } = req.params;
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      transaction
+    });
+
+    if (!project) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Project not found' });
+    }
+
+    if (Number(project.is_active) === 1) {
+      await transaction.rollback();
+      return res.status(409).json({ success: false, message: 'Project is already active' });
+    }
+
+    const actor = await getRequestActor(req);
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    await project.update({ is_active: 1 }, { transaction });
+    await user_archive_history.create({
+      target_type: 'shoot',
+      target_id: project.stream_project_booking_id,
+      user_id: null,
+      action: 'restored',
+      reason: 'Shoot restored',
+      performed_by_user_id: actor.id,
+      performed_by_name: actor.name,
+      performed_by_role: actor.role,
+      previous_status: 'deleted',
+      new_status: 'active'
+    }, { transaction });
+
+    await transaction.commit();
+    return res.status(200).json({ success: true, message: 'Project restored successfully' });
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    console.error('Error restoring project:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during project restoration',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.getProjectHistory = async (req, res) => {
+  try {
+    const { project_id } = req.params;
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      attributes: ['stream_project_booking_id', 'project_name', 'is_active'],
+      raw: true
+    });
+
+    if (!project) {
+      return res.status(404).json({ success: false, message: 'Project not found' });
+    }
+
+    const history = await user_archive_history.findAll({
+      where: {
+        target_type: 'shoot',
+        target_id: project.stream_project_booking_id,
+        action: {
+          [Op.in]: [
+            'deleted',
+            'restored',
+            'crew_assigned',
+            'crew_removed',
+            'project_name_updated',
+            'schedule_location_updated'
+          ]
+        }
+      },
+      order: [['created_at', 'DESC']],
+      raw: true
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        project: {
+          id: project.stream_project_booking_id,
+          project_name: project.project_name,
+          is_active: Number(project.is_active) === 1
+        },
+        history: history.map((entry) => ({
+          history_id: entry.history_id,
+          action: entry.action,
+          reason: entry.reason,
+          performed_by_name: entry.performed_by_name,
+          performed_by_role: entry.performed_by_role,
+          metadata: entry.metadata,
+          created_at: entry.created_at
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching project history:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch project history' });
   }
 };
 
@@ -13524,6 +14292,20 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
+            const actor = await getRequestActor(req);
+            const assignedCrewIds = new Set(assignmentsToCreate.map((assignment) => Number(assignment.crew_member_id)));
+            await Promise.all(newCrewDetails
+              .filter((crew) => assignedCrewIds.has(Number(crew.crew_member_id)))
+              .map((crew) => writeShootHistory({
+                projectId: booking.stream_project_booking_id,
+                action: 'crew_assigned',
+                actor,
+                reason: 'Creative partner assigned',
+                metadata: {
+                  crew_member_id: crew.crew_member_id,
+                  crew_member_name: [crew.first_name, crew.last_name].filter(Boolean).join(' ') || `CP #${crew.crew_member_id}`
+                }
+              })));
             await activityModel.create({
                 lead_id: resolvedLeadId,
                 activity_type: 'assigned',
@@ -13654,6 +14436,18 @@ exports.removeAssignedCrew = async (req, res) => {
         const crewName = assignment.crew_member
             ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
             : `ID: ${crew_member_id}`;
+
+        const actor = await getRequestActor(req);
+        await writeShootHistory({
+            projectId: lead.booking_id,
+            action: 'crew_removed',
+            actor,
+            reason: 'Creative partner removed',
+            metadata: {
+                crew_member_id: Number(crew_member_id),
+                crew_member_name: crewName
+            }
+        });
 
         await LeadActivityModel.create({
             lead_id: lead_id || client_lead_id,
@@ -14764,6 +15558,21 @@ exports.assignProjectCrewBulk = async (req, res) => {
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
 
+            const actor = await getRequestActor(req);
+            const assignedCrewIds = new Set(assignmentsToCreate.map((assignment) => Number(assignment.crew_member_id)));
+            await Promise.all(newCrewDetails
+              .filter((crew) => assignedCrewIds.has(Number(crew.crew_member_id)))
+              .map((crew) => writeShootHistory({
+                projectId: booking.stream_project_booking_id,
+                action: 'crew_assigned',
+                actor,
+                reason: 'Creative partner assigned',
+                metadata: {
+                  crew_member_id: crew.crew_member_id,
+                  crew_member_name: [crew.first_name, crew.last_name].filter(Boolean).join(' ') || `CP #${crew.crew_member_id}`
+                }
+              })));
+
             if (leadId) {
                 await sales_lead_activities.create({
                     lead_id: leadId,
@@ -14867,6 +15676,21 @@ exports.removeProjectAssignedCrew = async (req, res) => {
         // 2. Set the assignment to inactive (Soft Delete)
         await assignment.update({ is_active: 0 });
 
+        const crewName = assignment.crew_member
+            ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
+            : `ID: ${crew_member_id}`;
+        const actor = await getRequestActor(req);
+        await writeShootHistory({
+            projectId: project_id,
+            action: 'crew_removed',
+            actor,
+            reason: 'Creative partner removed',
+            metadata: {
+                crew_member_id: Number(crew_member_id),
+                crew_member_name: crewName
+            }
+        });
+
         // 3. Optional: Log activity if a lead exists for this project
         const lead = await sales_leads.findOne({
             where: { booking_id: project_id },
@@ -14874,10 +15698,6 @@ exports.removeProjectAssignedCrew = async (req, res) => {
         });
 
         if (lead) {
-            const crewName = assignment.crew_member 
-                ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}` 
-                : `ID: ${crew_member_id}`;
-
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
                 activity_type: 'status_changed',

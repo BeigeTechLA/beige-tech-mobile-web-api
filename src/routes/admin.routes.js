@@ -192,6 +192,10 @@ router.get('/get-active-projects', admin.getActiveProjects);
 router.get('/recent-activity', authMiddleware, dashboardView, admin.getRecentActivity);
 router.get('/get-projects', authMiddleware, projectListView, admin.getAllProjectDetails);
 router.get('/get-projects-board', authMiddleware, projectListView, admin.getAllProjectDetailsBoard);
+router.get('/global-shoots', authMiddleware, projectListView, admin.getGlobalShoots);
+router.get('/shoots/calendar/month', authMiddleware, projectListView, admin.getShootCalendarMonth);
+router.get('/shoots/calendar/week', authMiddleware, projectListView, admin.getShootCalendarWeek);
+router.get('/shoots/calendar/day', authMiddleware, projectListView, admin.getShootCalendarDay);
 router.get(
   '/shoots/export',
   authMiddleware,
@@ -265,6 +269,7 @@ router.get('/dashboard/top-creative-partners', authMiddleware, dashboardView, ad
 router.post('/dashboard-detail', authMiddleware, dashboardView, admin.getDashboardDetails);
 router.post('/verify-crew-member', authMiddleware, adminCreativePartnersEdit, admin.verifyCrewMember);
 router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
+router.get('/post-production-team-options', authMiddleware, shootsView, admin.getPostProductionTeamOptions);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
 router.get('/get-clients', authMiddleware, adminClientsView, admin.getClients);
@@ -279,6 +284,8 @@ router.put('/edit-client/:client_id', admin.editClient);
 router.delete('/delete-client/:client_id', authMiddleware, adminClientsDelete, admin.deleteClient);
 router.post('/restore-client/:client_id', authMiddleware, adminClientsDelete, admin.restoreClient);
 router.post('/convert-client-to-creative-partner/:client_id', authMiddleware, adminClientsEdit, admin.convertClientToCreativePartner);
+router.get('/shoots/:project_id/history', authMiddleware, shootsView, admin.getProjectHistory);
+router.post('/restore-project/:project_id', authMiddleware, shootsDelete, admin.restoreProject);
 router.delete('/delete-project/:project_id', authMiddleware, shootsDelete, admin.deleteProject);
 router.post('/upload-profile-photo', admin.uploadProfilePhoto);
 router.get('/get-client-by-id/:id', authMiddleware, adminClientsView, admin.getClientById);
