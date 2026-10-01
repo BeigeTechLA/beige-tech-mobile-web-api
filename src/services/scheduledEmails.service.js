@@ -11,12 +11,17 @@ const FINAL_NUDGE_7D_MARKER = 'shoot_final_nudge_7_days';
 const REMINDER_2H_WINDOW_MIN = parseInt(process.env.SHOOT_REMINDER_2H_WINDOW_MIN || '115', 10);
 const REMINDER_2H_WINDOW_MAX = parseInt(process.env.SHOOT_REMINDER_2H_WINDOW_MAX || '125', 10);
 const FINAL_NUDGE_DAYS_AFTER = parseInt(process.env.SHOOT_FINAL_NUDGE_DAYS_AFTER || '7', 10);
+const CP_PAYMENT_DUE_DAYS_AFTER_SHOOT = parseInt(process.env.CP_PAYMENT_DUE_DAYS_AFTER_SHOOT || '15', 10);
 const DEFAULT_SHOOT_TIME_ZONE = process.env.SHOOT_REMINDER_TIME_ZONE || process.env.APP_TIME_ZONE || 'Asia/Kolkata';
 
 let isRunning5d = false;
 let isRunning2h = false;
 let isRunningCompletion = false;
 let isRunningFinalNudge = false;
+let isRunningCpPaymentDue = false;
+let isRunningCpPaymentDue7Days = false;
+let isRunningCpPaymentOverdue1Day = false;
+let isRunningCpPaymentOverdue3Days = false;
 
 const toIsoDateLocal = (date) => {
   const d = new Date(date);
@@ -122,6 +127,12 @@ const addDaysToIsoDate = (isoDate, days) => {
   utcDate.setUTCDate(utcDate.getUTCDate() + days);
   return utcDate.toISOString().slice(0, 10);
 };
+
+const getCpPaymentNotificationRecipients = () => [process.env.SALES_NOTIFICATION_EMAIL]
+  .flatMap((value) => String(value || '').split(','))
+  .map((value) => value.trim().toLowerCase())
+  .filter(Boolean)
+  .filter((value, index, list) => list.indexOf(value) === index);
 
 const getTimeZoneOffsetMs = (date, timeZone) => {
   const formatter = new Intl.DateTimeFormat('en-US', {
@@ -932,6 +943,352 @@ const runFinalNudge7DaysJob = async () => {
   }
 };
 
+const runShootCompletedPaymentDueJob = async () => {
+  if (isRunningCpPaymentDue) return;
+  isRunningCpPaymentDue = true;
+
+  try {
+    const recipients = getCpPaymentNotificationRecipients();
+    if (!recipients.length) {
+      console.warn('[Email Job] CP payment due: no finance recipient is configured');
+      return;
+    }
+
+    // Run on the day after the shoot at the earliest, so a payment task is never
+    // created while the shoot is still in progress.
+    const today = toIsoDateInTimeZone(new Date(), DEFAULT_SHOOT_TIME_ZONE);
+    const completedThrough = addDaysToIsoDate(today, -1);
+    const { Op } = db.Sequelize;
+    const earnings = await db.creator_earnings.findAll({
+      where: {
+        approval_status: 'approved',
+        status: { [Op.in]: ['earned', 'payout_pending'] },
+        net_earning_amount: { [Op.gt]: 0 },
+        cp_payment_due_email_sent_at: null
+      },
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: true,
+          where: {
+            event_date: { [Op.lte]: completedThrough },
+            is_active: 1,
+            is_cancelled: 0,
+            is_draft: 0
+          },
+          attributes: ['stream_project_booking_id', 'project_name', 'event_date']
+        },
+        {
+          model: db.crew_members,
+          as: 'creator',
+          required: true,
+          attributes: ['crew_member_id', 'first_name', 'last_name']
+        }
+      ]
+    });
+
+    for (const earning of earnings) {
+      try {
+        const booking = earning.booking;
+        const creator = earning.creator;
+        if (!booking || !creator) continue;
+
+        const assignment = await db.assigned_crew.findOne({
+          where: {
+            project_id: booking.stream_project_booking_id,
+            crew_member_id: earning.creator_id,
+            is_active: 1
+          },
+          attributes: ['id'],
+          order: [['id', 'DESC']]
+        });
+
+        const shootDate = toIsoDateLocal(booking.event_date);
+        const paymentDueDate = addDaysToIsoDate(shootDate, CP_PAYMENT_DUE_DAYS_AFTER_SHOOT);
+        const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+        const dashboardLink = `${frontendBaseUrl}/admin/finances/cp-compensation?creator_earning_id=${encodeURIComponent(earning.creator_earning_id)}`;
+        const result = await emailService.sendShootCompletedPaymentDueEmail({
+          to: recipients,
+          data: {
+            project_name: booking.project_name || `Booking #${booking.stream_project_booking_id}`,
+            booking_id: booking.stream_project_booking_id,
+            assignment_id: assignment?.id || '',
+            cp_name: [creator.first_name, creator.last_name].filter(Boolean).join(' ') || 'Creative Partner',
+            shoot_date: formatDate(booking.event_date),
+            cp_compensation: Number(earning.net_earning_amount || 0).toFixed(2),
+            payment_due_date: formatDate(paymentDueDate),
+            dashboard_link: dashboardLink
+          }
+        });
+
+        if (!result?.success) {
+          console.error(`[Email Job] CP payment due failed for earning ${earning.creator_earning_id}:`, result?.error || 'unknown error');
+          continue;
+        }
+
+        await earning.update({ cp_payment_due_email_sent_at: new Date(), updated_at: new Date() });
+      } catch (earningError) {
+        console.error('[Email Job] CP payment due earning processing error:', earningError.message);
+      }
+    }
+  } catch (error) {
+    console.error('[Email Job] CP payment due run failed:', error);
+  } finally {
+    isRunningCpPaymentDue = false;
+  }
+};
+
+const runCPPaymentDue7DaysJob = async () => {
+  if (isRunningCpPaymentDue7Days) return;
+  isRunningCpPaymentDue7Days = true;
+
+  try {
+    const recipients = getCpPaymentNotificationRecipients();
+    if (!recipients.length) {
+      console.warn('[Email Job] CP payment due 7-day reminder: SALES_NOTIFICATION_EMAIL is not configured');
+      return;
+    }
+
+    const today = toIsoDateInTimeZone(new Date(), DEFAULT_SHOOT_TIME_ZONE);
+    // Payment is due 15 days after the shoot; this reminder is due 7 days
+    // before that deadline, i.e. 8 days after the shoot.
+    const targetShootDate = addDaysToIsoDate(today, -(CP_PAYMENT_DUE_DAYS_AFTER_SHOOT - 7));
+    const { Op } = db.Sequelize;
+    const earnings = await db.creator_earnings.findAll({
+      where: {
+        approval_status: 'approved',
+        status: { [Op.in]: ['earned', 'payout_pending'] },
+        net_earning_amount: { [Op.gt]: 0 },
+        cp_payment_due_email_sent_at: { [Op.ne]: null },
+        cp_payment_due_7_days_email_sent_at: null
+      },
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: true,
+          where: {
+            event_date: targetShootDate,
+            is_active: 1,
+            is_cancelled: 0,
+            is_draft: 0
+          },
+          attributes: ['stream_project_booking_id', 'project_name', 'event_date']
+        },
+        {
+          model: db.crew_members,
+          as: 'creator',
+          required: true,
+          attributes: ['crew_member_id', 'first_name', 'last_name']
+        }
+      ]
+    });
+
+    for (const earning of earnings) {
+      try {
+        const booking = earning.booking;
+        const creator = earning.creator;
+        const assignment = await db.assigned_crew.findOne({
+          where: { project_id: booking.stream_project_booking_id, crew_member_id: earning.creator_id, is_active: 1 },
+          attributes: ['id'],
+          order: [['id', 'DESC']]
+        });
+        const shootDate = toIsoDateLocal(booking.event_date);
+        const paymentDueDate = addDaysToIsoDate(shootDate, CP_PAYMENT_DUE_DAYS_AFTER_SHOOT);
+        const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+        const result = await emailService.sendCPPaymentDue7DaysEmail({
+          to: recipients,
+          data: {
+            project_name: booking.project_name || `Booking #${booking.stream_project_booking_id}`,
+            booking_id: booking.stream_project_booking_id,
+            assignment_id: assignment?.id || '',
+            cp_name: [creator.first_name, creator.last_name].filter(Boolean).join(' ') || 'Creative Partner',
+            shoot_date: formatDate(booking.event_date),
+            cp_compensation: Number(earning.net_earning_amount || 0).toFixed(2),
+            payment_due_date: formatDate(paymentDueDate),
+            dashboard_link: `${frontendBaseUrl}/admin/finances/cp-compensation?creator_earning_id=${encodeURIComponent(earning.creator_earning_id)}`
+          }
+        });
+
+        if (!result?.success) {
+          console.error(`[Email Job] CP payment due 7-day reminder failed for earning ${earning.creator_earning_id}:`, result?.error || 'unknown error');
+          continue;
+        }
+        await earning.update({ cp_payment_due_7_days_email_sent_at: new Date(), updated_at: new Date() });
+      } catch (earningError) {
+        console.error('[Email Job] CP payment due 7-day earning processing error:', earningError.message);
+      }
+    }
+  } catch (error) {
+    console.error('[Email Job] CP payment due 7-day run failed:', error);
+  } finally {
+    isRunningCpPaymentDue7Days = false;
+  }
+};
+
+const runCPPaymentOverdue1DayJob = async () => {
+  if (isRunningCpPaymentOverdue1Day) return;
+  isRunningCpPaymentOverdue1Day = true;
+
+  try {
+    const recipients = getCpPaymentNotificationRecipients();
+    if (!recipients.length) {
+      console.warn('[Email Job] CP payment overdue 1-day reminder: SALES_NOTIFICATION_EMAIL is not configured');
+      return;
+    }
+
+    const today = toIsoDateInTimeZone(new Date(), DEFAULT_SHOOT_TIME_ZONE);
+    const targetShootDate = addDaysToIsoDate(today, -(CP_PAYMENT_DUE_DAYS_AFTER_SHOOT + 1));
+    const { Op } = db.Sequelize;
+    const earnings = await db.creator_earnings.findAll({
+      where: {
+        approval_status: 'approved',
+        status: { [Op.in]: ['earned', 'payout_pending'] },
+        net_earning_amount: { [Op.gt]: 0 },
+        cp_payment_due_email_sent_at: { [Op.ne]: null },
+        cp_payment_overdue_1_day_email_sent_at: null
+      },
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: true,
+          where: { event_date: targetShootDate, is_active: 1, is_cancelled: 0, is_draft: 0 },
+          attributes: ['stream_project_booking_id', 'project_name', 'event_date']
+        },
+        {
+          model: db.crew_members,
+          as: 'creator',
+          required: true,
+          attributes: ['crew_member_id', 'first_name', 'last_name']
+        }
+      ]
+    });
+
+    for (const earning of earnings) {
+      try {
+        const booking = earning.booking;
+        const creator = earning.creator;
+        const assignment = await db.assigned_crew.findOne({
+          where: { project_id: booking.stream_project_booking_id, crew_member_id: earning.creator_id, is_active: 1 },
+          attributes: ['id'],
+          order: [['id', 'DESC']]
+        });
+        const shootDate = toIsoDateLocal(booking.event_date);
+        const paymentDueDate = addDaysToIsoDate(shootDate, CP_PAYMENT_DUE_DAYS_AFTER_SHOOT);
+        const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+        const result = await emailService.sendCPPaymentOverdue1DayEmail({
+          to: recipients,
+          data: {
+            project_name: booking.project_name || `Booking #${booking.stream_project_booking_id}`,
+            booking_id: booking.stream_project_booking_id,
+            assignment_id: assignment?.id || '',
+            cp_name: [creator.first_name, creator.last_name].filter(Boolean).join(' ') || 'Creative Partner',
+            shoot_date: formatDate(booking.event_date),
+            cp_compensation: Number(earning.net_earning_amount || 0).toFixed(2),
+            payment_due_date: formatDate(paymentDueDate),
+            dashboard_link: `${frontendBaseUrl}/admin/finances/cp-compensation?creator_earning_id=${encodeURIComponent(earning.creator_earning_id)}`
+          }
+        });
+
+        if (!result?.success) {
+          console.error(`[Email Job] CP payment overdue 1-day reminder failed for earning ${earning.creator_earning_id}:`, result?.error || 'unknown error');
+          continue;
+        }
+        await earning.update({ cp_payment_overdue_1_day_email_sent_at: new Date(), updated_at: new Date() });
+      } catch (earningError) {
+        console.error('[Email Job] CP payment overdue 1-day earning processing error:', earningError.message);
+      }
+    }
+  } catch (error) {
+    console.error('[Email Job] CP payment overdue 1-day run failed:', error);
+  } finally {
+    isRunningCpPaymentOverdue1Day = false;
+  }
+};
+
+const runCPPaymentOverdue3DaysJob = async () => {
+  if (isRunningCpPaymentOverdue3Days) return;
+  isRunningCpPaymentOverdue3Days = true;
+
+  try {
+    const recipients = getCpPaymentNotificationRecipients();
+    if (!recipients.length) {
+      console.warn('[Email Job] CP payment overdue 3-day reminder: SALES_NOTIFICATION_EMAIL is not configured');
+      return;
+    }
+
+    const today = toIsoDateInTimeZone(new Date(), DEFAULT_SHOOT_TIME_ZONE);
+    const targetShootDate = addDaysToIsoDate(today, -(CP_PAYMENT_DUE_DAYS_AFTER_SHOOT + 3));
+    const { Op } = db.Sequelize;
+    const earnings = await db.creator_earnings.findAll({
+      where: {
+        approval_status: 'approved',
+        status: { [Op.in]: ['earned', 'payout_pending'] },
+        net_earning_amount: { [Op.gt]: 0 },
+        cp_payment_due_email_sent_at: { [Op.ne]: null },
+        cp_payment_overdue_3_days_email_sent_at: null
+      },
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: true,
+          where: { event_date: targetShootDate, is_active: 1, is_cancelled: 0, is_draft: 0 },
+          attributes: ['stream_project_booking_id', 'project_name', 'event_date']
+        },
+        {
+          model: db.crew_members,
+          as: 'creator',
+          required: true,
+          attributes: ['crew_member_id', 'first_name', 'last_name']
+        }
+      ]
+    });
+
+    for (const earning of earnings) {
+      try {
+        const booking = earning.booking;
+        const creator = earning.creator;
+        const assignment = await db.assigned_crew.findOne({
+          where: { project_id: booking.stream_project_booking_id, crew_member_id: earning.creator_id, is_active: 1 },
+          attributes: ['id'],
+          order: [['id', 'DESC']]
+        });
+        const shootDate = toIsoDateLocal(booking.event_date);
+        const paymentDueDate = addDaysToIsoDate(shootDate, CP_PAYMENT_DUE_DAYS_AFTER_SHOOT);
+        const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+        const result = await emailService.sendCPPaymentOverdue3DaysEmail({
+          to: recipients,
+          data: {
+            project_name: booking.project_name || `Booking #${booking.stream_project_booking_id}`,
+            booking_id: booking.stream_project_booking_id,
+            assignment_id: assignment?.id || '',
+            cp_name: [creator.first_name, creator.last_name].filter(Boolean).join(' ') || 'Creative Partner',
+            shoot_date: formatDate(booking.event_date),
+            cp_compensation: Number(earning.net_earning_amount || 0).toFixed(2),
+            payment_due_date: formatDate(paymentDueDate),
+            dashboard_link: `${frontendBaseUrl}/admin/finances/cp-compensation?creator_earning_id=${encodeURIComponent(earning.creator_earning_id)}`
+          }
+        });
+
+        if (!result?.success) {
+          console.error(`[Email Job] CP payment overdue 3-day reminder failed for earning ${earning.creator_earning_id}:`, result?.error || 'unknown error');
+          continue;
+        }
+        await earning.update({ cp_payment_overdue_3_days_email_sent_at: new Date(), updated_at: new Date() });
+      } catch (earningError) {
+        console.error('[Email Job] CP payment overdue 3-day earning processing error:', earningError.message);
+      }
+    }
+  } catch (error) {
+    console.error('[Email Job] CP payment overdue 3-day run failed:', error);
+  } finally {
+    isRunningCpPaymentOverdue3Days = false;
+  }
+};
+
 const startScheduledEmailJobs = () => {
   const enabled = String(process.env.ENABLE_SCHEDULED_EMAIL_JOBS || 'true').toLowerCase() === 'true';
   if (!enabled) {
@@ -954,6 +1311,18 @@ const startScheduledEmailJobs = () => {
   runFinalNudge7DaysJob().catch((err) => {
     console.error('[Email Job] Initial final-nudge-7d run failed:', err.message);
   });
+  runShootCompletedPaymentDueJob().catch((err) => {
+    console.error('[Email Job] Initial CP payment due run failed:', err.message);
+  });
+  runCPPaymentDue7DaysJob().catch((err) => {
+    console.error('[Email Job] Initial CP payment due 7-day run failed:', err.message);
+  });
+  runCPPaymentOverdue1DayJob().catch((err) => {
+    console.error('[Email Job] Initial CP payment overdue 1-day run failed:', err.message);
+  });
+  runCPPaymentOverdue3DaysJob().catch((err) => {
+    console.error('[Email Job] Initial CP payment overdue 3-day run failed:', err.message);
+  });
   expireQuotesPastValidUntil().then((result) => {
     if (result.expired_count) {
       console.log(`[Quote Expiration Job] Expired ${result.expired_count} quote(s)`);
@@ -975,6 +1344,18 @@ const startScheduledEmailJobs = () => {
     runFinalNudge7DaysJob().catch((err) => {
       console.error('[Email Job] Interval final-nudge-7d run failed:', err.message);
     });
+    runShootCompletedPaymentDueJob().catch((err) => {
+      console.error('[Email Job] Interval CP payment due run failed:', err.message);
+    });
+    runCPPaymentDue7DaysJob().catch((err) => {
+      console.error('[Email Job] Interval CP payment due 7-day run failed:', err.message);
+    });
+    runCPPaymentOverdue1DayJob().catch((err) => {
+      console.error('[Email Job] Interval CP payment overdue 1-day run failed:', err.message);
+    });
+    runCPPaymentOverdue3DaysJob().catch((err) => {
+      console.error('[Email Job] Interval CP payment overdue 3-day run failed:', err.message);
+    });
     expireQuotesPastValidUntil().then((result) => {
       if (result.expired_count) {
         console.log(`[Quote Expiration Job] Expired ${result.expired_count} quote(s)`);
@@ -990,5 +1371,9 @@ module.exports = {
   runShootReminder5DaysJob,
   runShootReminder2HoursJob,
   runShootCompletionNextDayJob,
-  runFinalNudge7DaysJob
+  runFinalNudge7DaysJob,
+  runShootCompletedPaymentDueJob,
+  runCPPaymentDue7DaysJob,
+  runCPPaymentOverdue1DayJob,
+  runCPPaymentOverdue3DaysJob
 };

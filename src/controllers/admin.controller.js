@@ -15415,7 +15415,13 @@ exports.searchCrewForProject = async (req, res) => {
 exports.assignProjectCrewBulk = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
-        const { project_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
+        const {
+          project_id,
+          crew_member_ids,
+          allow_pending_compensation_assignment,
+          defer_new_shoot_request_email
+        } = req.body;
+        const deferNewShootRequestEmail = defer_new_shoot_request_email === true || defer_new_shoot_request_email === 'true';
 
         if (!project_id) {
             return res.status(400).json({ success: false, message: "Project ID is required." });
@@ -15510,6 +15516,15 @@ exports.assignProjectCrewBulk = async (req, res) => {
         }
 
         const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
+        const existingAssignments = await assigned_crew.findAll({
+            where: {
+              project_id,
+              crew_member_id: uniqueCrewIds,
+              is_active: 1
+            },
+            attributes: ['crew_member_id']
+        });
+        const existingCrewIds = new Set(existingAssignments.map((assignment) => Number(assignment.crew_member_id)));
         const newCrewDetails = await crew_members.findAll({
             where: { crew_member_id: uniqueCrewIds }
         });
@@ -15518,6 +15533,9 @@ exports.assignProjectCrewBulk = async (req, res) => {
         const errors = [];
 
         newCrewDetails.forEach(crew => {
+            if (existingCrewIds.has(Number(crew.crew_member_id))) {
+              return;
+            }
             let roles = [];
             try {
                 const raw = crew.primary_role;
@@ -15587,7 +15605,10 @@ exports.assignProjectCrewBulk = async (req, res) => {
             }
 
             try {
-                const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+              if (deferNewShootRequestEmail) {
+                return;
+              }
+              const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
                 const crews = await crew_members.findAll({
                     where: { crew_member_id: createdIds },
                     attributes: ['user_id', 'first_name', 'last_name', 'email']
@@ -15631,6 +15652,8 @@ exports.assignProjectCrewBulk = async (req, res) => {
         return res.json({
             success: true,
             message: `${assignmentsToCreate.length} crew members assigned successfully.`,
+            newly_assigned_creator_ids: assignmentsToCreate.map((assignment) => assignment.crew_member_id),
+            new_shoot_request_email_deferred: deferNewShootRequestEmail,
             errors: errors.length > 0 ? errors : undefined
         });
 

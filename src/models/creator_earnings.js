@@ -115,6 +115,22 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: true
     },
+    cp_payment_due_email_sent_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    cp_payment_due_7_days_email_sent_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    cp_payment_overdue_1_day_email_sent_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    cp_payment_overdue_3_days_email_sent_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     payout_id: {
       type: DataTypes.INTEGER,
       allowNull: true
