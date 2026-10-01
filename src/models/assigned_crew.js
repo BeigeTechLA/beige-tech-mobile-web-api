@@ -57,7 +57,11 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: true
     },
-    google_calendar_event_id: {
+    new_booking_email_sent_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+     google_calendar_event_id: {
       type: DataTypes.STRING(255),
       allowNull: true
     },
