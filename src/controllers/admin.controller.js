@@ -4969,6 +4969,23 @@ const getCalendarShootRange = (query, view) => {
   };
 };
 
+const getPostProductionProjectFilter = async (req) => {
+  const requestedPostProductionUserId = Number(req.query?.post_production_user_id);
+  if (!req.query?.post_production_user_id || req.query.post_production_user_id === 'all') {
+    return {};
+  }
+
+  const assignedProjectIds = Number.isInteger(requestedPostProductionUserId) && requestedPostProductionUserId > 0
+    ? await getAssignedProjectIdsForPostProductionUser(requestedPostProductionUserId)
+    : [];
+
+  return {
+    stream_project_booking_id: {
+      [Sequelize.Op.in]: assignedProjectIds.length ? assignedProjectIds : [-1],
+    },
+  };
+};
+
 // Mirrors the paid base condition used by getAllProjectDetails (list view).
 // is_active is applied separately in the calendar query.
 const getPaidCalendarFilter = async (req) => {
@@ -4977,6 +4994,7 @@ const getPaidCalendarFilter = async (req) => {
   const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
     ? { user_id: requestUserId }
     : {};
+  const postProductionProjectFilter = await getPostProductionProjectFilter(req);
 
   const [bookedSalesLeads, bookedClientLeads, salesManualPaymentActivities, clientManualPaymentActivities, collectedPaymentSummaryRows] = await Promise.all([
     sales_leads.findAll({ where: { is_active: 1, lead_status: 'booked', booking_id: { [Sequelize.Op.ne]: null } }, attributes: ['booking_id'], raw: true }),
@@ -5007,6 +5025,7 @@ const getPaidCalendarFilter = async (req) => {
 
   return {
     ...clientProjectFilter,
+    ...postProductionProjectFilter,
     [Sequelize.Op.or]: [
       { payment_id: { [Sequelize.Op.ne]: null } },
       ...(paidBookingIds.length ? [{ stream_project_booking_id: { [Sequelize.Op.in]: paidBookingIds } }] : []),
@@ -5033,6 +5052,11 @@ const fetchCalendarMeetings = async (req, range) => {
   const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
   const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
   const isClient = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0;
+  const postProductionProjectFilter = await getPostProductionProjectFilter(req);
+  const bookingWhere = {
+    ...(isClient ? { user_id: requestUserId } : {}),
+    ...postProductionProjectFilter,
+  };
 
   const rows = await db.project_meetings.findAll({
     where: {
@@ -5045,7 +5069,7 @@ const fetchCalendarMeetings = async (req, range) => {
       as: 'booking',
       required: true,
       attributes: ['stream_project_booking_id', 'project_name', 'is_active'],
-      ...(isClient ? { where: { user_id: requestUserId } } : {}),
+      ...(Object.keys(bookingWhere).length ? { where: bookingWhere } : {}),
     }],
     order: [['meeting_date_time', 'ASC'], ['meeting_id', 'ASC']],
   });
@@ -5082,6 +5106,27 @@ const getCalendarShoots = (view) => async (req, res) => {
 
     const paidFilter = await getPaidCalendarFilter(req);
 
+    // `event_date` on a multi-day booking is only its first selected day. Fetch
+    // the child schedule rows separately so every selected day is returned in
+    // the calendar range (including a range that contains only a later day).
+    const fetchBookingDays = (isActive) => db.stream_project_booking_days.findAll({
+      attributes: ['stream_project_booking_id', 'event_date', 'start_time', 'end_time', 'time_zone'],
+      where: {
+        event_date: { [Op.between]: [range.start, range.end] },
+      },
+      include: [{
+        model: stream_project_booking,
+        as: 'booking',
+        required: true,
+        attributes: ['stream_project_booking_id', 'project_name', 'is_active'],
+        where: {
+          ...paidFilter,
+          is_active: isActive,
+        },
+      }],
+      order: [['event_date', 'ASC'], ['start_time', 'ASC'], ['stream_project_booking_day_id', 'ASC']],
+    });
+
     const fetchShoots = (isActive) => stream_project_booking.findAll({
       attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'start_time', 'end_time', 'time_zone', 'is_active'],
       where: {
@@ -5103,19 +5148,45 @@ const getCalendarShoots = (view) => async (req, res) => {
       is_active: Number(shoot.is_active) === 1,
     });
 
-    const [activeRows, deletedRows, meetings] = await Promise.all([
+    const formatBookingDay = (bookingDay) => ({
+      // Keep the booking ID as the item ID so clicking any occurrence opens
+      // the same shoot details page. Each date renders in a separate calendar
+      // cell, so a booking can safely occur more than once in the response.
+      id: bookingDay.stream_project_booking_id,
+      title: bookingDay.booking?.project_name || 'Untitled Shoot',
+      date: bookingDay.event_date,
+      start_time: bookingDay.start_time,
+      end_time: bookingDay.end_time,
+      time_zone: bookingDay.time_zone,
+      is_active: Number(bookingDay.booking?.is_active) === 1,
+    });
+
+    const [activeRows, deletedRows, activeBookingDays, deletedBookingDays, meetings] = await Promise.all([
       fetchShoots(1),
       fetchShoots(0),
+      fetchBookingDays(1),
+      fetchBookingDays(0),
       fetchCalendarMeetings(req, range),
     ]);
+
+    // A booking with child schedule rows is represented exclusively by those
+    // rows; otherwise its first day would appear twice in the calendar.
+    const activeBookingDayIds = new Set(activeBookingDays.map((day) => Number(day.stream_project_booking_id)));
+    const deletedBookingDayIds = new Set(deletedBookingDays.map((day) => Number(day.stream_project_booking_id)));
 
     return res.status(200).json({
       success: true,
       data: {
         view,
         range,
-        active_shoots: activeRows.map(formatShoot),
-        deleted_shoots: deletedRows.map(formatShoot),
+        active_shoots: [
+          ...activeRows.filter((shoot) => !activeBookingDayIds.has(Number(shoot.stream_project_booking_id))).map(formatShoot),
+          ...activeBookingDays.map(formatBookingDay),
+        ],
+        deleted_shoots: [
+          ...deletedRows.filter((shoot) => !deletedBookingDayIds.has(Number(shoot.stream_project_booking_id))).map(formatShoot),
+          ...deletedBookingDays.map(formatBookingDay),
+        ],
         meetings,
       },
     });
