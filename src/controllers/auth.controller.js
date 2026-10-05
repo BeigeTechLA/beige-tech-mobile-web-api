@@ -38,18 +38,67 @@ const getRequestIpAddress = (req) => {
   return String(forwardedIp || req.ip || req.socket?.remoteAddress || '').trim().slice(0, 45) || null;
 };
 
+const isPublicIpAddress = (ipAddress) => {
+  const ip = String(ipAddress || '').replace(/^::ffff:/i, '').toLowerCase();
+  return Boolean(ip) && ip !== '::1' && ip !== 'localhost' && !(
+    ip === '127.0.0.1' || ip.startsWith('10.') || ip.startsWith('192.168.') ||
+    ip.startsWith('172.16.') || ip.startsWith('172.17.') || ip.startsWith('172.18.') ||
+    ip.startsWith('172.19.') || ip.startsWith('172.2') || ip.startsWith('172.30.') ||
+    ip.startsWith('172.31.')
+  );
+};
+
+const getIpLocation = async (ipAddress) => {
+  if (!isPublicIpAddress(ipAddress) || typeof fetch !== 'function') return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const configuredProviderBaseUrl = process.env.IP_GEOLOCATION_BASE_URL;
+    const lookupUrl = configuredProviderBaseUrl
+      ? `${String(configuredProviderBaseUrl).replace(/\/+$/, '')}/${encodeURIComponent(ipAddress)}`
+      : `https://ipwho.is/${encodeURIComponent(ipAddress)}`;
+    const response = await fetch(lookupUrl, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) throw new Error(`IP geolocation provider returned HTTP ${response.status}`);
+
+    const location = await response.json();
+    if (location.success === false) {
+      throw new Error(location.message || 'IP geolocation provider could not resolve the IP address');
+    }
+    return {
+      city: String(location.city || '').trim().slice(0, 120) || null,
+      country: String(location.country_name || location.country || '').trim().slice(0, 120) || null
+    };
+  } catch (error) {
+    console.error('IP geolocation lookup error:', error.message);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
 const recordSuccessfulLogin = async (req, user, loginMethod) => {
   try {
     if (!db.user_login_history) return;
     if (Number(user?.userType?.is_internal_member || 0) !== 1) return;
 
-    await db.user_login_history.create({
+    const ipAddress = getRequestIpAddress(req);
+    const loginHistory = await db.user_login_history.create({
       user_id: user.id,
-      ip_address: getRequestIpAddress(req),
+      ip_address: ipAddress,
       login_method: loginMethod,
       user_agent: String(req.get('user-agent') || '').slice(0, 512) || null,
       logged_in_at: new Date()
     });
+
+    // Do not delay a successful login while the external IP lookup completes.
+    getIpLocation(ipAddress).then((location) => {
+      if (!location || (!location.city && !location.country)) return;
+      return loginHistory.update(location);
+    }).catch((error) => console.error('Login location audit update error:', error.message));
   } catch (error) {
     // Login must stay available even if audit logging is temporarily unavailable.
     console.error('Login audit logging error:', error);

@@ -14,6 +14,8 @@ module.exports = function(sequelize, DataTypes) {
       references: { model: 'users', key: 'id' }
     },
     ip_address: { type: DataTypes.STRING(45), allowNull: true },
+    city: { type: DataTypes.STRING(120), allowNull: true },
+    country: { type: DataTypes.STRING(120), allowNull: true },
     login_method: { type: DataTypes.STRING(30), allowNull: false },
     user_agent: { type: DataTypes.STRING(512), allowNull: true },
     logged_in_at: {

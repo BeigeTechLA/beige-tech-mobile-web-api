@@ -209,6 +209,7 @@ Authorization: {{TOKEN}}
 ###
 POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
+X-Forwarded-For: 8.8.8.8
 
 {
   "email": "superadmin@gmail.com",
