@@ -4933,10 +4933,150 @@ exports.getAllProjectDetails = async (req, res) => {
   }
 };
 
-// Board/Kanban view - no pagination, saare matching records ek j call ma
+// Board/Kanban view 
+const SHOOT_BOARD_STATUSES = [
+  'Initiated',
+  'PreProduction',
+  'Shoot Day',
+  'PostProduction',
+  'Revision',
+  'Completed',
+  'Assets Delivered',
+  'Cancelled'
+];
+
+const SHOOT_BOARD_STAGE_LABELS = {
+  0: 'Initiated',
+  1: 'PreProduction',
+  2: 'Shoot Day',
+  3: 'PostProduction',
+  4: 'Revision',
+  5: 'Completed',
+  6: 'Assets Delivered',
+  7: 'Cancelled'
+};
+
+const SHOOT_BOARD_DEFAULT_LIMIT = 10;
+
+const normalizeShootBoardStatusLabel = (value) => {
+  const key = String(value || '').toLowerCase().replace(/[\s_-]+/g, '');
+  if (!key) return null;
+  return SHOOT_BOARD_STATUSES.find(
+    (label) => label.toLowerCase().replace(/[\s_-]+/g, '') === key
+  ) || null;
+};
+
+// Runs getAllProjectDetails in-process and returns its JSON payload (same idea as invokeGetLeadsSnapshot).
+const invokeProjectsBoardSnapshot = (baseReq, queryOverrides = {}) => new Promise((resolve, reject) => {
+  const reqLike = Object.create(baseReq);
+  Object.defineProperty(reqLike, 'query', {
+    value: { ...baseReq.query, ...queryOverrides },
+    writable: true,
+    enumerable: true,
+    configurable: true
+  });
+
+  const resLike = {
+    status: (statusCode) => ({
+      json: (payload) => (
+        statusCode >= 400
+          ? reject(new Error(payload?.message || `getAllProjectDetails failed with status ${statusCode}`))
+          : resolve(payload)
+      )
+    }),
+    json: (payload) => resolve(payload)
+  };
+
+  Promise.resolve(exports.getAllProjectDetails(reqLike, resLike)).catch(reject);
+});
+
+/**
+ * Board/Kanban view with per-column lazy loading.
+ * Query: all normal shoot filters + optional
+ *   column_status = Initiated | PreProduction | Shoot Day | ... (load only that column)
+ *   board_page    = page number for the column(s) (default 1)
+ *   board_limit   = cards per column page (default 10, max 100)
+ */
 exports.getAllProjectDetailsBoard = async (req, res) => {
-  req.query = { ...req.query, board_view: 'true', limit: undefined, page: undefined };
-  return exports.getAllProjectDetails(req, res);
+  try {
+    const rawLimit = Number.parseInt(String(req.query.board_limit || SHOOT_BOARD_DEFAULT_LIMIT), 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : SHOOT_BOARD_DEFAULT_LIMIT;
+    const rawPage = Number.parseInt(String(req.query.board_page || 1), 10);
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+    const requestedColumn = req.query.column_status
+      ? normalizeShootBoardStatusLabel(req.query.column_status)
+      : null;
+
+    const snapshot = await invokeProjectsBoardSnapshot(req, {
+      board_view: 'true',
+      limit: undefined,
+      page: undefined,
+      summary_only: undefined,
+      column_status: undefined,
+      board_page: undefined,
+      board_limit: undefined
+    });
+
+    const payload = snapshot?.data || {};
+    const allEntries = Array.isArray(payload.projects) ? payload.projects : [];
+
+    const grouped = new Map(SHOOT_BOARD_STATUSES.map((label) => [label, []]));
+    allEntries.forEach((entry) => {
+      const project = entry?.project || entry || {};
+      const label =
+        SHOOT_BOARD_STAGE_LABELS[Number(project.timeline_status)] ||
+        normalizeShootBoardStatusLabel(project.timeline_label) ||
+        normalizeShootBoardStatusLabel(project.timeline_status);
+
+      if (label && grouped.has(label)) {
+        grouped.get(label).push(entry);
+      }
+    });
+
+    const statuses = requestedColumn ? [requestedColumn] : SHOOT_BOARD_STATUSES;
+    const columns = {};
+
+    statuses.forEach((label) => {
+      const fullColumn = grouped.get(label) || [];
+      const total = fullColumn.length;
+      const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+      const offset = (page - 1) * limit;
+
+      columns[label] = {
+        status: label,
+        projects: fullColumn.slice(offset, offset + limit),
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasMore: page < totalPages
+        }
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Shoot board retrieved successfully',
+      data: {
+        stats: payload.stats || null,
+        columns,
+        statuses,
+        pagination: {
+          totalRecords: allEntries.length,
+          page,
+          limit
+        }
+      }
+    });
+  } catch (error) {
+    console.error('getAllProjectDetailsBoard Error:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Failed to fetch shoots board',
+      details: error.message
+    });
+  }
 };
 
 exports.getUpcomingEvents = async (req, res) => {
@@ -12576,7 +12716,10 @@ exports.getProjectHistory = async (req, res) => {
             'post_production_member_assigned',
             'post_production_member_removed',
             'project_name_updated',
-            'schedule_location_updated'
+            'schedule_location_updated',
+            'chat_room_created',
+            'meeting_created',   
+            'meeting_deleted' 
           ]
         }
       },
