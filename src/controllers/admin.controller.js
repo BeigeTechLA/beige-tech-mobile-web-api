@@ -63,6 +63,107 @@ const getFrontendBaseUrl = () =>
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
+
+// Super-admin only: successful sign-ins with the account, source IP and timestamp.
+exports.getLoginHistory = async (req, res) => {
+  try {
+    let { page = 1, limit = 20, user_id, ip_address, login_method, search } = req.query;
+    page = Math.max(parseInt(page, 10) || 1, 1);
+    limit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+
+    const where = {};
+    const internalUserTypes = await db.user_type.findAll({
+      where: { is_internal_member: 1 },
+      attributes: ['user_type_id'],
+      raw: true
+    });
+    const internalUserTypeIds = internalUserTypes.map((type) => type.user_type_id);
+    const internalUsers = internalUserTypeIds.length
+      ? await users.scope('all').findAll({
+          where: { user_type: { [Op.in]: internalUserTypeIds } },
+          attributes: ['id'],
+          raw: true
+        })
+      : [];
+    const internalUserIds = internalUsers.map((user) => user.id);
+
+    // Keep the audit endpoint restricted to the same internal users it records.
+    where[Op.and] = [{ user_id: { [Op.in]: internalUserIds } }];
+    if (Number.isInteger(Number(user_id)) && Number(user_id) > 0) where.user_id = Number(user_id);
+    if (ip_address) where.ip_address = String(ip_address).trim();
+    if (login_method) where.login_method = String(login_method).trim().toLowerCase();
+
+    if (search && !where.user_id) {
+      const searchValue = String(search).trim();
+      if (searchValue) {
+        const matchingUsers = await users.scope('all').findAll({
+          where: {
+            [Op.or]: [
+              { name: { [Op.like]: `%${searchValue}%` } },
+              { email: { [Op.like]: `%${searchValue}%` } }
+            ]
+          },
+          attributes: ['id'],
+          raw: true
+        });
+        const matchingUserIds = matchingUsers.map((user) => user.id);
+        where[Op.or] = [
+          { ip_address: { [Op.like]: `%${searchValue}%` } },
+          ...(matchingUserIds.length ? [{ user_id: { [Op.in]: matchingUserIds } }] : [])
+        ];
+      }
+    }
+
+    const { count, rows } = await db.user_login_history.findAndCountAll({
+      where,
+      limit,
+      offset: (page - 1) * limit,
+      order: [['logged_in_at', 'DESC'], ['login_history_id', 'DESC']],
+      raw: true
+    });
+
+    const userIds = [...new Set(rows.map((row) => row.user_id))];
+    const auditUsers = userIds.length
+      ? await users.scope('all').findAll({
+          where: { id: { [Op.in]: userIds } },
+          attributes: ['id', 'name', 'email', 'phone_number', 'role', 'user_type'],
+          include: [{ model: db.user_type, as: 'userType', attributes: ['user_role'], required: false }]
+        })
+      : [];
+    const userMap = new Map(auditUsers.map((user) => [user.id, user]));
+
+    return res.status(200).json({
+      success: true,
+      data: rows.map((row) => {
+        const user = userMap.get(row.user_id);
+        return {
+          login_history_id: row.login_history_id,
+          user_id: row.user_id,
+          user: user ? {
+            name: user.name,
+            email: user.email,
+            phone_number: user.phone_number,
+            role: user.userType?.user_role || user.role || null,
+            user_type_id: user.user_type
+          } : null,
+          ip_address: row.ip_address,
+          login_method: row.login_method,
+          user_agent: row.user_agent,
+          logged_in_at: row.logged_in_at
+        };
+      }),
+      pagination: {
+        page,
+        limit,
+        total: count,
+        total_pages: Math.ceil(count / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get login history error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to fetch login history' });
+  }
+};
 const POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES = [
   'Post Production Manager',
   'Producer',

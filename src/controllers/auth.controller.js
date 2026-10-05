@@ -33,6 +33,30 @@ const {
 const accountCreditService = require('../services/account-credit.service');
 const passwordExpiryService = require('../services/internal-password-expiry.service');
 
+const getRequestIpAddress = (req) => {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const forwardedIp = Array.isArray(forwardedFor) ? forwardedFor[0] : String(forwardedFor || '').split(',')[0];
+  return String(forwardedIp || req.ip || req.socket?.remoteAddress || '').trim().slice(0, 45) || null;
+};
+
+const recordSuccessfulLogin = async (req, user, loginMethod) => {
+  try {
+    if (!db.user_login_history) return;
+    if (Number(user?.userType?.is_internal_member || 0) !== 1) return;
+
+    await db.user_login_history.create({
+      user_id: user.id,
+      ip_address: getRequestIpAddress(req),
+      login_method: loginMethod,
+      user_agent: String(req.get('user-agent') || '').slice(0, 512) || null,
+      logged_in_at: new Date()
+    });
+  } catch (error) {
+    // Login must stay available even if audit logging is temporarily unavailable.
+    console.error('Login audit logging error:', error);
+  }
+};
+
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(getGoogleClientId());
 
@@ -1267,6 +1291,8 @@ exports.login = async (req, res) => {
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
+      await recordSuccessfulLogin(req, user, 'password');
+
       // const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
@@ -1416,6 +1442,8 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
         user.user_type
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
+
+      await recordSuccessfulLogin(req, user, 'otp');
 
       return res.json({
         success: true,
