@@ -7150,6 +7150,268 @@ exports.exportCrewMembersCsv = async (req, res) => {
   }
 };
 
+const normalizeBulkCrewMemberIds = (value) => {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(
+    new Set(
+      value
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  );
+};
+
+const sendProfileReminderForCrewMember = async (crewMemberId) => {
+  const member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({
+    crew_member_id: crewMemberId,
+    is_active: 1
+  });
+
+  if (!member) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'Creative partner not found.'
+    };
+  }
+
+  const onboardingSummary = await onboardingCtrl.syncCreatorRegistrationComplete(member);
+
+  if (Number(member.is_crew_verified) === 1) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'This creative partner is already approved.'
+    };
+  }
+
+  if (Number(onboardingSummary.is_registration_complete) === 1) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'This creative partner has already completed their profile.'
+    };
+  }
+
+  const toEmail = String(member.email || '').trim().toLowerCase();
+  if (!toEmail) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'Creative partner email is missing.'
+    };
+  }
+
+  const fullName = `${member.first_name || ''} ${member.last_name || ''}`.trim();
+  const frontendUrl = getFrontendBaseUrl();
+  const emailResult = await sendCreativePartnerProfileReminderEmail({
+    to_email: toEmail,
+    cp_name: fullName,
+    first_name: getFirstNameForEmail(fullName, toEmail),
+    dashboard_link: `${frontendUrl}/creator/dashboard/profile`
+  });
+
+  if (!emailResult?.success) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'Failed to send creative partner profile reminder email.',
+      error: emailResult?.error || 'Unknown email error'
+    };
+  }
+
+  return {
+    success: true,
+    crew_member_id: crewMemberId,
+    message: 'Profile reminder email sent successfully.',
+    to_email: toEmail,
+    message_id: emailResult.messageId || null,
+    onboarding_status: onboardingSummary
+  };
+};
+
+exports.bulkCreativePartnerAction = async (req, res) => {
+  try {
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    const crewMemberIds = normalizeBulkCrewMemberIds(req.body?.crew_member_ids);
+    const allowedActions = new Set(['approve', 'decline', 'send_reminder']);
+
+    if (!allowedActions.has(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid action. Use 'approve', 'decline', or 'send_reminder'.",
+        data: null
+      });
+    }
+
+    if (crewMemberIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one valid creative partner ID is required.',
+        data: null
+      });
+    }
+
+    if (crewMemberIds.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'A maximum of 100 creative partners can be processed at once.',
+        data: null
+      });
+    }
+
+    const results = [];
+
+    if (action === 'approve' || action === 'decline') {
+      const status = action === 'approve' ? 1 : 2;
+      const members = await crew_members.findAll({
+        where: {
+          crew_member_id: { [Op.in]: crewMemberIds }
+        },
+        attributes: ['crew_member_id', 'application_submitted_at']
+      });
+
+      const memberById = new Map(
+        members.map((member) => [Number(member.crew_member_id), member])
+      );
+      const validIds = [];
+
+      crewMemberIds.forEach((crewMemberId) => {
+        const member = memberById.get(crewMemberId);
+
+        if (!member) {
+          results.push({
+            crew_member_id: crewMemberId,
+            success: false,
+            message: 'Creative partner not found.'
+          });
+          return;
+        }
+
+        if (!member.application_submitted_at) {
+          results.push({
+            crew_member_id: crewMemberId,
+            success: false,
+            message: 'Creator application has not been submitted for approval review yet.'
+          });
+          return;
+        }
+
+        validIds.push(crewMemberId);
+      });
+
+      if (validIds.length > 0) {
+        await crew_members.update(
+          { is_crew_verified: status },
+          {
+            where: {
+              crew_member_id: { [Op.in]: validIds }
+            }
+          }
+        );
+
+        const sheetResults = await Promise.allSettled(
+          validIds.map(async (crewMemberId) => {
+            if (status === 1) {
+              await deleteSheetRow('Crew_data', crewMemberId);
+            } else {
+              await updateSheetRow('Crew_data', crewMemberId, { H: 'rejected' });
+            }
+            return crewMemberId;
+          })
+        );
+
+        sheetResults.forEach((sheetResult, index) => {
+          if (sheetResult.status === 'rejected') {
+            console.error(
+              `Google Sheets Sync Error for crew member ${validIds[index]}:`,
+              sheetResult.reason?.message || sheetResult.reason
+            );
+          }
+        });
+
+        validIds.forEach((crewMemberId) => {
+          results.push({
+            crew_member_id: crewMemberId,
+            success: true,
+            message: `Creative partner ${action === 'approve' ? 'approved' : 'declined'} successfully.`
+          });
+        });
+      }
+    } else {
+      // One browser request; limit outbound email concurrency inside the backend.
+      const concurrency = 10;
+
+      for (let index = 0; index < crewMemberIds.length; index += concurrency) {
+        const chunk = crewMemberIds.slice(index, index + concurrency);
+        const chunkResults = await Promise.all(
+          chunk.map(async (crewMemberId) => {
+            try {
+              return await sendProfileReminderForCrewMember(crewMemberId);
+            } catch (error) {
+              console.error(
+                `Bulk Creative Partner Reminder Error for ${crewMemberId}:`,
+                error?.message || error
+              );
+
+              return {
+                success: false,
+                crew_member_id: crewMemberId,
+                message: error?.message || 'Failed to send profile reminder.'
+              };
+            }
+          })
+        );
+
+        results.push(...chunkResults);
+      }
+    }
+
+    const successIds = results
+      .filter((result) => result.success)
+      .map((result) => Number(result.crew_member_id));
+    const failedResults = results.filter((result) => !result.success);
+    const failedIds = failedResults.map((result) => Number(result.crew_member_id));
+
+    const actionLabel =
+      action === 'approve'
+        ? 'approved'
+        : action === 'decline'
+          ? 'declined'
+          : 'sent profile reminders to';
+
+    const message = failedIds.length === 0
+      ? `Successfully ${actionLabel} ${successIds.length} creative partner${successIds.length === 1 ? '' : 's'}.`
+      : successIds.length > 0
+        ? `${successIds.length} creative partner${successIds.length === 1 ? '' : 's'} processed successfully and ${failedIds.length} failed.`
+        : `Failed to process the selected creative partner${failedIds.length === 1 ? '' : 's'}.`;
+
+    return res.status(200).json({
+      success: failedIds.length === 0,
+      partial_success: successIds.length > 0 && failedIds.length > 0,
+      message,
+      error: failedResults[0]?.message || undefined,
+      data: {
+        action,
+        success_ids: successIds,
+        failed_ids: failedIds,
+        success_count: successIds.length,
+        failed_count: failedIds.length,
+        results
+      }
+    });
+  } catch (error) {
+    console.error('Bulk Creative Partner Action Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message,
+      data: null
+    });
+  }
+};
+
 exports.verifyCrewMember = async (req, res) => {
   try {
     const { crew_member_id, status } = req.body;
@@ -16752,6 +17014,370 @@ exports.assignRoleToUser = async (req, res) => {
         process.env.NODE_ENV === 'development'
           ? error.message
           : undefined
+    });
+  }
+};
+
+const normalizeMultiUserAction = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[\s-]+/g, '_');
+
+const normalizeMultiUserIds = (value) => {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(new Set(
+    value
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0)
+  ));
+};
+
+const assignRoleToInternalUserInTransaction = async ({ user, role, transaction }) => {
+  const userId = Number(user.id);
+  const roleId = Number(role.user_type_id);
+
+  await db.user_roles.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId },
+      transaction
+    }
+  );
+
+  await db.user_roles.create({
+    user_id: userId,
+    role_id: roleId,
+    is_active: 1
+  }, {
+    transaction
+  });
+
+  await db.users.update(
+    {
+      user_type: roleId,
+      role: role.user_role,
+      permissions_version: Sequelize.literal('permissions_version + 1')
+    },
+    {
+      where: { id: userId },
+      transaction
+    }
+  );
+
+  const permissionsAssigned = await syncUserPermissionsFromRole(userId, roleId, transaction);
+
+  return {
+    user_id: userId,
+    role_id: roleId,
+    permissions_assigned: permissionsAssigned
+  };
+};
+
+const deactivateInternalUserInTransaction = async ({
+  user,
+  actor,
+  reason,
+  transaction,
+  sourceEndpoint
+}) => {
+  const userId = Number(user.id);
+
+  const role = await db.user_type.findOne({
+    where: { user_type_id: user.user_type },
+    attributes: ['user_type_id', 'user_role'],
+    raw: true,
+    transaction
+  });
+
+  // Keep the same deactivation behavior as the existing single-user delete API.
+  if (Number(user.user_type) === 3) {
+    const client = await clients.findOne({
+      where: {
+        user_id: userId,
+        is_active: 1
+      },
+      transaction
+    });
+
+    if (client) {
+      await client.update({ is_active: 0 }, { transaction });
+
+      const clientLeadRows = await db.client_leads.findAll({
+        where: { user_id: userId },
+        attributes: ['lead_id', 'booking_id'],
+        transaction
+      });
+
+      const unbookedLeadIdList = clientLeadRows
+        .filter((lead) => !lead.booking_id)
+        .map((lead) => lead.lead_id);
+
+      if (unbookedLeadIdList.length > 0) {
+        await db.client_leads.update(
+          { is_active: 0 },
+          {
+            where: {
+              lead_id: { [Op.in]: unbookedLeadIdList }
+            },
+            transaction
+          }
+        );
+
+        await db.client_lead_activities.update(
+          { is_active: 0 },
+          {
+            where: {
+              lead_id: { [Op.in]: unbookedLeadIdList }
+            },
+            transaction
+          }
+        );
+      }
+    }
+  } else if (Number(user.user_type) === 2 || Number(user.user_type) === 4) {
+    const crewMember = await crew_members.findOne({
+      where: {
+        user_id: userId,
+        is_active: 1
+      },
+      transaction
+    });
+
+    if (crewMember) {
+      await crewMember.update({ is_active: 0 }, { transaction });
+
+      await crew_member_files.update(
+        { is_active: 0 },
+        {
+          where: {
+            crew_member_id: crewMember.crew_member_id
+          },
+          transaction
+        }
+      );
+    }
+  }
+
+  await db.affiliates.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId },
+      transaction
+    }
+  );
+
+  await db.user_roles.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId },
+      transaction
+    }
+  );
+
+  await user.update(
+    {
+      is_active: 0,
+      permissions_version: Sequelize.literal('permissions_version + 1')
+    },
+    { transaction }
+  );
+
+  await writeInternalUserArchiveHistory({
+    user,
+    action: 'deleted',
+    reason: reason || 'Deleted from roles and permissions',
+    actor,
+    previousStatus: 'active',
+    newStatus: 'inactive',
+    metadata: {
+      source_endpoint: sourceEndpoint,
+      role_id: user.user_type,
+      role_name: role?.user_role || user.role || null
+    },
+    transaction
+  });
+
+  return {
+    user_id: userId,
+    status: 'deleted'
+  };
+};
+
+exports.multiUserAction = async (req, res) => {
+  const action = normalizeMultiUserAction(req.body?.action);
+  const requestedUserIds = req.body?.user_ids;
+  const userIds = normalizeMultiUserIds(requestedUserIds);
+  const reason = req.body?.reason || null;
+
+  if (!Array.isArray(requestedUserIds) || requestedUserIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'user_ids must be a non-empty array'
+    });
+  }
+
+  if (userIds.length !== requestedUserIds.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'user_ids must contain unique positive integer IDs only'
+    });
+  }
+
+  if (userIds.length > 100) {
+    return res.status(400).json({
+      success: false,
+      message: 'A maximum of 100 users can be updated in one request'
+    });
+  }
+
+  if (!['change_role', 'change_user_role', 'delete', 'delete_users'].includes(action)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Unsupported action. Use change_role or delete'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    const internalRoles = await db.user_type.findAll({
+      where: {
+        is_active: 1,
+        is_internal_member: 1
+      },
+      attributes: ['user_type_id'],
+      raw: true,
+      transaction
+    });
+
+    const internalRoleIds = internalRoles
+      .map((item) => Number(item.user_type_id))
+      .filter((item) => Number.isInteger(item) && item > 0);
+
+    const selectedUsers = await users.scope('all').findAll({
+      where: {
+        id: { [Op.in]: userIds },
+        is_active: 1,
+        user_type: { [Op.in]: internalRoleIds }
+      },
+      attributes: ['id', 'name', 'email', 'user_type', 'role', 'is_active'],
+      transaction
+    });
+
+    const selectedUserIdSet = new Set(selectedUsers.map((user) => Number(user.id)));
+    const unavailableUserIds = userIds.filter((userId) => !selectedUserIdSet.has(userId));
+
+    if (unavailableUserIds.length > 0) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'One or more users were not found, are inactive, or are not internal users',
+        data: {
+          unavailable_user_ids: unavailableUserIds
+        }
+      });
+    }
+
+    if (action === 'change_role' || action === 'change_user_role') {
+      const roleId = Number(req.body?.role_id);
+
+      if (!Number.isInteger(roleId) || roleId <= 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'Valid role_id is required for change_role action'
+        });
+      }
+
+      const role = await db.user_type.findOne({
+        where: {
+          user_type_id: roleId,
+          is_active: 1,
+          is_internal_member: 1
+        },
+        transaction
+      });
+
+      if (!role) {
+        await transaction.rollback();
+        return res.status(404).json({
+          success: false,
+          message: 'Internal role not found or inactive'
+        });
+      }
+
+      const results = [];
+
+      for (const user of selectedUsers) {
+        results.push(await assignRoleToInternalUserInTransaction({
+          user,
+          role,
+          transaction
+        }));
+      }
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        success: true,
+        message: `Role changed successfully for ${results.length} user${results.length === 1 ? '' : 's'}`,
+        data: {
+          action: 'change_role',
+          role_id: roleId,
+          role_name: role.user_role,
+          affected_count: results.length,
+          user_ids: results.map((item) => item.user_id),
+          results
+        }
+      });
+    }
+
+    const results = [];
+
+    for (const user of selectedUsers) {
+      results.push(await deactivateInternalUserInTransaction({
+        user,
+        actor,
+        reason,
+        transaction,
+        sourceEndpoint: 'POST /admin/users/multi-action'
+      }));
+    }
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: `${results.length} user${results.length === 1 ? '' : 's'} deleted successfully`,
+      data: {
+        action: 'delete',
+        affected_count: results.length,
+        user_ids: results.map((item) => item.user_id),
+        results
+      }
+    });
+  } catch (error) {
+    if (!transaction.finished) {
+      await transaction.rollback();
+    }
+
+    console.error('Multi User Action Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while performing multi-user action',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

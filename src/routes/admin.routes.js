@@ -151,6 +151,26 @@ const rolesPermissionsView = requireAnyPermission(['roles_permissions.view'], ro
 const rolesPermissionsCreate = requireAnyPermission(['roles_permissions.create'], rolesPermissionsOptions);
 const rolesPermissionsEdit = requireAnyPermission(['roles_permissions.edit'], rolesPermissionsOptions);
 const rolesPermissionsDelete = requireAnyPermission(['roles_permissions.delete'], rolesPermissionsOptions);
+
+const multiUserActionPermission = (req, res, next) => {
+  const action = String(req.body?.action || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  if (action === 'change_role' || action === 'change_user_role') {
+    return rolesPermissionsEdit(req, res, next);
+  }
+
+  if (action === 'delete' || action === 'delete_users') {
+    return rolesPermissionsDelete(req, res, next);
+  }
+
+  return res.status(400).json({
+    success: false,
+    message: 'Unsupported multi-user action. Use change_role or delete'
+  });
+};
 const adminUsersOrSalesRepresentativeView = requireAnyPermission([
   'admin_users_creative_partners.view',
   'admin_sales_representative_dashboard.view',
@@ -247,6 +267,7 @@ router.get('/get-crew-member-name', admin.getCrewMembersByName)
 router.get('/get-crew-count', admin.getCrewCount);
 router.get('/get-pending-cp', authMiddleware, salesRepSalesView, admin.getAllPendingCrewMembers);
 router.post('/crew-member/:crew_member_id/profile-reminder', authMiddleware, adminCreativePartnersEdit, admin.sendCreativePartnerProfileReminder);
+router.post('/creative-partners/bulk-action', authMiddleware, adminCreativePartnersEdit, admin.bulkCreativePartnerAction);
 router.get('/:bookingId/get-booking-summary', admin.getBookingSummaryById);
 
 // Dashboard statistics routes
@@ -307,6 +328,7 @@ router.post('/crew-member-assigned-projects', authMiddleware, adminSalesRepresen
 router.post('/roles/create', authMiddleware, rolesPermissionsCreate, admin.createRole);
 router.get('/roles', authMiddleware, rolesPermissionsView, admin.getRoles);
 router.post('/users/assign-role', authMiddleware, rolesPermissionsEdit, admin.assignRoleToUser);
+router.post('/users/multi-action', authMiddleware, multiUserActionPermission, admin.multiUserAction);
 router.put('/roles/update', authMiddleware, rolesPermissionsEdit, admin.updateRole);
 router.delete('/roles/delete/:role_id', authMiddleware, rolesPermissionsDelete, admin.deleteRole);
 router.get('/users/export', authMiddleware, adminUsersView, admin.exportUsersExcel);
