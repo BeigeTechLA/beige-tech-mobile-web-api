@@ -147,6 +147,8 @@ exports.getLoginHistory = async (req, res) => {
             user_type_id: user.user_type
           } : null,
           ip_address: row.ip_address,
+          city: row.city,
+          country: row.country,
           login_method: row.login_method,
           user_agent: row.user_agent,
           logged_in_at: row.logged_in_at
