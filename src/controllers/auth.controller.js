@@ -2198,14 +2198,24 @@ exports.verifyPasswordExpiryOtp = async (req, res) => {
 
 exports.changeExpiredPassword = async (req, res) => {
   try {
-    const { newPassword, confirmPassword } = req.body || {};
+    const { currentPassword, newPassword, confirmPassword } = req.body || {};
     const user = await getPasswordExpiryUser(req);
     const verifiedAt = user?.password_expiry_otp_verified_at ? new Date(user.password_expiry_otp_verified_at).getTime() : 0;
     if (!user || !verifiedAt || Date.now() - verifiedAt > 10 * 60 * 1000) {
       return res.status(403).json({ success: false, message: 'Verify your email before changing your password.' });
     }
-    if (!newPassword || newPassword !== confirmPassword || String(newPassword).length < 8) {
+    if (typeof currentPassword !== 'string' || !currentPassword) {
+      return res.status(400).json({ success: false, message: 'Enter your current password.' });
+    }
+    if (typeof newPassword !== 'string' || typeof confirmPassword !== 'string' || newPassword !== confirmPassword || newPassword.length < 8) {
       return res.status(400).json({ success: false, message: 'Passwords must match and be at least 8 characters long.' });
+    }
+    if (!user.password_hash || !await bcrypt.compare(currentPassword, user.password_hash)) {
+      return res.status(400).json({ success: false, message: 'Your current password is incorrect.' });
+    }
+    // Compare against the stored hash, not just the supplied current-password text.
+    if (await bcrypt.compare(newPassword, user.password_hash)) {
+      return res.status(400).json({ success: false, message: 'Your new password must be different from your current password.' });
     }
     await user.update({
       password_hash: await bcrypt.hash(newPassword, 10),
