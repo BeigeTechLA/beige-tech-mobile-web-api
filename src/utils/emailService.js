@@ -400,6 +400,16 @@ const renderEmailTemplate = (templateName, values = {}) => {
   const templatePath = path.join(__dirname, '..', 'emailTemplates', 'NewTemplates', templateName);
   let html = fs.readFileSync(templatePath, 'utf8');
 
+  // Reuse the file-share OTP design for other verification purposes while
+  // retaining the original copy for callers that do not supply an override.
+  if (templateName === 'OTPVerificationFileShare.html') {
+    values = {
+      verification_message: 'To securely access the files shared with you on Beige, please verify your email address using the OTP below',
+      unsolicited_message: "If you didn't request this access, you can safely ignore this email.",
+      ...values
+    };
+  }
+
   Object.entries(values).forEach(([key, value]) => {
     html = html.replace(new RegExp(`{{\\s*${key}\\s*}}`, 'g'), escapeHtml(value));
   });
@@ -868,6 +878,21 @@ const sendVerificationOTP = async (userData, otp) => {
     return { success: false, error: error.message };
   }
 };
+
+// Render the shared branded HTML locally so password-specific wording does not
+// depend on updating the hosted SendGrid file-share template.
+const sendPasswordExpiryOTP = async (userData, otp) => sendRenderedTemplateEmail({
+  to: userData?.email,
+  subject: 'Your Beige password change code',
+  templateName: 'OTPVerificationFileShare.html',
+  values: {
+    otp,
+    expiry_minutes: 10,
+    verification_message: 'To securely change your Beige password, please verify your email address using the OTP below.',
+    unsolicited_message: "If you didn't request a password change, do not share this code. Please contact your administrator if you suspect someone is using your account."
+  },
+  text: `Your Beige password change code is ${otp}. It expires in 10 minutes. Never share this code with anyone. If you did not request a password change, please contact your administrator if you suspect someone is using your account.`
+});
 
 /**
  * Send file share access OTP
@@ -4461,6 +4486,7 @@ module.exports = {
   formatShootTypes,
   sendTaskAssignmentEmail,
   sendVerificationOTP,
+  sendPasswordExpiryOTP,
   sendFileShareVerificationOTP,
   sendPasswordResetEmail,
   // sendPaymentLinkEmail,

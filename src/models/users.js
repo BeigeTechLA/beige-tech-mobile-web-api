@@ -30,6 +30,11 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    password_changed_at: { type: DataTypes.DATE, allowNull: true },
+    password_expiry_otp_hash: { type: DataTypes.STRING(255), allowNull: true },
+    password_expiry_otp_expires_at: { type: DataTypes.DATE, allowNull: true },
+    password_expiry_otp_verified_at: { type: DataTypes.DATE, allowNull: true },
+    password_expiry_otp_attempts: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     google_sub: {
       type: DataTypes.STRING(255),
       allowNull: true,
