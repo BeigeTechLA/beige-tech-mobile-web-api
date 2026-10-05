@@ -1,6 +1,13 @@
 const jwt = require('jsonwebtoken');
 const config = require('../config/config');
 const db = require('../models');
+const passwordExpiryService = require('../services/internal-password-expiry.service');
+
+const passwordExpiryExemptPaths = new Set([
+  '/auth/password-expiry/request-otp',
+  '/auth/password-expiry/verify-otp',
+  '/auth/password-expiry/change'
+]);
 
 const validatePermissionVersion = async (decoded) => {
   const user = await db.users.findOne({
@@ -10,7 +17,9 @@ const validatePermissionVersion = async (decoded) => {
     attributes: [
       'id',
       'user_type',
-      'permissions_version'
+      'permissions_version',
+      'password_changed_at',
+      'created_at'
     ],
     include: [
       {
@@ -78,6 +87,24 @@ const authMiddleware = async (req, res, next) => {
       userRole: decoded.userRole,
       isInternalMember: Number(user.userType?.is_internal_member || 0) === 1
     };
+
+    const requestPath = String(req.originalUrl || req.path || '').split('?')[0];
+    const isExpiryExempt = [...passwordExpiryExemptPaths].some((path) => requestPath.endsWith(path));
+    if (!isExpiryExempt) {
+      const passwordStatus = await passwordExpiryService.getExpiryStatus(
+        user,
+        req.user.isInternalMember
+      );
+      if (passwordStatus.expired) {
+        return res.status(403).json({
+          success: false,
+          code: 'PASSWORD_EXPIRED',
+          password_expired: true,
+          expires_at: passwordStatus.expires_at,
+          message: 'Your password has expired. Verify your email and set a new password to continue.'
+        });
+      }
+    }
 
     next();
   } catch (error) {

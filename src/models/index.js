@@ -12,6 +12,7 @@ const signupCreditPromoHistoryFactory = require('./signup_credit_promo_history')
 const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
 const assignmentHistoryFactory = require('./assignment_history');
+const internalPasswordExpirySettingsFactory = require('./internal_password_expiry_settings');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -25,6 +26,7 @@ models.signup_credit_promo_history = signupCreditPromoHistoryFactory(sequelize, 
 models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
+models.internal_password_expiry_settings = internalPasswordExpirySettingsFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {

@@ -179,6 +179,8 @@ router.use('/sales-reps', salesRepDetailRoutes);
 router.get('/profile/:id', authMiddleware, admin.getAdminProfile);
 router.put('/profile/:id', authMiddleware, admin.updateAdminProfile);
 router.post('/profile/change-password', authMiddleware, admin.changeAdminProfilePassword);
+router.get('/settings/internal-password-expiry', authMiddleware, admin.getInternalPasswordExpirySettings);
+router.patch('/settings/internal-password-expiry', authMiddleware, admin.updateInternalPasswordExpirySettings);
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);
 router.post('/assignMatchCrew', admin.assignCrew);

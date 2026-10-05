@@ -52,6 +52,7 @@ const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-
 const userExportService = require('../services/user-export.service');
 const detailsPendingCpService = require('../services/details-pending-cp.service');
 const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
+const passwordExpiryService = require('../services/internal-password-expiry.service');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -134,7 +135,7 @@ const getAuthAdminUser = async (req) => {
       id: userId,
       is_active: 1
     },
-    attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role'],
+    attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role', 'permissions_version'],
     include: [
       {
         model: db.user_type,
@@ -151,7 +152,7 @@ const findAdminProfileById = async (id) => users.findOne({
     id,
     is_active: 1
   },
-  attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role'],
+  attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role', 'permissions_version'],
   include: [
     {
       model: db.user_type,
@@ -361,12 +362,15 @@ exports.changeAdminProfilePassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await authUser.update({
       password_hash: hashedPassword,
+      password_changed_at: new Date(),
+      permissions_version: Number(authUser.permissions_version || 1) + 1,
       updated_at: new Date()
     });
 
     return res.status(200).json({
       success: true,
-      message: 'Password changed successfully'
+      force_logout: true,
+      message: 'Password changed successfully. Please sign in again.'
     });
   } catch (error) {
     console.error('Change Admin Profile Password Error:', error);
@@ -375,6 +379,33 @@ exports.changeAdminProfilePassword = async (req, res) => {
       message: 'Server error while changing password',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+exports.getInternalPasswordExpirySettings = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+    if (!isAdminProfileRole(authUser.userType?.user_role || authUser.role)) {
+      return res.status(403).json({ success: false, message: 'Only platform administrators can manage password expiry settings.' });
+    }
+    return res.json({ success: true, data: await passwordExpiryService.getPublicSettings() });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Unable to load password expiry settings.' });
+  }
+};
+
+exports.updateInternalPasswordExpirySettings = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+    if (!isAdminProfileRole(authUser.userType?.user_role || authUser.role)) {
+      return res.status(403).json({ success: false, message: 'Only platform administrators can manage password expiry settings.' });
+    }
+    const data = await passwordExpiryService.updateSettings(req.body || {}, authUser.id);
+    return res.json({ success: true, message: 'Password expiry settings updated successfully.', data });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Unable to update password expiry settings.' });
   }
 };
 

@@ -31,6 +31,7 @@ const {
   syncCreatorRegistrationComplete,
 } = require('../utils/creatorOnboarding');
 const accountCreditService = require('../services/account-credit.service');
+const passwordExpiryService = require('../services/internal-password-expiry.service');
 
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(getGoogleClientId());
@@ -1862,7 +1863,8 @@ exports.googleLogin = async (req, res) => {
  */
 exports.changePassword = async (req, res) => {
   try {
-    const { oldPassword, newPassword, confirmPassword, userId } = req.body;
+    const { oldPassword, newPassword, confirmPassword } = req.body;
+    const userId = req.user?.userId;
 
     if (!userId || !oldPassword || !newPassword || !confirmPassword) {
       return res.status(400).json({
@@ -1898,13 +1900,19 @@ exports.changePassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
     await User.update(
-      { password_hash: hashedPassword },
+      {
+        password_hash: hashedPassword,
+        password_changed_at: new Date(),
+        permissions_version: Number(user.permissions_version || 1) + 1,
+        updated_at: new Date()
+      },
       { where: { id: user.id } }
     );
 
     return res.json({
       success: true,
-      message: 'Password changed successfully'
+      force_logout: true,
+      message: 'Password changed successfully. Please sign in again.'
     });
 
   } catch (error) {
@@ -2023,15 +2031,19 @@ exports.resetPassword = async (req, res) => {
     await User.update(
       {
         password_hash: hashedPassword,
+        password_changed_at: new Date(),
         reset_token: null,
-        reset_token_expiry: null
+        reset_token_expiry: null,
+        permissions_version: Number(user.permissions_version || 1) + 1,
+        updated_at: new Date()
       },
       { where: { id: user.id } }
     );
 
     return res.json({
       success: true,
-      message: 'Password has been reset successfully'
+      force_logout: true,
+      message: 'Password has been reset successfully. Please sign in again.'
     });
 
   } catch (error) {
@@ -2041,6 +2053,95 @@ exports.resetPassword = async (req, res) => {
       message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+const getPasswordExpiryUser = async (req) => User.findOne({
+  where: { id: req.user?.userId },
+  include: [{ model: UserType, as: 'userType', attributes: ['is_internal_member'] }]
+});
+
+exports.requestPasswordExpiryOtp = async (req, res) => {
+  try {
+    const user = await getPasswordExpiryUser(req);
+    const isInternal = Number(user?.userType?.is_internal_member || 0) === 1;
+    const status = user ? await passwordExpiryService.getExpiryStatus(user, isInternal) : null;
+    if (!user || !status?.expired) {
+      return res.status(403).json({ success: false, message: 'Password expiry verification is not available for this account.' });
+    }
+    const previousExpiry = user.password_expiry_otp_expires_at
+      ? new Date(user.password_expiry_otp_expires_at).getTime()
+      : 0;
+    if (previousExpiry > Date.now() + 9 * 60 * 1000) {
+      return res.status(429).json({ success: false, message: 'Please wait one minute before requesting another verification code.' });
+    }
+
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const emailResult = await emailService.sendPasswordExpiryOTP({ name: user.name, email: user.email }, otp);
+    if (!emailResult.success) {
+      return res.status(503).json({ success: false, message: 'We could not send a verification code. Please try again later.' });
+    }
+    await user.update({
+      password_expiry_otp_hash: await bcrypt.hash(otp, 10),
+      password_expiry_otp_expires_at: new Date(Date.now() + 10 * 60 * 1000),
+      password_expiry_otp_verified_at: null,
+      password_expiry_otp_attempts: 0
+    });
+    return res.json({ success: true, message: 'A verification code has been sent to your registered email.' });
+  } catch (error) {
+    console.error('Request password expiry OTP error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to request verification code.' });
+  }
+};
+
+exports.verifyPasswordExpiryOtp = async (req, res) => {
+  try {
+    const otp = String(req.body?.otp || '').trim();
+    const user = await getPasswordExpiryUser(req);
+    if (!user || !/^\d{6}$/.test(otp) || !user.password_expiry_otp_hash || !user.password_expiry_otp_expires_at) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+    }
+    if (new Date(user.password_expiry_otp_expires_at).getTime() < Date.now() || Number(user.password_expiry_otp_attempts) >= 5) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+    }
+    const valid = await bcrypt.compare(otp, user.password_expiry_otp_hash);
+    if (!valid) {
+      await user.update({ password_expiry_otp_attempts: Number(user.password_expiry_otp_attempts) + 1 });
+      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+    }
+    await user.update({ password_expiry_otp_verified_at: new Date() });
+    return res.json({ success: true, message: 'Email verified. You can now set a new password.' });
+  } catch (error) {
+    console.error('Verify password expiry OTP error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to verify code.' });
+  }
+};
+
+exports.changeExpiredPassword = async (req, res) => {
+  try {
+    const { newPassword, confirmPassword } = req.body || {};
+    const user = await getPasswordExpiryUser(req);
+    const verifiedAt = user?.password_expiry_otp_verified_at ? new Date(user.password_expiry_otp_verified_at).getTime() : 0;
+    if (!user || !verifiedAt || Date.now() - verifiedAt > 10 * 60 * 1000) {
+      return res.status(403).json({ success: false, message: 'Verify your email before changing your password.' });
+    }
+    if (!newPassword || newPassword !== confirmPassword || String(newPassword).length < 8) {
+      return res.status(400).json({ success: false, message: 'Passwords must match and be at least 8 characters long.' });
+    }
+    await user.update({
+      password_hash: await bcrypt.hash(newPassword, 10),
+      password_changed_at: new Date(),
+      password_expiry_otp_hash: null,
+      password_expiry_otp_expires_at: null,
+      password_expiry_otp_verified_at: null,
+      password_expiry_otp_attempts: 0,
+      permissions_version: Number(user.permissions_version || 1) + 1,
+      updated_at: new Date()
+    });
+    return res.json({ success: true, force_logout: true, message: 'Password changed. Please sign in again on this device.' });
+  } catch (error) {
+    console.error('Change expired password error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to change password.' });
   }
 };
 
@@ -3338,12 +3439,16 @@ exports.changePasswordclient = async (req, res) => {
     // Update the user's password in the database
     user.password_hash = hashedNewPassword;
     user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
+    user.password_changed_at = new Date();
+    user.permissions_version = Number(user.permissions_version || 1) + 1;
+    user.updated_at = new Date();
     await user.save();
 
     return res.status(200).json({
       success: true,
       message: hadPassword ? 'Password updated successfully' : 'Password set successfully',
-      has_password: true
+      has_password: true,
+      force_logout: true
     });
 
   } catch (error) {
@@ -3409,12 +3514,16 @@ exports.changePasswordCrewMember = async (req, res) => {
 
     user.password_hash = hashedNewPassword;
     user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
+    user.password_changed_at = new Date();
+    user.permissions_version = Number(user.permissions_version || 1) + 1;
+    user.updated_at = new Date();
     await user.save();
 
     return res.status(200).json({
       success: true,
       message: hadPassword ? 'Password changed successfully' : 'Password set successfully',
-      has_password: true
+      has_password: true,
+      force_logout: true
     });
 
   } catch (error) {

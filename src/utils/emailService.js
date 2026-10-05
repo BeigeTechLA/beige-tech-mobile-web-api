@@ -863,6 +863,26 @@ const sendVerificationOTP = async (userData, otp) => {
   }
 };
 
+const sendPasswordExpiryOTP = async (userData, otp) => {
+  try {
+    if (!userData?.email) return { success: false, error: 'Recipient email is required' };
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+      return { success: false, error: 'Email provider is not configured' };
+    }
+    const info = await transporter.sendMail({
+      from: `"${process.env.EMAIL_FROM_NAME || 'Beige AI'}" <${process.env.EMAIL_USER}>`,
+      to: userData.email,
+      subject: 'Your Beige password change code',
+      text: `Your password change code is ${otp}. It expires in 10 minutes. Do not share this code.`,
+      html: `<p>Hello ${userData.name || 'there'},</p><p>Your password change code is <strong>${otp}</strong>.</p><p>This code expires in 10 minutes. Do not share it with anyone.</p>`
+    });
+    return { success: true, messageId: info?.messageId || null };
+  } catch (error) {
+    console.error('Error sending password expiry OTP:', error.message);
+    return { success: false, error: error.message };
+  }
+};
+
 /**
  * Send file share access OTP
  * @param {Object} userData - Recipient details
@@ -4243,6 +4263,7 @@ module.exports = {
   formatShootTypes,
   sendTaskAssignmentEmail,
   sendVerificationOTP,
+  sendPasswordExpiryOTP,
   sendFileShareVerificationOTP,
   sendPasswordResetEmail,
   // sendPaymentLinkEmail,
