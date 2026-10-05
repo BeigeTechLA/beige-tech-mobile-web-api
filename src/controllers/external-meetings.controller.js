@@ -870,7 +870,45 @@ const getUserRecordById = async (userId) => {
   });
 };
 
-const getCrewRecordById = async (identifier, idType = 'legacy') => {
+const writeMeetingShootHistory = async ({ req, meeting, action, reason }) => {
+  try {
+    const actorId = getRequestUserId(req);
+    if (!actorId) return;
+
+    const actor = await getUserRecordById(actorId);
+    const plainMeeting = typeof meeting?.get === 'function' ? meeting.get({ plain: true }) : meeting;
+
+    await db.user_archive_history.create({
+      target_type: 'shoot',
+      target_id: plainMeeting.booking_id,
+      user_id: null,
+      action,
+      reason,
+      performed_by_user_id: actorId,
+      performed_by_name: actor?.name || actor?.email || `User ${actorId}`,
+      performed_by_role: req.user?.userRole || null,
+      metadata: {
+        meeting_id: plainMeeting.meeting_id,
+        meeting_title: plainMeeting.meeting_title || null,
+        meeting_type: plainMeeting.meeting_type || null,
+        meeting_date_time: plainMeeting.meeting_date_time || null,
+        meeting_end_time: plainMeeting.meeting_end_time || null,
+        meeting_timezone: plainMeeting.meeting_timezone || null,
+      },
+    });
+  } catch (error) {
+    console.error('[ShootHistory] meeting history write failed:', error?.message || error);
+  }
+};  
+
+const getCrewRecordById = async (crewMemberId) => {
+  const normalizedCrewId = toPositiveInt(crewMemberId);
+  if (!normalizedCrewId) return null;
+
+  // CPs are now exposed to the web app by their users.id. Keep accepting the
+  // old crew_member_id as a fallback so existing clients and saved payloads
+  // continue to work. Prefer user_id because the two numeric ID spaces can
+  // contain the same value for different people.
   const attributes = ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'];
 
   const numericId = toPositiveInt(identifier);
@@ -1443,6 +1481,12 @@ exports.createMeeting = async (req, res) => {
       participants_json: serializeMeetingState(participants),
       send_notification: req.body.send_notification === false ? 0 : 1,
     });
+    await writeMeetingShootHistory({
+      req,
+      meeting: createdMeeting,
+      action: 'meeting_created',
+      reason: 'Meeting scheduled',
+    });
 
     const meetingWithCreator = await db.project_meetings.findByPk(createdMeeting.meeting_id, {
       include: [
@@ -1655,6 +1699,12 @@ exports.updateMeeting = async (req, res) => {
 exports.deleteMeeting = async (req, res) => {
   try {
     const { meeting, booking, state } = await getMeetingByIdInternal(req.params.meetingId);
+     await writeMeetingShootHistory({
+      req,
+      meeting,
+      action: 'meeting_deleted',
+      reason: 'Meeting deleted',
+    });
     await sendMeetingPushNotifications({
       meeting: {
         ...meeting.get({ plain: true }),

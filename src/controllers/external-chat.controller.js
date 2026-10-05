@@ -1529,6 +1529,34 @@ const resolveClientParticipant = async (participant) => {
   };
 };
 
+const writeChatRoomShootHistory = async ({ req, bookingId, roomId, roomName, participantCount }) => {
+  try {
+    const actorId = req.user?.userId || null;
+    const normalizedBookingId = Number(parseBookingIdValue(bookingId));
+    if (!actorId || !normalizedBookingId) return;
+
+    const actor = await getPlatformUserById(actorId);
+
+    await db.user_archive_history.create({
+      target_type: 'shoot',
+      target_id: normalizedBookingId,
+      user_id: null,
+      action: 'chat_room_created',
+      reason: 'Chat room created',
+      performed_by_user_id: actorId,
+      performed_by_name: actor?.name || actor?.email || `User ${actorId}`,
+      performed_by_role: req.user?.userRole || null,
+      metadata: {
+        chat_room_id: roomId || null,
+        chat_room_name: roomName || null,
+        participant_count: participantCount ?? null,
+      },
+    });
+  } catch (error) {
+    console.error('[ShootHistory] chat room history write failed:', error?.message || error);
+  }
+};
+
 const buildParticipants = ({ salesRep = null, selectedCps = [] }) => {
   const participants = [];
   const seen = new Set();
@@ -1756,6 +1784,15 @@ exports.createChatRoom = async (req, res) => {
 
     const decoratedRoom = createdRoomPayload ? await decorateChatRoom(createdRoomPayload) : createdRoomPayload;
     if (result?.created !== false && createdRoomPayload) {
+      if (bookingId) {
+        await writeChatRoomShootHistory({
+          req,
+          bookingId,
+          roomId: extractChatRoomId(createdRoomPayload),
+          roomName: decoratedRoom?.display_name || decoratedRoom?.name || null,
+          participantCount: mergedParticipants.length,
+        });
+      }
       await sendChatNotificationTemplate({
         roomId: extractChatRoomId(createdRoomPayload),
         sender: adminUser || {

@@ -52,6 +52,8 @@ const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-
 const userExportService = require('../services/user-export.service');
 const detailsPendingCpService = require('../services/details-pending-cp.service');
 const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
+const passwordExpiryService = require('../services/internal-password-expiry.service');
+const { ipType, deviceDetails, sessionDetails } = require('../utils/login-session-details');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -62,6 +64,128 @@ const getFrontendBaseUrl = () =>
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
+
+// Roles & Permissions viewers: successful internal sign-ins with account and location details.
+exports.getLoginHistory = async (req, res) => {
+  try {
+    let { page = 1, limit = 20, user_id, ip_address, login_method, search, status = 'all' } = req.query;
+    if (!['all', 'active'].includes(status)) return res.status(400).json({ success: false, message: 'Status must be active or all.' });
+    page = Math.max(parseInt(page, 10) || 1, 1);
+    limit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+
+    const where = {};
+    const internalUserTypes = await db.user_type.findAll({
+      where: { is_internal_member: 1 },
+      attributes: ['user_type_id'],
+      raw: true
+    });
+    const internalUserTypeIds = internalUserTypes.map((type) => type.user_type_id);
+    const internalUsers = internalUserTypeIds.length
+      ? await users.scope('all').findAll({
+          where: { user_type: { [Op.in]: internalUserTypeIds } },
+          attributes: ['id'],
+          raw: true
+        })
+      : [];
+    const internalUserIds = internalUsers.map((user) => user.id);
+
+    // Keep the audit endpoint restricted to the same internal users it records.
+    where[Op.and] = [{ user_id: { [Op.in]: internalUserIds } }];
+    if (Number.isInteger(Number(user_id)) && Number(user_id) > 0) where.user_id = Number(user_id);
+    if (ip_address) where.ip_address = String(ip_address).trim();
+    if (login_method) where.login_method = String(login_method).trim().toLowerCase();
+
+    if (search && !where.user_id) {
+      const searchValue = String(search).trim();
+      if (searchValue) {
+        const matchingUsers = await users.scope('all').findAll({
+          where: {
+            [Op.or]: [
+              { name: { [Op.like]: `%${searchValue}%` } },
+              { email: { [Op.like]: `%${searchValue}%` } }
+            ]
+          },
+          attributes: ['id'],
+          raw: true
+        });
+        const matchingUserIds = matchingUsers.map((user) => user.id);
+        where[Op.or] = [
+          { ip_address: { [Op.like]: `%${searchValue}%` } },
+          ...(matchingUserIds.length ? [{ user_id: { [Op.in]: matchingUserIds } }] : [])
+        ];
+      }
+    }
+
+    const now = new Date();
+    const include = [];
+    if (status === 'active') {
+      where.session_id = { [Op.ne]: null };
+      where.logged_out_at = null;
+      where.expires_at = { [Op.gt]: now };
+      include.push({ model: users.scope('all'), as: 'sessionUser', attributes: [], required: true,
+        where: { is_active: 1, permissions_version: { [Op.col]: 'user_login_history.session_version' } }
+      });
+    }
+    const { count, rows } = await db.user_login_history.findAndCountAll({
+      where,
+      include,
+      limit,
+      offset: (page - 1) * limit,
+      order: [['logged_in_at', 'DESC'], ['login_history_id', 'DESC']],
+      raw: true
+    });
+
+    const userIds = [...new Set(rows.map((row) => row.user_id))];
+    const auditUsers = userIds.length
+      ? await users.scope('all').findAll({
+          where: { id: { [Op.in]: userIds } },
+          attributes: ['id', 'name', 'email', 'phone_number', 'role', 'user_type', 'is_active', 'permissions_version'],
+          include: [{ model: db.user_type, as: 'userType', attributes: ['user_role'], required: false }]
+        })
+      : [];
+    const userMap = new Map(auditUsers.map((user) => [user.id, user]));
+
+    return res.status(200).json({
+      success: true,
+      data: rows.map((row) => {
+        const user = userMap.get(row.user_id);
+        return {
+          login_history_id: row.login_history_id,
+          user_id: row.user_id,
+          user: user ? {
+            name: user.name,
+            email: user.email,
+            phone_number: user.phone_number,
+            role: user.userType?.user_role || user.role || null,
+            user_type_id: user.user_type
+          } : null,
+          ip_address: row.ip_address,
+          city: row.city,
+          country: row.country,
+          login_method: row.login_method,
+          user_agent: row.user_agent,
+          logged_in_at: row.logged_in_at,
+          ...deviceDetails(row.user_agent),
+          ip_type: ipType(row.ip_address),
+          ...sessionDetails(row, user, now),
+          is_current_session: Boolean(row.session_id && row.session_id === req.user?.sessionId),
+          last_seen_at: row.last_seen_at,
+          expires_at: row.expires_at,
+          logged_out_at: row.logged_out_at
+        };
+      }),
+      pagination: {
+        page,
+        limit,
+        total: count,
+        total_pages: Math.ceil(count / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get login history error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to fetch login history' });
+  }
+};
 const POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES = [
   'Post Production Manager',
   'Producer',
@@ -134,7 +258,7 @@ const getAuthAdminUser = async (req) => {
       id: userId,
       is_active: 1
     },
-    attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role'],
+    attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role', 'permissions_version'],
     include: [
       {
         model: db.user_type,
@@ -151,7 +275,7 @@ const findAdminProfileById = async (id) => users.findOne({
     id,
     is_active: 1
   },
-  attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role'],
+  attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role', 'permissions_version'],
   include: [
     {
       model: db.user_type,
@@ -361,12 +485,15 @@ exports.changeAdminProfilePassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await authUser.update({
       password_hash: hashedPassword,
+      password_changed_at: new Date(),
+      permissions_version: Number(authUser.permissions_version || 1) + 1,
       updated_at: new Date()
     });
 
     return res.status(200).json({
       success: true,
-      message: 'Password changed successfully'
+      force_logout: true,
+      message: 'Password changed successfully. Please sign in again.'
     });
   } catch (error) {
     console.error('Change Admin Profile Password Error:', error);
@@ -375,6 +502,33 @@ exports.changeAdminProfilePassword = async (req, res) => {
       message: 'Server error while changing password',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+exports.getInternalPasswordExpirySettings = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+    if (!isAdminProfileRole(authUser.userType?.user_role || authUser.role)) {
+      return res.status(403).json({ success: false, message: 'Only platform administrators can manage password expiry settings.' });
+    }
+    return res.json({ success: true, data: await passwordExpiryService.getPublicSettings() });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Unable to load password expiry settings.' });
+  }
+};
+
+exports.updateInternalPasswordExpirySettings = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+    if (!isAdminProfileRole(authUser.userType?.user_role || authUser.role)) {
+      return res.status(403).json({ success: false, message: 'Only platform administrators can manage password expiry settings.' });
+    }
+    const data = await passwordExpiryService.updateSettings(req.body || {}, authUser.id);
+    return res.json({ success: true, message: 'Password expiry settings updated successfully.', data });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Unable to update password expiry settings.' });
   }
 };
 
@@ -4779,10 +4933,150 @@ exports.getAllProjectDetails = async (req, res) => {
   }
 };
 
-// Board/Kanban view - no pagination, saare matching records ek j call ma
+// Board/Kanban view 
+const SHOOT_BOARD_STATUSES = [
+  'Initiated',
+  'PreProduction',
+  'Shoot Day',
+  'PostProduction',
+  'Revision',
+  'Completed',
+  'Assets Delivered',
+  'Cancelled'
+];
+
+const SHOOT_BOARD_STAGE_LABELS = {
+  0: 'Initiated',
+  1: 'PreProduction',
+  2: 'Shoot Day',
+  3: 'PostProduction',
+  4: 'Revision',
+  5: 'Completed',
+  6: 'Assets Delivered',
+  7: 'Cancelled'
+};
+
+const SHOOT_BOARD_DEFAULT_LIMIT = 10;
+
+const normalizeShootBoardStatusLabel = (value) => {
+  const key = String(value || '').toLowerCase().replace(/[\s_-]+/g, '');
+  if (!key) return null;
+  return SHOOT_BOARD_STATUSES.find(
+    (label) => label.toLowerCase().replace(/[\s_-]+/g, '') === key
+  ) || null;
+};
+
+// Runs getAllProjectDetails in-process and returns its JSON payload (same idea as invokeGetLeadsSnapshot).
+const invokeProjectsBoardSnapshot = (baseReq, queryOverrides = {}) => new Promise((resolve, reject) => {
+  const reqLike = Object.create(baseReq);
+  Object.defineProperty(reqLike, 'query', {
+    value: { ...baseReq.query, ...queryOverrides },
+    writable: true,
+    enumerable: true,
+    configurable: true
+  });
+
+  const resLike = {
+    status: (statusCode) => ({
+      json: (payload) => (
+        statusCode >= 400
+          ? reject(new Error(payload?.message || `getAllProjectDetails failed with status ${statusCode}`))
+          : resolve(payload)
+      )
+    }),
+    json: (payload) => resolve(payload)
+  };
+
+  Promise.resolve(exports.getAllProjectDetails(reqLike, resLike)).catch(reject);
+});
+
+/**
+ * Board/Kanban view with per-column lazy loading.
+ * Query: all normal shoot filters + optional
+ *   column_status = Initiated | PreProduction | Shoot Day | ... (load only that column)
+ *   board_page    = page number for the column(s) (default 1)
+ *   board_limit   = cards per column page (default 10, max 100)
+ */
 exports.getAllProjectDetailsBoard = async (req, res) => {
-  req.query = { ...req.query, board_view: 'true', limit: undefined, page: undefined };
-  return exports.getAllProjectDetails(req, res);
+  try {
+    const rawLimit = Number.parseInt(String(req.query.board_limit || SHOOT_BOARD_DEFAULT_LIMIT), 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : SHOOT_BOARD_DEFAULT_LIMIT;
+    const rawPage = Number.parseInt(String(req.query.board_page || 1), 10);
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+    const requestedColumn = req.query.column_status
+      ? normalizeShootBoardStatusLabel(req.query.column_status)
+      : null;
+
+    const snapshot = await invokeProjectsBoardSnapshot(req, {
+      board_view: 'true',
+      limit: undefined,
+      page: undefined,
+      summary_only: undefined,
+      column_status: undefined,
+      board_page: undefined,
+      board_limit: undefined
+    });
+
+    const payload = snapshot?.data || {};
+    const allEntries = Array.isArray(payload.projects) ? payload.projects : [];
+
+    const grouped = new Map(SHOOT_BOARD_STATUSES.map((label) => [label, []]));
+    allEntries.forEach((entry) => {
+      const project = entry?.project || entry || {};
+      const label =
+        SHOOT_BOARD_STAGE_LABELS[Number(project.timeline_status)] ||
+        normalizeShootBoardStatusLabel(project.timeline_label) ||
+        normalizeShootBoardStatusLabel(project.timeline_status);
+
+      if (label && grouped.has(label)) {
+        grouped.get(label).push(entry);
+      }
+    });
+
+    const statuses = requestedColumn ? [requestedColumn] : SHOOT_BOARD_STATUSES;
+    const columns = {};
+
+    statuses.forEach((label) => {
+      const fullColumn = grouped.get(label) || [];
+      const total = fullColumn.length;
+      const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+      const offset = (page - 1) * limit;
+
+      columns[label] = {
+        status: label,
+        projects: fullColumn.slice(offset, offset + limit),
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasMore: page < totalPages
+        }
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Shoot board retrieved successfully',
+      data: {
+        stats: payload.stats || null,
+        columns,
+        statuses,
+        pagination: {
+          totalRecords: allEntries.length,
+          page,
+          limit
+        }
+      }
+    });
+  } catch (error) {
+    console.error('getAllProjectDetailsBoard Error:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Failed to fetch shoots board',
+      details: error.message
+    });
+  }
 };
 
 // ==================== GLOBAL SHOOTS API ====================
@@ -7528,6 +7822,268 @@ exports.exportCrewMembersCsv = async (req, res) => {
         'development'
           ? error.message
           : undefined
+    });
+  }
+};
+
+const normalizeBulkCrewMemberIds = (value) => {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(
+    new Set(
+      value
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  );
+};
+
+const sendProfileReminderForCrewMember = async (crewMemberId) => {
+  const member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({
+    crew_member_id: crewMemberId,
+    is_active: 1
+  });
+
+  if (!member) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'Creative partner not found.'
+    };
+  }
+
+  const onboardingSummary = await onboardingCtrl.syncCreatorRegistrationComplete(member);
+
+  if (Number(member.is_crew_verified) === 1) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'This creative partner is already approved.'
+    };
+  }
+
+  if (Number(onboardingSummary.is_registration_complete) === 1) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'This creative partner has already completed their profile.'
+    };
+  }
+
+  const toEmail = String(member.email || '').trim().toLowerCase();
+  if (!toEmail) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'Creative partner email is missing.'
+    };
+  }
+
+  const fullName = `${member.first_name || ''} ${member.last_name || ''}`.trim();
+  const frontendUrl = getFrontendBaseUrl();
+  const emailResult = await sendCreativePartnerProfileReminderEmail({
+    to_email: toEmail,
+    cp_name: fullName,
+    first_name: getFirstNameForEmail(fullName, toEmail),
+    dashboard_link: `${frontendUrl}/creator/dashboard/profile`
+  });
+
+  if (!emailResult?.success) {
+    return {
+      success: false,
+      crew_member_id: crewMemberId,
+      message: 'Failed to send creative partner profile reminder email.',
+      error: emailResult?.error || 'Unknown email error'
+    };
+  }
+
+  return {
+    success: true,
+    crew_member_id: crewMemberId,
+    message: 'Profile reminder email sent successfully.',
+    to_email: toEmail,
+    message_id: emailResult.messageId || null,
+    onboarding_status: onboardingSummary
+  };
+};
+
+exports.bulkCreativePartnerAction = async (req, res) => {
+  try {
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    const crewMemberIds = normalizeBulkCrewMemberIds(req.body?.crew_member_ids);
+    const allowedActions = new Set(['approve', 'decline', 'send_reminder']);
+
+    if (!allowedActions.has(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid action. Use 'approve', 'decline', or 'send_reminder'.",
+        data: null
+      });
+    }
+
+    if (crewMemberIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one valid creative partner ID is required.',
+        data: null
+      });
+    }
+
+    if (crewMemberIds.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'A maximum of 100 creative partners can be processed at once.',
+        data: null
+      });
+    }
+
+    const results = [];
+
+    if (action === 'approve' || action === 'decline') {
+      const status = action === 'approve' ? 1 : 2;
+      const members = await crew_members.findAll({
+        where: {
+          crew_member_id: { [Op.in]: crewMemberIds }
+        },
+        attributes: ['crew_member_id', 'application_submitted_at']
+      });
+
+      const memberById = new Map(
+        members.map((member) => [Number(member.crew_member_id), member])
+      );
+      const validIds = [];
+
+      crewMemberIds.forEach((crewMemberId) => {
+        const member = memberById.get(crewMemberId);
+
+        if (!member) {
+          results.push({
+            crew_member_id: crewMemberId,
+            success: false,
+            message: 'Creative partner not found.'
+          });
+          return;
+        }
+
+        if (!member.application_submitted_at) {
+          results.push({
+            crew_member_id: crewMemberId,
+            success: false,
+            message: 'Creator application has not been submitted for approval review yet.'
+          });
+          return;
+        }
+
+        validIds.push(crewMemberId);
+      });
+
+      if (validIds.length > 0) {
+        await crew_members.update(
+          { is_crew_verified: status },
+          {
+            where: {
+              crew_member_id: { [Op.in]: validIds }
+            }
+          }
+        );
+
+        const sheetResults = await Promise.allSettled(
+          validIds.map(async (crewMemberId) => {
+            if (status === 1) {
+              await deleteSheetRow('Crew_data', crewMemberId);
+            } else {
+              await updateSheetRow('Crew_data', crewMemberId, { H: 'rejected' });
+            }
+            return crewMemberId;
+          })
+        );
+
+        sheetResults.forEach((sheetResult, index) => {
+          if (sheetResult.status === 'rejected') {
+            console.error(
+              `Google Sheets Sync Error for crew member ${validIds[index]}:`,
+              sheetResult.reason?.message || sheetResult.reason
+            );
+          }
+        });
+
+        validIds.forEach((crewMemberId) => {
+          results.push({
+            crew_member_id: crewMemberId,
+            success: true,
+            message: `Creative partner ${action === 'approve' ? 'approved' : 'declined'} successfully.`
+          });
+        });
+      }
+    } else {
+      // One browser request; limit outbound email concurrency inside the backend.
+      const concurrency = 10;
+
+      for (let index = 0; index < crewMemberIds.length; index += concurrency) {
+        const chunk = crewMemberIds.slice(index, index + concurrency);
+        const chunkResults = await Promise.all(
+          chunk.map(async (crewMemberId) => {
+            try {
+              return await sendProfileReminderForCrewMember(crewMemberId);
+            } catch (error) {
+              console.error(
+                `Bulk Creative Partner Reminder Error for ${crewMemberId}:`,
+                error?.message || error
+              );
+
+              return {
+                success: false,
+                crew_member_id: crewMemberId,
+                message: error?.message || 'Failed to send profile reminder.'
+              };
+            }
+          })
+        );
+
+        results.push(...chunkResults);
+      }
+    }
+
+    const successIds = results
+      .filter((result) => result.success)
+      .map((result) => Number(result.crew_member_id));
+    const failedResults = results.filter((result) => !result.success);
+    const failedIds = failedResults.map((result) => Number(result.crew_member_id));
+
+    const actionLabel =
+      action === 'approve'
+        ? 'approved'
+        : action === 'decline'
+          ? 'declined'
+          : 'sent profile reminders to';
+
+    const message = failedIds.length === 0
+      ? `Successfully ${actionLabel} ${successIds.length} creative partner${successIds.length === 1 ? '' : 's'}.`
+      : successIds.length > 0
+        ? `${successIds.length} creative partner${successIds.length === 1 ? '' : 's'} processed successfully and ${failedIds.length} failed.`
+        : `Failed to process the selected creative partner${failedIds.length === 1 ? '' : 's'}.`;
+
+    return res.status(200).json({
+      success: failedIds.length === 0,
+      partial_success: successIds.length > 0 && failedIds.length > 0,
+      message,
+      error: failedResults[0]?.message || undefined,
+      data: {
+        action,
+        success_ids: successIds,
+        failed_ids: failedIds,
+        success_count: successIds.length,
+        failed_count: failedIds.length,
+        results
+      }
+    });
+  } catch (error) {
+    console.error('Bulk Creative Partner Action Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message,
+      data: null
     });
   }
 };
@@ -12804,7 +13360,10 @@ exports.getProjectHistory = async (req, res) => {
             'post_production_member_assigned',
             'post_production_member_removed',
             'project_name_updated',
-            'schedule_location_updated'
+            'schedule_location_updated',
+            'chat_room_created',
+            'meeting_created',   
+            'meeting_deleted' 
           ]
         }
       },
@@ -17156,6 +17715,370 @@ exports.assignRoleToUser = async (req, res) => {
         process.env.NODE_ENV === 'development'
           ? error.message
           : undefined
+    });
+  }
+};
+
+const normalizeMultiUserAction = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[\s-]+/g, '_');
+
+const normalizeMultiUserIds = (value) => {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(new Set(
+    value
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0)
+  ));
+};
+
+const assignRoleToInternalUserInTransaction = async ({ user, role, transaction }) => {
+  const userId = Number(user.id);
+  const roleId = Number(role.user_type_id);
+
+  await db.user_roles.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId },
+      transaction
+    }
+  );
+
+  await db.user_roles.create({
+    user_id: userId,
+    role_id: roleId,
+    is_active: 1
+  }, {
+    transaction
+  });
+
+  await db.users.update(
+    {
+      user_type: roleId,
+      role: role.user_role,
+      permissions_version: Sequelize.literal('permissions_version + 1')
+    },
+    {
+      where: { id: userId },
+      transaction
+    }
+  );
+
+  const permissionsAssigned = await syncUserPermissionsFromRole(userId, roleId, transaction);
+
+  return {
+    user_id: userId,
+    role_id: roleId,
+    permissions_assigned: permissionsAssigned
+  };
+};
+
+const deactivateInternalUserInTransaction = async ({
+  user,
+  actor,
+  reason,
+  transaction,
+  sourceEndpoint
+}) => {
+  const userId = Number(user.id);
+
+  const role = await db.user_type.findOne({
+    where: { user_type_id: user.user_type },
+    attributes: ['user_type_id', 'user_role'],
+    raw: true,
+    transaction
+  });
+
+  // Keep the same deactivation behavior as the existing single-user delete API.
+  if (Number(user.user_type) === 3) {
+    const client = await clients.findOne({
+      where: {
+        user_id: userId,
+        is_active: 1
+      },
+      transaction
+    });
+
+    if (client) {
+      await client.update({ is_active: 0 }, { transaction });
+
+      const clientLeadRows = await db.client_leads.findAll({
+        where: { user_id: userId },
+        attributes: ['lead_id', 'booking_id'],
+        transaction
+      });
+
+      const unbookedLeadIdList = clientLeadRows
+        .filter((lead) => !lead.booking_id)
+        .map((lead) => lead.lead_id);
+
+      if (unbookedLeadIdList.length > 0) {
+        await db.client_leads.update(
+          { is_active: 0 },
+          {
+            where: {
+              lead_id: { [Op.in]: unbookedLeadIdList }
+            },
+            transaction
+          }
+        );
+
+        await db.client_lead_activities.update(
+          { is_active: 0 },
+          {
+            where: {
+              lead_id: { [Op.in]: unbookedLeadIdList }
+            },
+            transaction
+          }
+        );
+      }
+    }
+  } else if (Number(user.user_type) === 2 || Number(user.user_type) === 4) {
+    const crewMember = await crew_members.findOne({
+      where: {
+        user_id: userId,
+        is_active: 1
+      },
+      transaction
+    });
+
+    if (crewMember) {
+      await crewMember.update({ is_active: 0 }, { transaction });
+
+      await crew_member_files.update(
+        { is_active: 0 },
+        {
+          where: {
+            crew_member_id: crewMember.crew_member_id
+          },
+          transaction
+        }
+      );
+    }
+  }
+
+  await db.affiliates.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId },
+      transaction
+    }
+  );
+
+  await db.user_roles.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId },
+      transaction
+    }
+  );
+
+  await user.update(
+    {
+      is_active: 0,
+      permissions_version: Sequelize.literal('permissions_version + 1')
+    },
+    { transaction }
+  );
+
+  await writeInternalUserArchiveHistory({
+    user,
+    action: 'deleted',
+    reason: reason || 'Deleted from roles and permissions',
+    actor,
+    previousStatus: 'active',
+    newStatus: 'inactive',
+    metadata: {
+      source_endpoint: sourceEndpoint,
+      role_id: user.user_type,
+      role_name: role?.user_role || user.role || null
+    },
+    transaction
+  });
+
+  return {
+    user_id: userId,
+    status: 'deleted'
+  };
+};
+
+exports.multiUserAction = async (req, res) => {
+  const action = normalizeMultiUserAction(req.body?.action);
+  const requestedUserIds = req.body?.user_ids;
+  const userIds = normalizeMultiUserIds(requestedUserIds);
+  const reason = req.body?.reason || null;
+
+  if (!Array.isArray(requestedUserIds) || requestedUserIds.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'user_ids must be a non-empty array'
+    });
+  }
+
+  if (userIds.length !== requestedUserIds.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'user_ids must contain unique positive integer IDs only'
+    });
+  }
+
+  if (userIds.length > 100) {
+    return res.status(400).json({
+      success: false,
+      message: 'A maximum of 100 users can be updated in one request'
+    });
+  }
+
+  if (!['change_role', 'change_user_role', 'delete', 'delete_users'].includes(action)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Unsupported action. Use change_role or delete'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    const internalRoles = await db.user_type.findAll({
+      where: {
+        is_active: 1,
+        is_internal_member: 1
+      },
+      attributes: ['user_type_id'],
+      raw: true,
+      transaction
+    });
+
+    const internalRoleIds = internalRoles
+      .map((item) => Number(item.user_type_id))
+      .filter((item) => Number.isInteger(item) && item > 0);
+
+    const selectedUsers = await users.scope('all').findAll({
+      where: {
+        id: { [Op.in]: userIds },
+        is_active: 1,
+        user_type: { [Op.in]: internalRoleIds }
+      },
+      attributes: ['id', 'name', 'email', 'user_type', 'role', 'is_active'],
+      transaction
+    });
+
+    const selectedUserIdSet = new Set(selectedUsers.map((user) => Number(user.id)));
+    const unavailableUserIds = userIds.filter((userId) => !selectedUserIdSet.has(userId));
+
+    if (unavailableUserIds.length > 0) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'One or more users were not found, are inactive, or are not internal users',
+        data: {
+          unavailable_user_ids: unavailableUserIds
+        }
+      });
+    }
+
+    if (action === 'change_role' || action === 'change_user_role') {
+      const roleId = Number(req.body?.role_id);
+
+      if (!Number.isInteger(roleId) || roleId <= 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'Valid role_id is required for change_role action'
+        });
+      }
+
+      const role = await db.user_type.findOne({
+        where: {
+          user_type_id: roleId,
+          is_active: 1,
+          is_internal_member: 1
+        },
+        transaction
+      });
+
+      if (!role) {
+        await transaction.rollback();
+        return res.status(404).json({
+          success: false,
+          message: 'Internal role not found or inactive'
+        });
+      }
+
+      const results = [];
+
+      for (const user of selectedUsers) {
+        results.push(await assignRoleToInternalUserInTransaction({
+          user,
+          role,
+          transaction
+        }));
+      }
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        success: true,
+        message: `Role changed successfully for ${results.length} user${results.length === 1 ? '' : 's'}`,
+        data: {
+          action: 'change_role',
+          role_id: roleId,
+          role_name: role.user_role,
+          affected_count: results.length,
+          user_ids: results.map((item) => item.user_id),
+          results
+        }
+      });
+    }
+
+    const results = [];
+
+    for (const user of selectedUsers) {
+      results.push(await deactivateInternalUserInTransaction({
+        user,
+        actor,
+        reason,
+        transaction,
+        sourceEndpoint: 'POST /admin/users/multi-action'
+      }));
+    }
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: `${results.length} user${results.length === 1 ? '' : 's'} deleted successfully`,
+      data: {
+        action: 'delete',
+        affected_count: results.length,
+        user_ids: results.map((item) => item.user_id),
+        results
+      }
+    });
+  } catch (error) {
+    if (!transaction.finished) {
+      await transaction.rollback();
+    }
+
+    console.error('Multi User Action Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while performing multi-user action',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };

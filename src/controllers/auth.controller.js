@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
-const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { randomUUID } = require('node:crypto');
+const { ipType } = require('../utils/login-session-details');
 const { Op } = require('sequelize');
 const db = require('../models');
 const { users, user_type, crew_members, crew_member_files } = require('../models');
@@ -32,6 +33,82 @@ const {
   syncCreatorRegistrationComplete,
 } = require('../utils/creatorOnboarding');
 const accountCreditService = require('../services/account-credit.service');
+const passwordExpiryService = require('../services/internal-password-expiry.service');
+const webSessionService = require('../services/web-session.service');
+
+const getRequestIpAddress = (req) => {
+  return String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/i, '').trim().slice(0, 45) || null;
+};
+
+const isPublicIpAddress = (ipAddress) => {
+  return ipType(ipAddress) === 'public';
+};
+
+const getIpLocation = async (ipAddress) => {
+  if (!isPublicIpAddress(ipAddress) || typeof fetch !== 'function') return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const configuredProviderBaseUrl = process.env.IP_GEOLOCATION_BASE_URL;
+    const lookupUrl = configuredProviderBaseUrl
+      ? `${String(configuredProviderBaseUrl).replace(/\/+$/, '')}/${encodeURIComponent(ipAddress)}`
+      : `https://ipwho.is/${encodeURIComponent(ipAddress)}`;
+    const response = await fetch(lookupUrl, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) throw new Error(`IP geolocation provider returned HTTP ${response.status}`);
+
+    const location = await response.json();
+    if (location.success === false) {
+      throw new Error(location.message || 'IP geolocation provider could not resolve the IP address');
+    }
+    return {
+      city: String(location.city || '').trim().slice(0, 120) || null,
+      country: String(location.country_name || location.country || '').trim().slice(0, 120) || null
+    };
+  } catch (error) {
+    console.error('IP geolocation lookup error:', error.message);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const recordSuccessfulLogin = async (req, user, loginMethod, token, sessionExpiresAt, transaction) => {
+  try {
+    if (Number(user?.userType?.is_internal_member || 0) !== 1) return;
+    const decoded = jwt.decode(token);
+    if (!decoded?.sessionId || !decoded.exp) throw new Error('Missing login session claims');
+    const ipAddress = getRequestIpAddress(req);
+    const loginHistory = await db.user_login_history.create({
+      user_id: user.id,
+      ip_address: ipAddress,
+      login_method: loginMethod,
+      user_agent: String(req.get('user-agent') || '').slice(0, 512) || null,
+      logged_in_at: new Date(),
+      session_id: decoded.sessionId,
+      session_version: user.permissions_version,
+      expires_at: sessionExpiresAt || new Date(decoded.exp * 1000),
+      last_seen_at: new Date()
+    }, { transaction });
+
+    // Do not delay a successful login while the external IP lookup completes.
+    const updateLocation = () => {
+      void getIpLocation(ipAddress).then((location) => {
+        if (!location || (!location.city && !location.country)) return;
+        return loginHistory.update(location);
+      }).catch((error) => console.error('Login location audit update error:', error.message));
+    };
+    if (transaction) transaction.afterCommit(updateLocation);
+    else updateLocation();
+  } catch (error) {
+    // Never issue a tracked credential without persisting its revocable session.
+    console.error('Login audit logging error:', error);
+    throw error;
+  }
+};
 
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(getGoogleClientId());
@@ -361,9 +438,9 @@ const PERMISSIONS_MAP = {
 /**
  * Generate JWT tokens
  */
-const generateTokens = (userId, userRole, permissionsVersion, userTypeId) => {
+const generateTokens = (userId, userRole, permissionsVersion, userTypeId, sessionId) => {
   const token = jwt.sign(
-    { userId, userRole, permissionsVersion, userTypeId },
+    { userId, userRole, permissionsVersion, userTypeId, ...(sessionId ? { sessionId } : {}) },
     process.env.JWT_SECRET,
     { expiresIn: config.jwtExpiresIn }
   );
@@ -371,42 +448,18 @@ const generateTokens = (userId, userRole, permissionsVersion, userTypeId) => {
   return { token };
 };
 
-const REFRESH_COOKIE = 'revure_refresh_session';
-const hashSessionToken = (value) => crypto.createHash('sha256').update(value).digest('hex');
-const getRefreshCookie = (req) => String(req.headers.cookie || '').split(';').map((part) => part.trim())
-  .find((part) => part.startsWith(REFRESH_COOKIE + '='))?.slice(REFRESH_COOKIE.length + 1) || null;
-const refreshCookieOptions = () => ({
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax',
-  path: '/v1/auth',
-  maxAge: config.refreshSessionDays * 24 * 60 * 60 * 1000
-});
-const clearRefreshCookieOptions = () => ({
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax',
-  path: '/v1/auth'
-});
-
-async function startWebSession(res, req, userId) {
-  const rawToken = crypto.randomBytes(48).toString('base64url');
-  const now = new Date();
-  await db.user_sessions.create({
-    user_id: userId,
-    token_hash: hashSessionToken(rawToken),
-    expires_at: new Date(now.getTime() + config.refreshSessionDays * 24 * 60 * 60 * 1000),
-    last_used_at: now,
-    user_agent: String(req.get('user-agent') || '').slice(0, 512) || null,
-    ip_address: String(req.ip || '').slice(0, 64) || null,
-    created_at: now
+async function issueLoginSession(req, res, user, loginMethod) {
+  const internal = Number(user.userType?.is_internal_member || 0) === 1;
+  const sessionId = internal ? randomUUID() : undefined;
+  const tokens = generateTokens(user.id, user.userType?.user_role || 'client', user.permissions_version,
+    user.userType?.user_type_id || user.user_type, sessionId);
+  const session = await db.sequelize.transaction(async (transaction) => {
+    const webSession = await webSessionService.create(req, user, sessionId, transaction);
+    await recordSuccessfulLogin(req, user, loginMethod, tokens.token, webSession.expiresAt, transaction);
+    return webSession;
   });
-  res.cookie(REFRESH_COOKIE, rawToken, refreshCookieOptions());
-}
-
-async function rotateWebSession(res, req, session) {
-  await session.update({ revoked_at: new Date(), last_used_at: new Date() });
-  await startWebSession(res, req, session.user_id);
+  webSessionService.setCookie(res, session.rawToken);
+  return tokens;
 }
 
 /**
@@ -581,7 +634,7 @@ function splitGoogleName(displayName, email) {
   return { firstName, lastName };
 }
 
-async function buildAuthenticatedUserResponse(user) {
+async function buildAuthenticatedUserResponse(user, req, res) {
   const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
 
   if (!user.userType) {
@@ -621,8 +674,8 @@ async function buildAuthenticatedUserResponse(user) {
   });
   affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-  const { token } = generateTokens(user.id, role, user.permissions_version, user_type_id);
   const permissions = await getCombinedUserPermissions(user.id, user.user_type);
+  const { token } = await issueLoginSession(req, res, user, 'google');
 
   return {
     role,
@@ -1094,7 +1147,9 @@ exports.verifyEmail = async (req, res) => {
     });
 
     const role = userTypeRecord?.user_role || 'client';
-    const { token } = generateTokens(user.id, role);
+    const { token } = await issueLoginSession(req, res, {
+      id: user.id, permissions_version: user.permissions_version, user_type: user.user_type, userType: userTypeRecord
+    }, 'email_otp');
     const permissions = getPermissionsForRole(role);
 
     return res.status(200).json({
@@ -1202,49 +1257,8 @@ const getCombinedUserPermissions = async (userId, roleId) => {
   return formattedPermissions;
 };
 
-exports.refreshSession = async (req, res) => {
-  try {
-    const rawToken = getRefreshCookie(req);
-    if (!rawToken) return res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
-    const session = await db.user_sessions.findOne({
-      where: { token_hash: hashSessionToken(rawToken), revoked_at: null, expires_at: { [Op.gt]: new Date() } }
-    });
-    if (!session) {
-      res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
-      return res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
-    }
-    const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
-    const user = await UserAll.findOne({
-      where: { id: session.user_id, is_active: 1 },
-      include: [{ model: UserType, as: 'userType', attributes: ['user_type_id', 'user_role'] }]
-    });
-    if (!user) {
-      await session.update({ revoked_at: new Date() });
-      res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
-      return res.status(401).json({ success: false, message: 'Session is no longer valid.' });
-    }
-    await rotateWebSession(res, req, session);
-    const role = user.userType?.user_role || 'client';
-    const userTypeId = user.userType?.user_type_id || user.user_type || null;
-    const { token } = generateTokens(user.id, role, user.permissions_version, userTypeId);
-    return res.status(200).json({ success: true, token });
-  } catch (error) {
-    console.error('Refresh session error:', error);
-    return res.status(500).json({ success: false, message: 'Unable to refresh session.' });
-  }
-};
-
-exports.logout = async (req, res) => {
-  try {
-    const rawToken = getRefreshCookie(req);
-    if (rawToken) await db.user_sessions.update({ revoked_at: new Date() }, { where: { token_hash: hashSessionToken(rawToken), revoked_at: null } });
-    res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Logout error:', error);
-    return res.status(500).json({ success: false, message: 'Unable to log out.' });
-  }
-};
+exports.refreshSession = (req, res) => webSessionService.refresh(req, res, generateTokens);
+exports.logout = webSessionService.logout;
 
 /**
  * Login user with email/password or phone/OTP
@@ -1350,18 +1364,15 @@ exports.login = async (req, res) => {
       });
       affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      // Generate tokens
-      const { token } = generateTokens(user.id, role, user.permissions_version, user_type_id);
-
       const permissions = await getCombinedUserPermissions(
         user.id,
         user.user_type
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
-      // const permissions = getPermissionsForRole(role);
+      const { token } = await issueLoginSession(req, res, user, 'password');
 
-      await startWebSession(res, req, user.id);
+      // const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
         success: true,
@@ -1507,13 +1518,14 @@ const affiliate = await Affiliate.findOne({
 });
 affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      const { token } = generateTokens(user.id, role, user.permissions_version);
       
       const permissions = await getCombinedUserPermissions(
         user.id,
         user.user_type
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
+
+      const { token } = await issueLoginSession(req, res, user, 'otp');
 
       return res.json({
         success: true,
@@ -1932,8 +1944,7 @@ exports.googleLogin = async (req, res) => {
       await user.update({ timezone: loginTimezone, updated_at: new Date() });
     }
 
-    const authPayload = await buildAuthenticatedUserResponse(user);
-    await startWebSession(res, req, user.id);
+    const authPayload = await buildAuthenticatedUserResponse(user, req, res);
 
     return res.status(isSignup && (createdClientId || createdCrewMemberId) ? 201 : 200).json({
       success: true,
@@ -1968,7 +1979,8 @@ exports.googleLogin = async (req, res) => {
  */
 exports.changePassword = async (req, res) => {
   try {
-    const { oldPassword, newPassword, confirmPassword, userId } = req.body;
+    const { oldPassword, newPassword, confirmPassword } = req.body;
+    const userId = req.user?.userId;
 
     if (!userId || !oldPassword || !newPassword || !confirmPassword) {
       return res.status(400).json({
@@ -2004,13 +2016,19 @@ exports.changePassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
     await User.update(
-      { password_hash: hashedPassword },
+      {
+        password_hash: hashedPassword,
+        password_changed_at: new Date(),
+        permissions_version: Number(user.permissions_version || 1) + 1,
+        updated_at: new Date()
+      },
       { where: { id: user.id } }
     );
 
     return res.json({
       success: true,
-      message: 'Password changed successfully'
+      force_logout: true,
+      message: 'Password changed successfully. Please sign in again.'
     });
 
   } catch (error) {
@@ -2129,15 +2147,19 @@ exports.resetPassword = async (req, res) => {
     await User.update(
       {
         password_hash: hashedPassword,
+        password_changed_at: new Date(),
         reset_token: null,
-        reset_token_expiry: null
+        reset_token_expiry: null,
+        permissions_version: Number(user.permissions_version || 1) + 1,
+        updated_at: new Date()
       },
       { where: { id: user.id } }
     );
 
     return res.json({
       success: true,
-      message: 'Password has been reset successfully'
+      force_logout: true,
+      message: 'Password has been reset successfully. Please sign in again.'
     });
 
   } catch (error) {
@@ -2147,6 +2169,95 @@ exports.resetPassword = async (req, res) => {
       message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+const getPasswordExpiryUser = async (req) => User.findOne({
+  where: { id: req.user?.userId },
+  include: [{ model: UserType, as: 'userType', attributes: ['is_internal_member'] }]
+});
+
+exports.requestPasswordExpiryOtp = async (req, res) => {
+  try {
+    const user = await getPasswordExpiryUser(req);
+    const isInternal = Number(user?.userType?.is_internal_member || 0) === 1;
+    const status = user ? await passwordExpiryService.getExpiryStatus(user, isInternal) : null;
+    if (!user || !status?.expired) {
+      return res.status(403).json({ success: false, message: 'Password expiry verification is not available for this account.' });
+    }
+    const previousExpiry = user.password_expiry_otp_expires_at
+      ? new Date(user.password_expiry_otp_expires_at).getTime()
+      : 0;
+    if (previousExpiry > Date.now() + 9 * 60 * 1000) {
+      return res.status(429).json({ success: false, message: 'Please wait one minute before requesting another verification code.' });
+    }
+
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const emailResult = await emailService.sendPasswordExpiryOTP({ name: user.name, email: user.email }, otp);
+    if (!emailResult.success) {
+      return res.status(503).json({ success: false, message: 'We could not send a verification code. Please try again later.' });
+    }
+    await user.update({
+      password_expiry_otp_hash: await bcrypt.hash(otp, 10),
+      password_expiry_otp_expires_at: new Date(Date.now() + 10 * 60 * 1000),
+      password_expiry_otp_verified_at: null,
+      password_expiry_otp_attempts: 0
+    });
+    return res.json({ success: true, message: 'A verification code has been sent to your registered email.' });
+  } catch (error) {
+    console.error('Request password expiry OTP error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to request verification code.' });
+  }
+};
+
+exports.verifyPasswordExpiryOtp = async (req, res) => {
+  try {
+    const otp = String(req.body?.otp || '').trim();
+    const user = await getPasswordExpiryUser(req);
+    if (!user || !/^\d{6}$/.test(otp) || !user.password_expiry_otp_hash || !user.password_expiry_otp_expires_at) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+    }
+    if (new Date(user.password_expiry_otp_expires_at).getTime() < Date.now() || Number(user.password_expiry_otp_attempts) >= 5) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+    }
+    const valid = await bcrypt.compare(otp, user.password_expiry_otp_hash);
+    if (!valid) {
+      await user.update({ password_expiry_otp_attempts: Number(user.password_expiry_otp_attempts) + 1 });
+      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+    }
+    await user.update({ password_expiry_otp_verified_at: new Date() });
+    return res.json({ success: true, message: 'Email verified. You can now set a new password.' });
+  } catch (error) {
+    console.error('Verify password expiry OTP error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to verify code.' });
+  }
+};
+
+exports.changeExpiredPassword = async (req, res) => {
+  try {
+    const { newPassword, confirmPassword } = req.body || {};
+    const user = await getPasswordExpiryUser(req);
+    const verifiedAt = user?.password_expiry_otp_verified_at ? new Date(user.password_expiry_otp_verified_at).getTime() : 0;
+    if (!user || !verifiedAt || Date.now() - verifiedAt > 10 * 60 * 1000) {
+      return res.status(403).json({ success: false, message: 'Verify your email before changing your password.' });
+    }
+    if (!newPassword || newPassword !== confirmPassword || String(newPassword).length < 8) {
+      return res.status(400).json({ success: false, message: 'Passwords must match and be at least 8 characters long.' });
+    }
+    await user.update({
+      password_hash: await bcrypt.hash(newPassword, 10),
+      password_changed_at: new Date(),
+      password_expiry_otp_hash: null,
+      password_expiry_otp_expires_at: null,
+      password_expiry_otp_verified_at: null,
+      password_expiry_otp_attempts: 0,
+      permissions_version: Number(user.permissions_version || 1) + 1,
+      updated_at: new Date()
+    });
+    return res.json({ success: true, force_logout: true, message: 'Password changed. Please sign in again on this device.' });
+  } catch (error) {
+    console.error('Change expired password error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to change password.' });
   }
 };
 
@@ -2469,6 +2580,10 @@ exports.quickRegister = async (req, res) => {
 
     // If user exists, return user info
     if (existingUser) {
+      // Internal accounts must authenticate, never receive tokens via a booking signup.
+      if (Number(existingUser.userType?.is_internal_member || 0) === 1) {
+        return res.status(409).json({ success: false, message: 'Please sign in to your existing account.' });
+      }
       const role = existingUser.userType?.user_role || 'client';
       const { token } = generateTokens(existingUser.id, role);
       const permissions = getPermissionsForRole(role);
@@ -3466,12 +3581,16 @@ exports.changePasswordclient = async (req, res) => {
     // Update the user's password in the database
     user.password_hash = hashedNewPassword;
     user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
+    user.password_changed_at = new Date();
+    user.permissions_version = Number(user.permissions_version || 1) + 1;
+    user.updated_at = new Date();
     await user.save();
 
     return res.status(200).json({
       success: true,
       message: hadPassword ? 'Password updated successfully' : 'Password set successfully',
-      has_password: true
+      has_password: true,
+      force_logout: true
     });
 
   } catch (error) {
@@ -3537,12 +3656,16 @@ exports.changePasswordCrewMember = async (req, res) => {
 
     user.password_hash = hashedNewPassword;
     user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
+    user.password_changed_at = new Date();
+    user.permissions_version = Number(user.permissions_version || 1) + 1;
+    user.updated_at = new Date();
     await user.save();
 
     return res.status(200).json({
       success: true,
       message: hadPassword ? 'Password changed successfully' : 'Password set successfully',
-      has_password: true
+      has_password: true,
+      force_logout: true
     });
 
   } catch (error) {

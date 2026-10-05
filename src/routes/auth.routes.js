@@ -41,7 +41,7 @@ router.post('/logout', authController.logout);
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
 router.post('/admin/generate-reset-link', authController.generateUserResetLinkForAdmin);
-router.post('/change-password', authController.changePassword);
+router.post('/change-password', authenticate, authController.changePassword);
 
 // ===== PERMISSIONS =====
 router.get('/permissions/:role', authController.getPermissions);
@@ -61,5 +61,8 @@ router.post('/admin/create-internal-credential', authenticate, adminUsersCreate,
 
 router.post('/change-password-client', authenticate, clientFinancesEdit, authController.changePasswordclient);
 router.post('/change-password-crew', authenticate, authController.changePasswordCrewMember);
+router.post('/password-expiry/request-otp', authenticate, authController.requestPasswordExpiryOtp);
+router.post('/password-expiry/verify-otp', authenticate, authController.verifyPasswordExpiryOtp);
+router.post('/password-expiry/change', authenticate, authController.changeExpiredPassword);
 
 module.exports = router;
