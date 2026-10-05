@@ -7274,7 +7274,7 @@ async function acceptQuoteOnSignature(salesQuoteId, signatureDetails = {}) {
       ? `Quote accepted by signature from ${signerName}`
       : 'Quote accepted by signature',
     activitySource: 'signature_sign',
-    sendClientEmail: false,
+    sendClientEmail: true,
     sendSalesEmail: true
   });
 }
