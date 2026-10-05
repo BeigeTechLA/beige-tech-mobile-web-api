@@ -1,5 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { randomUUID } = require('node:crypto');
+const { ipType } = require('../utils/login-session-details');
 const { Op } = require('sequelize');
 const db = require('../models');
 const { users, user_type, crew_members, crew_member_files } = require('../models');
@@ -34,19 +36,11 @@ const accountCreditService = require('../services/account-credit.service');
 const passwordExpiryService = require('../services/internal-password-expiry.service');
 
 const getRequestIpAddress = (req) => {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  const forwardedIp = Array.isArray(forwardedFor) ? forwardedFor[0] : String(forwardedFor || '').split(',')[0];
-  return String(forwardedIp || req.ip || req.socket?.remoteAddress || '').trim().slice(0, 45) || null;
+  return String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/i, '').trim().slice(0, 45) || null;
 };
 
 const isPublicIpAddress = (ipAddress) => {
-  const ip = String(ipAddress || '').replace(/^::ffff:/i, '').toLowerCase();
-  return Boolean(ip) && ip !== '::1' && ip !== 'localhost' && !(
-    ip === '127.0.0.1' || ip.startsWith('10.') || ip.startsWith('192.168.') ||
-    ip.startsWith('172.16.') || ip.startsWith('172.17.') || ip.startsWith('172.18.') ||
-    ip.startsWith('172.19.') || ip.startsWith('172.2') || ip.startsWith('172.30.') ||
-    ip.startsWith('172.31.')
-  );
+  return ipType(ipAddress) === 'public';
 };
 
 const getIpLocation = async (ipAddress) => {
@@ -81,18 +75,22 @@ const getIpLocation = async (ipAddress) => {
   }
 };
 
-const recordSuccessfulLogin = async (req, user, loginMethod) => {
+const recordSuccessfulLogin = async (req, user, loginMethod, token) => {
   try {
-    if (!db.user_login_history) return;
     if (Number(user?.userType?.is_internal_member || 0) !== 1) return;
-
+    const decoded = jwt.decode(token);
+    if (!decoded?.sessionId || !decoded.exp) throw new Error('Missing login session claims');
     const ipAddress = getRequestIpAddress(req);
     const loginHistory = await db.user_login_history.create({
       user_id: user.id,
       ip_address: ipAddress,
       login_method: loginMethod,
       user_agent: String(req.get('user-agent') || '').slice(0, 512) || null,
-      logged_in_at: new Date()
+      logged_in_at: new Date(),
+      session_id: decoded.sessionId,
+      session_version: user.permissions_version,
+      expires_at: new Date(decoded.exp * 1000),
+      last_seen_at: new Date()
     });
 
     // Do not delay a successful login while the external IP lookup completes.
@@ -101,8 +99,9 @@ const recordSuccessfulLogin = async (req, user, loginMethod) => {
       return loginHistory.update(location);
     }).catch((error) => console.error('Login location audit update error:', error.message));
   } catch (error) {
-    // Login must stay available even if audit logging is temporarily unavailable.
+    // Never issue a tracked credential without persisting its revocable session.
     console.error('Login audit logging error:', error);
+    throw error;
   }
 };
 
@@ -422,15 +421,15 @@ const PERMISSIONS_MAP = {
 /**
  * Generate JWT tokens
  */
-const generateTokens = (userId, userRole, permissionsVersion, userTypeId) => {
+const generateTokens = (userId, userRole, permissionsVersion, userTypeId, sessionId) => {
   const token = jwt.sign(
-    { userId, userRole, permissionsVersion, userTypeId },
+    { userId, userRole, permissionsVersion, userTypeId, ...(sessionId ? { sessionId } : {}) },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
   );
 
   const refreshToken = jwt.sign(
-    { userId, userRole, permissionsVersion, userTypeId, type: 'refresh' },
+    { userId, userRole, permissionsVersion, userTypeId, ...(sessionId ? { sessionId } : {}), type: 'refresh' },
     process.env.JWT_SECRET,
     { expiresIn: '30d' }
   );
@@ -610,7 +609,7 @@ function splitGoogleName(displayName, email) {
   return { firstName, lastName };
 }
 
-async function buildAuthenticatedUserResponse(user) {
+async function buildAuthenticatedUserResponse(user, req) {
   const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
 
   if (!user.userType) {
@@ -650,7 +649,8 @@ async function buildAuthenticatedUserResponse(user) {
   });
   affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-  const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
+  const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id, is_internal_member ? randomUUID() : undefined);
+  await recordSuccessfulLogin(req, user, 'google', token);
   const permissions = await getCombinedUserPermissions(user.id, user.user_type);
 
   return {
@@ -1123,7 +1123,9 @@ exports.verifyEmail = async (req, res) => {
     });
 
     const role = userTypeRecord?.user_role || 'client';
-    const { token, refreshToken } = generateTokens(user.id, role);
+    const isInternal = Number(userTypeRecord?.is_internal_member || 0) === 1;
+    const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user.user_type, isInternal ? randomUUID() : undefined);
+    if (isInternal) await recordSuccessfulLogin(req, { id: user.id, permissions_version: user.permissions_version, userType: userTypeRecord }, 'email_otp', token);
     const permissions = getPermissionsForRole(role);
 
     return res.status(200).json({
@@ -1332,7 +1334,7 @@ exports.login = async (req, res) => {
       affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
       // Generate tokens
-      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
+      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id, is_internal_member ? randomUUID() : undefined);
 
       const permissions = await getCombinedUserPermissions(
         user.id,
@@ -1340,7 +1342,7 @@ exports.login = async (req, res) => {
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
-      await recordSuccessfulLogin(req, user, 'password');
+      await recordSuccessfulLogin(req, user, 'password', token);
 
       // const permissions = getPermissionsForRole(role);
 
@@ -1484,7 +1486,7 @@ const affiliate = await Affiliate.findOne({
 });
 affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version);
+      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id, is_internal_member ? randomUUID() : undefined);
       
       const permissions = await getCombinedUserPermissions(
         user.id,
@@ -1492,7 +1494,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
-      await recordSuccessfulLogin(req, user, 'otp');
+      await recordSuccessfulLogin(req, user, 'otp', token);
 
       return res.json({
         success: true,
@@ -1905,7 +1907,7 @@ exports.googleLogin = async (req, res) => {
       });
     }
 
-    const authPayload = await buildAuthenticatedUserResponse(user);
+    const authPayload = await buildAuthenticatedUserResponse(user, req);
 
     return res.status(isSignup && (createdClientId || createdCrewMemberId) ? 201 : 200).json({
       success: true,
@@ -2517,6 +2519,10 @@ exports.quickRegister = async (req, res) => {
 
     // If user exists, return user info
     if (existingUser) {
+      // Internal accounts must authenticate, never receive tokens via a booking signup.
+      if (Number(existingUser.userType?.is_internal_member || 0) === 1) {
+        return res.status(409).json({ success: false, message: 'Please sign in to your existing account.' });
+      }
       const role = existingUser.userType?.user_role || 'client';
       const { token, refreshToken } = generateTokens(existingUser.id, role);
       const permissions = getPermissionsForRole(role);

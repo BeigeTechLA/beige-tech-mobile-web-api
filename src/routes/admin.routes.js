@@ -3,7 +3,6 @@ const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
 const { authMiddleware } = require('../middleware/auth');
-const { requireSuperAdmin } = require('../middleware/auth.middleware');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const shiftManagementRoutes = require('./shifts.routes');
 const assignmentHistoryRoutes = require('./assignment-history.routes');
@@ -280,7 +279,7 @@ router.get(
   admin.exportClientsCsv
 );
 router.get('/archive-history', authMiddleware, adminUsersView, admin.getArchiveHistory);
-router.get('/login-history', authMiddleware, requireSuperAdmin, admin.getLoginHistory);
+router.get('/login-history', authMiddleware, rolesPermissionsView, admin.getLoginHistory);
 router.put('/edit-client/:client_id', admin.editClient);
 router.delete('/delete-client/:client_id', authMiddleware, adminClientsDelete, admin.deleteClient);
 router.post('/restore-client/:client_id', authMiddleware, adminClientsDelete, admin.restoreClient);

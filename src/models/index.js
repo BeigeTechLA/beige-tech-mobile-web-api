@@ -28,6 +28,7 @@ models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
 models.user_login_history = userLoginHistoryFactory(sequelize, DataTypes);
+models.user_login_history.belongsTo(models.users, { foreignKey: 'user_id', as: 'sessionUser' });
 models.internal_password_expiry_settings = internalPasswordExpirySettingsFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {

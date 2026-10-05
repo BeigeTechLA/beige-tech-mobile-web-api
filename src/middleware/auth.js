@@ -2,8 +2,10 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/config');
 const db = require('../models');
 const passwordExpiryService = require('../services/internal-password-expiry.service');
+const { validateSession } = require('../services/login-session.service');
 
 const passwordExpiryExemptPaths = new Set([
+  '/auth/logout',
   '/auth/password-expiry/request-otp',
   '/auth/password-expiry/verify-otp',
   '/auth/password-expiry/change'
@@ -42,6 +44,7 @@ const validatePermissionVersion = async (decoded) => {
     throw new Error('PERMISSION_CHANGED');
   }
 
+  await validateSession(decoded);
   return user;
 };
 
@@ -85,6 +88,7 @@ const authMiddleware = async (req, res, next) => {
       userId: decoded.userId,
       userTypeId: decoded.userTypeId,
       userRole: decoded.userRole,
+      sessionId: decoded.sessionId,
       isInternalMember: Number(user.userType?.is_internal_member || 0) === 1
     };
 
@@ -124,7 +128,9 @@ const authMiddleware = async (req, res, next) => {
 
     if (
       error.message === 'PERMISSION_CHANGED' ||
-      error.message === 'USER_NOT_FOUND'
+      error.message === 'USER_NOT_FOUND' ||
+      error.message === 'SESSION_REVOKED' ||
+      error.message === 'INVALID_TOKEN_TYPE'
     ) {
       return res.status(401).json({
         success: false,
@@ -145,7 +151,7 @@ const authMiddleware = async (req, res, next) => {
  * Optional authentication middleware
  * Attaches user if token is valid, but doesn't fail if missing
  */
-const optionalAuth = (req, res, next) => {
+const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -160,7 +166,7 @@ const optionalAuth = (req, res, next) => {
 
     const token = parts[1];
     const decoded = jwt.verify(token, config.jwtSecret);
-
+    await validatePermissionVersion(decoded);
     req.user = {
       userId: decoded.userId,
       userTypeId: decoded.userTypeId,
@@ -199,7 +205,7 @@ const authenticateAdmin = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
+    await validatePermissionVersion(decoded);
     req.user = {
       userId: decoded.userId,
       userTypeId: decoded.userTypeId,

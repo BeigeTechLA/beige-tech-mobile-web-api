@@ -53,6 +53,7 @@ const userExportService = require('../services/user-export.service');
 const detailsPendingCpService = require('../services/details-pending-cp.service');
 const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 const passwordExpiryService = require('../services/internal-password-expiry.service');
+const { ipType, deviceDetails, sessionDetails } = require('../utils/login-session-details');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -64,10 +65,11 @@ const getFrontendBaseUrl = () =>
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
 
-// Super-admin only: successful sign-ins with the account, source IP and timestamp.
+// Roles & Permissions viewers: successful internal sign-ins with account and location details.
 exports.getLoginHistory = async (req, res) => {
   try {
-    let { page = 1, limit = 20, user_id, ip_address, login_method, search } = req.query;
+    let { page = 1, limit = 20, user_id, ip_address, login_method, search, status = 'all' } = req.query;
+    if (!['all', 'active'].includes(status)) return res.status(400).json({ success: false, message: 'Status must be active or all.' });
     page = Math.max(parseInt(page, 10) || 1, 1);
     limit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
 
@@ -114,8 +116,19 @@ exports.getLoginHistory = async (req, res) => {
       }
     }
 
+    const now = new Date();
+    const include = [];
+    if (status === 'active') {
+      where.session_id = { [Op.ne]: null };
+      where.logged_out_at = null;
+      where.expires_at = { [Op.gt]: now };
+      include.push({ model: users.scope('all'), as: 'sessionUser', attributes: [], required: true,
+        where: { is_active: 1, permissions_version: { [Op.col]: 'user_login_history.session_version' } }
+      });
+    }
     const { count, rows } = await db.user_login_history.findAndCountAll({
       where,
+      include,
       limit,
       offset: (page - 1) * limit,
       order: [['logged_in_at', 'DESC'], ['login_history_id', 'DESC']],
@@ -126,7 +139,7 @@ exports.getLoginHistory = async (req, res) => {
     const auditUsers = userIds.length
       ? await users.scope('all').findAll({
           where: { id: { [Op.in]: userIds } },
-          attributes: ['id', 'name', 'email', 'phone_number', 'role', 'user_type'],
+          attributes: ['id', 'name', 'email', 'phone_number', 'role', 'user_type', 'is_active', 'permissions_version'],
           include: [{ model: db.user_type, as: 'userType', attributes: ['user_role'], required: false }]
         })
       : [];
@@ -151,7 +164,14 @@ exports.getLoginHistory = async (req, res) => {
           country: row.country,
           login_method: row.login_method,
           user_agent: row.user_agent,
-          logged_in_at: row.logged_in_at
+          logged_in_at: row.logged_in_at,
+          ...deviceDetails(row.user_agent),
+          ip_type: ipType(row.ip_address),
+          ...sessionDetails(row, user, now),
+          is_current_session: Boolean(row.session_id && row.session_id === req.user?.sessionId),
+          last_seen_at: row.last_seen_at,
+          expires_at: row.expires_at,
+          logged_out_at: row.logged_out_at
         };
       }),
       pagination: {

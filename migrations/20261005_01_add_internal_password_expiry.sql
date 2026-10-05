@@ -25,4 +25,6 @@ ALTER TABLE `users`
 
 UPDATE `users`
 SET `password_changed_at` = COALESCE(`updated_at`, `created_at`, NOW())
-WHERE `password_changed_at` IS NULL AND `password_hash` IS NOT NULL;
+WHERE `id` > 0
+  AND `password_changed_at` IS NULL
+  AND `password_hash` IS NOT NULL;

@@ -18,6 +18,11 @@ module.exports = function(sequelize, DataTypes) {
     country: { type: DataTypes.STRING(120), allowNull: true },
     login_method: { type: DataTypes.STRING(30), allowNull: false },
     user_agent: { type: DataTypes.STRING(512), allowNull: true },
+    session_id: { type: DataTypes.STRING(36), allowNull: true, unique: true },
+    session_version: { type: DataTypes.INTEGER, allowNull: true },
+    expires_at: { type: DataTypes.DATE, allowNull: true },
+    last_seen_at: { type: DataTypes.DATE, allowNull: true },
+    logged_out_at: { type: DataTypes.DATE, allowNull: true },
     logged_in_at: {
       type: DataTypes.DATE,
       allowNull: false,
