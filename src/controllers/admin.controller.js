@@ -17819,6 +17819,170 @@ exports.getPermissionModules = async (req, res) => {
   }
 };
 
+
+exports.getPendingUnpaidLeadsByUser = async (req, res) => {
+  try {
+    const user_id = Number(req.params.user_id);
+
+    if (!Number.isInteger(user_id) || user_id <= 0) {
+      return res.status(400).json({
+        error: true,
+        message: 'Valid user_id is required'
+      });
+    }
+
+    // Get user's active leads with pending booking
+    const leads = await db.sales_leads.findAll({
+      where: {
+        assigned_sales_rep_id: user_id,
+        is_active: 1,
+        booking_id: {
+          [Op.ne]: null
+        },
+        lead_status: {
+          [Op.ne]: 'closed_lost'
+        }
+      },
+
+      attributes: [
+        'lead_id',
+        'booking_id',
+        'user_id',
+        'guest_email',
+        'lead_status',
+        'created_at',
+        'updated_at'
+      ],
+
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: true,
+
+          attributes: [
+            'stream_project_booking_id',
+            'event_date',
+            'status'
+          ],
+
+          where: {
+          event_date: {
+            [Op.gt]: new Date()
+          }
+        }
+        }
+      ],
+
+      order: [['created_at', 'DESC']]
+    });
+
+    if (!leads.length) {
+      return res.status(200).json({
+        error: false,
+        success: true,
+        message: 'No pending leads found',
+        count: 0,
+        data: []
+      });
+    }
+
+    // Get unique booking IDs
+    const bookingIds = [
+      ...new Set(
+        leads
+          .map((lead) => Number(lead.booking_id))
+          .filter((id) => Number.isInteger(id))
+      )
+    ];
+
+    if (!bookingIds.length) {
+      return res.status(200).json({
+        error: false,
+        success: true,
+        message: 'No pending unpaid leads found',
+        count: 0,
+        data: []
+      });
+    }
+
+    // Get paid bookings
+    const paymentRows = await db.sequelize.query(
+      `
+        SELECT
+          booking_id,
+          paid_amount,
+          payment_status,
+          quote_total,
+          due_amount
+        FROM booking_payment_summary
+        WHERE booking_id IN (:bookingIds)
+        
+      `,
+      {
+        replacements: {
+          bookingIds
+        },
+        type: QueryTypes.SELECT
+      }
+    );
+
+    // Create payment map
+    const paymentMap = new Map();
+
+    paymentRows.forEach((payment) => {
+      paymentMap.set(Number(payment.booking_id), payment);
+    });
+
+    // Final response
+   const result = leads
+  .filter((lead) => {
+    const payment = paymentMap.get(Number(lead.booking_id));
+
+    return payment && payment.payment_status !== 'paid';
+  })
+      .map((lead) => {
+        const payment = paymentMap.get(Number(lead.booking_id));
+        const data = lead.toJSON();
+
+        return {
+          lead_id: data.lead_id,
+          booking_id: data.booking_id,
+          user_id: data.user_id,
+          guest_email: data.guest_email,
+          lead_status: data.lead_status,
+
+          event_date: data.booking?.event_date || null,
+
+          // Payment information
+          paid_amount: Number(payment.paid_amount || 0),
+          payment_status: payment.payment_status,
+          quote_total: Number(payment.quote_total || 0),
+          due_amount: Number(payment.due_amount || 0),
+
+          created_at: data.created_at,
+          updated_at: data.updated_at
+        };
+      });
+
+    return res.status(200).json({
+      error: false,
+      success: true,
+      message: 'Pending leads fetched successfully',
+      count: result.length,
+      data: result
+    });
+
+  } catch (error) {
+    console.error('Error fetching pending paid leads:', error);
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
 exports.deleteUser = async (req, res) => {
   const user_id = Number(req.params.user_id);
   const { reason = null } = req.body || {};
