@@ -39,6 +39,9 @@ router.post('/logout', authController.logout);
 
 // ===== PASSWORD MANAGEMENT =====
 router.post('/forgot-password', authController.forgotPassword);
+router.post('/forgot-password/request-otp', authController.requestForgotPasswordOtp);
+router.post('/forgot-password/verify-otp', authController.verifyForgotPasswordOtp);
+router.post('/forgot-password/reset', authController.resetForgottenPassword);
 router.post('/reset-password', authController.resetPassword);
 router.post('/admin/generate-reset-link', authController.generateUserResetLinkForAdmin);
 router.post('/change-password', authenticate, authController.changePassword);

@@ -18,7 +18,7 @@ const rejectExpiredPassword = async (req, res, user) => {
   if (!status.expired) return false;
   res.status(403).json({ success: false, code: 'PASSWORD_EXPIRED', password_expired: true,
     expires_at: status.expires_at,
-    message: 'Your password has expired. Verify your email and set a new password to continue.' });
+    message: 'Your password has expired. Please reset your password to continue.' });
   return true;
 };
 
@@ -104,7 +104,6 @@ const authMiddleware = async (req, res, next) => {
     };
 
     if (await rejectExpiredPassword(req, res, user)) return;
-
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
