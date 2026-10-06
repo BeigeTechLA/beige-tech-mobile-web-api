@@ -5083,7 +5083,8 @@ exports.getAllProjectDetailsBoard = async (req, res) => {
 
 // Filters: upcoming (default), all, tbd, today, next_7_days, next_15_days, next_30_days,
 // last_7_days, last_15_days, last_30_days, custom (start_date + end_date)
-// Only is_active = 1 shoots are returned.
+// Both active and inactive shoots are returned so the globe can show cancelled
+// shoots (an inactive booking is treated as cancelled by the globe).
 const GLOBAL_SHOOT_DATE_COL = 'stream_project_booking.event_date';
 
 const buildGlobalShootRangeFilter = (rawRange, start_date, end_date) => {
@@ -5130,7 +5131,7 @@ exports.getGlobalShoots = async (req, res) => {
 
     const paidFilter = await getPaidCalendarFilter(req);
 
-    let whereConditions = { ...paidFilter, is_active: 1};
+    let whereConditions = { ...paidFilter };
     const andConditions = buildGlobalShootRangeFilter(range, start_date, end_date);
     if (andConditions.length) {
       whereConditions[Op.and] = andConditions;
