@@ -1,5 +1,6 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
+const { runChatMessageEmailDigestJob } = require('../services/chat-message-email-digest.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -2076,6 +2077,21 @@ exports.sendChatMessage = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message,
+    });
+  }
+};
+
+// Protected operational endpoint for running the six-hour digest immediately.
+// It uses the same persisted state as the scheduled job, so it cannot resend
+// rooms that have already been processed.
+exports.runChatMessageEmailDigest = async (req, res) => {
+  try {
+    const result = await runChatMessageEmailDigestJob();
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to run chat email digest',
     });
   }
 };

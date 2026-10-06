@@ -64,6 +64,7 @@ router.post('/room/:roomId/participants', authenticate, shootMessagesEdit, exter
 router.delete('/room/:roomId/participants/:userId', authenticate, shootMessagesEdit, externalChatController.removeChatParticipant);
 router.patch('/room/:roomId/mark-read', authenticate, shootMessagesView, externalChatController.markChatRoomRead);
 router.post('/messages/:roomId', authenticate, shootMessagesCreate, externalChatController.sendChatMessage);
+router.post('/digest/run', authenticate, messagesCreate, externalChatController.runChatMessageEmailDigest);
 router.get('/messages/:roomId', authenticate, shootMessagesView, externalChatController.getChatMessages);
 router.post('/messages/:messageId/edit', authenticate, shootMessagesEdit, externalChatController.editChatMessage);
 router.post('/messages/:messageId/delete', authenticate, shootMessagesEdit, externalChatController.deleteChatMessage);
