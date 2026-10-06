@@ -17820,7 +17820,7 @@ exports.getPermissionModules = async (req, res) => {
 };
 
 
-exports.getPendingUnpaidLeadsByUser = async (req, res) => {
+exports.getUserReassignments = async (req, res) => {
   try {
     const user_id = Number(req.params.user_id);
 
@@ -17831,17 +17831,18 @@ exports.getPendingUnpaidLeadsByUser = async (req, res) => {
       });
     }
 
-    // Get user's active leads with pending booking
+    // Get this user's active, assignable leads, whether or not they have a booking.
     const leads = await db.sales_leads.findAll({
       where: {
         assigned_sales_rep_id: user_id,
         is_active: 1,
-        booking_id: {
-          [Op.ne]: null
-        },
         lead_status: {
           [Op.ne]: 'closed_lost'
-        }
+        },
+        [Op.or]: [
+          { lead_source: null },
+          { lead_source: { [Op.ne]: 'converted bookings' } }
+        ]
       },
 
       attributes: [
@@ -17858,34 +17859,18 @@ exports.getPendingUnpaidLeadsByUser = async (req, res) => {
         {
           model: db.stream_project_booking,
           as: 'booking',
-          required: true,
+          required: false,
 
           attributes: [
             'stream_project_booking_id',
             'event_date',
             'status'
-          ],
-
-          where: {
-          event_date: {
-            [Op.gt]: new Date()
-          }
-        }
+          ]
         }
       ],
 
       order: [['created_at', 'DESC']]
     });
-
-    if (!leads.length) {
-      return res.status(200).json({
-        error: false,
-        success: true,
-        message: 'No pending leads found',
-        count: 0,
-        data: []
-      });
-    }
 
     // Get unique booking IDs
     const bookingIds = [
@@ -17896,18 +17881,37 @@ exports.getPendingUnpaidLeadsByUser = async (req, res) => {
       )
     ];
 
-    if (!bookingIds.length) {
-      return res.status(200).json({
-        error: false,
-        success: true,
-        message: 'No pending unpaid leads found',
-        count: 0,
-        data: []
-      });
-    }
+    // Fetch this user's assignable quotes independently of the lead list.
+    const quotes = await db.sales_quotes.findAll({
+      where: {
+        assigned_sales_rep_id: user_id,
+        status: { [Op.notIn]: ['rejected', 'expired', 'paid'] },
+        [Op.or]: [
+          { lead_id: null },
+          {
+            lead_id: {
+              [Op.notIn]: db.sequelize.literal(
+                "(SELECT lead_id FROM sales_leads WHERE LOWER(lead_source) = 'converted bookings' AND lead_id IS NOT NULL)"
+              )
+            }
+          }
+        ]
+      },
+      attributes: [
+        'sales_quote_id',
+        'quote_number',
+        'status',
+        'total',
+        'start_date',
+        'valid_until',
+        'created_at'
+      ],
+      order: [['created_at', 'DESC']]
+    });
+    const quoteData = quotes.map((quote) => quote.toJSON());
 
-    // Get paid bookings
-    const paymentRows = await db.sequelize.query(
+    // Attach payment details when a booking payment summary exists.
+    const paymentRows = bookingIds.length ? await db.sequelize.query(
       `
         SELECT
           booking_id,
@@ -17925,7 +17929,7 @@ exports.getPendingUnpaidLeadsByUser = async (req, res) => {
         },
         type: QueryTypes.SELECT
       }
-    );
+    ) : [];
 
     // Create payment map
     const paymentMap = new Map();
@@ -17935,46 +17939,40 @@ exports.getPendingUnpaidLeadsByUser = async (req, res) => {
     });
 
     // Final response
-   const result = leads
-  .filter((lead) => {
-    const payment = paymentMap.get(Number(lead.booking_id));
+    const result = leads.map((lead) => {
+      const payment = paymentMap.get(Number(lead.booking_id));
+      const data = lead.toJSON();
 
-    return payment && payment.payment_status !== 'paid';
-  })
-      .map((lead) => {
-        const payment = paymentMap.get(Number(lead.booking_id));
-        const data = lead.toJSON();
-
-        return {
-          lead_id: data.lead_id,
-          booking_id: data.booking_id,
-          user_id: data.user_id,
-          guest_email: data.guest_email,
-          lead_status: data.lead_status,
-
-          event_date: data.booking?.event_date || null,
-
-          // Payment information
-          paid_amount: Number(payment.paid_amount || 0),
-          payment_status: payment.payment_status,
-          quote_total: Number(payment.quote_total || 0),
-          due_amount: Number(payment.due_amount || 0),
-
-          created_at: data.created_at,
-          updated_at: data.updated_at
-        };
-      });
+      return {
+        lead_id: data.lead_id,
+        booking_id: data.booking_id,
+        user_id: data.user_id,
+        guest_email: data.guest_email,
+        lead_status: data.lead_status,
+        event_date: data.booking?.event_date || null,
+        paid_amount: Number(payment?.paid_amount || 0),
+        payment_status: payment?.payment_status || 'unpaid',
+        quote_total: Number(payment?.quote_total || 0),
+        due_amount: Number(payment?.due_amount || 0),
+        created_at: data.created_at,
+        updated_at: data.updated_at
+      };
+    });
 
     return res.status(200).json({
       error: false,
       success: true,
-      message: 'Pending leads fetched successfully',
+      message: 'User reassignment leads and quotes fetched successfully',
       count: result.length,
-      data: result
+      quote_count: quoteData.length,
+      data: {
+        leads: result,
+        quotes: quoteData
+      }
     });
 
   } catch (error) {
-    console.error('Error fetching pending paid leads:', error);
+    console.error('Error fetching user reassignment leads and quotes:', error);
 
     return res.status(500).json({
       error: true,
