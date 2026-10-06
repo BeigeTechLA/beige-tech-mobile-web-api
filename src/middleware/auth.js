@@ -11,6 +11,16 @@ const passwordExpiryExemptPaths = new Set([
   '/auth/password-expiry/change'
 ]);
 
+const rejectExpiredPassword = async (req, res, user) => {
+  const requestPath = String(req.originalUrl || req.path || '').split('?')[0];
+  if ([...passwordExpiryExemptPaths].some((path) => requestPath.endsWith(path))) return false;
+  const status = await passwordExpiryService.getExpiryStatus(user, Number(user.userType?.is_internal_member || 0) === 1);
+  if (!status.expired) return false;
+  res.status(403).json({ success: false, code: 'PASSWORD_EXPIRED', password_expired: true,
+    expires_at: status.expires_at, message: 'Your password has expired. Please reset your password to continue.' });
+  return true;
+};
+
 const validatePermissionVersion = async (decoded) => {
   const user = await db.users.findOne({
     where: {
@@ -92,24 +102,7 @@ const authMiddleware = async (req, res, next) => {
       isInternalMember: Number(user.userType?.is_internal_member || 0) === 1
     };
 
-    const requestPath = String(req.originalUrl || req.path || '').split('?')[0];
-    const isExpiryExempt = [...passwordExpiryExemptPaths].some((path) => requestPath.endsWith(path));
-    if (!isExpiryExempt) {
-      const passwordStatus = await passwordExpiryService.getExpiryStatus(
-        user,
-        req.user.isInternalMember
-      );
-      if (passwordStatus.expired) {
-        return res.status(403).json({
-          success: false,
-          code: 'PASSWORD_EXPIRED',
-          password_expired: true,
-          expires_at: passwordStatus.expires_at,
-          message: 'Your password has expired. Verify your email and set a new password to continue.'
-        });
-      }
-    }
-
+    if (await rejectExpiredPassword(req, res, user)) return;
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
@@ -166,7 +159,8 @@ const optionalAuth = async (req, res, next) => {
 
     const token = parts[1];
     const decoded = jwt.verify(token, config.jwtSecret);
-    await validatePermissionVersion(decoded);
+    const user = await validatePermissionVersion(decoded);
+    if (await rejectExpiredPassword(req, res, user)) return;
     req.user = {
       userId: decoded.userId,
       userTypeId: decoded.userTypeId,
@@ -205,7 +199,8 @@ const authenticateAdmin = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    await validatePermissionVersion(decoded);
+    const user = await validatePermissionVersion(decoded);
+    if (await rejectExpiredPassword(req, res, user)) return;
     req.user = {
       userId: decoded.userId,
       userTypeId: decoded.userTypeId,
@@ -238,5 +233,6 @@ module.exports = {
   authenticate: authMiddleware,  // Alias for compatibility
   optionalAuth,
   authenticateAdmin,
-  validatePermissionVersion
+  validatePermissionVersion,
+  rejectExpiredPassword
 };

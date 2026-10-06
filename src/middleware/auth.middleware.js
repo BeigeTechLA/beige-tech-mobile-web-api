@@ -22,6 +22,7 @@ exports.authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const user = await auth.validatePermissionVersion(decoded);
+    if (await auth.rejectExpiredPassword(req, res, user)) return;
 
     // Attach user info to request
     req.userId = decoded.userId;
@@ -112,7 +113,8 @@ exports.optionalAuth = async (req, res, next) => {
 
     const token = authHeader.substring(7);
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    await auth.validatePermissionVersion(decoded);
+    const user = await auth.validatePermissionVersion(decoded);
+    if (await auth.rejectExpiredPassword(req, res, user)) return;
     req.userId = decoded.userId;
     req.userRole = decoded.userRole;
 

@@ -34,6 +34,7 @@ const {
 } = require('../utils/creatorOnboarding');
 const accountCreditService = require('../services/account-credit.service');
 const passwordExpiryService = require('../services/internal-password-expiry.service');
+const passwordResetService = require('../services/password-reset.service')({ db, emailService, passwordExpiryService });
 
 const getRequestIpAddress = (req) => {
   return String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/i, '').trim().slice(0, 45) || null;
@@ -75,7 +76,7 @@ const getIpLocation = async (ipAddress) => {
   }
 };
 
-const recordSuccessfulLogin = async (req, user, loginMethod, token) => {
+const recordSuccessfulLogin = async (req, user, loginMethod, token, transaction) => {
   try {
     if (Number(user?.userType?.is_internal_member || 0) !== 1) return;
     const decoded = jwt.decode(token);
@@ -91,13 +92,17 @@ const recordSuccessfulLogin = async (req, user, loginMethod, token) => {
       session_version: user.permissions_version,
       expires_at: new Date(decoded.exp * 1000),
       last_seen_at: new Date()
-    });
+    }, { transaction });
 
     // Do not delay a successful login while the external IP lookup completes.
-    getIpLocation(ipAddress).then((location) => {
-      if (!location || (!location.city && !location.country)) return;
-      return loginHistory.update(location);
-    }).catch((error) => console.error('Login location audit update error:', error.message));
+    const updateLocation = () => {
+      void getIpLocation(ipAddress).then((location) => {
+        if (!location || (!location.city && !location.country)) return;
+        return loginHistory.update(location);
+      }).catch((error) => console.error('Login location audit update error:', error.message));
+    };
+    if (transaction) transaction.afterCommit(updateLocation);
+    else updateLocation();
   } catch (error) {
     // Never issue a tracked credential without persisting its revocable session.
     console.error('Login audit logging error:', error);
@@ -609,7 +614,7 @@ function splitGoogleName(displayName, email) {
   return { firstName, lastName };
 }
 
-async function buildAuthenticatedUserResponse(user, req) {
+async function buildAuthenticatedUserResponse(user, req, loginMethod = 'google', transaction) {
   const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
 
   if (!user.userType) {
@@ -650,10 +655,12 @@ async function buildAuthenticatedUserResponse(user, req) {
   affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
   const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id, is_internal_member ? randomUUID() : undefined);
-  await recordSuccessfulLogin(req, user, 'google', token);
+  await recordSuccessfulLogin(req, user, loginMethod, token, transaction);
   const permissions = await getCombinedUserPermissions(user.id, user.user_type);
+  const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
 
   return {
+    password_expired: passwordStatus.expired,
     role,
     user_type_id,
     token,
@@ -1343,12 +1350,14 @@ exports.login = async (req, res) => {
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
       await recordSuccessfulLogin(req, user, 'password', token);
+      const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
 
       // const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
         success: true,
         message: "Login successful",
+        password_expired: passwordStatus.expired,
         user: {
           id: user.id,
           name: user.name,
@@ -1495,10 +1504,12 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
       await recordSuccessfulLogin(req, user, 'otp', token);
+      const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
 
       return res.json({
         success: true,
         message: "OTP login successful",
+        password_expired: passwordStatus.expired,
         user: {
           id: user.id,
           name: user.name,
@@ -2135,104 +2146,36 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
-const getPasswordExpiryUser = async (req) => User.findOne({
-  where: { id: req.user?.userId },
-  include: [{ model: UserType, as: 'userType', attributes: ['is_internal_member'] }]
-});
-
-exports.requestPasswordExpiryOtp = async (req, res) => {
+// Expiry and recovery share a single-use OTP proof and transactional reset.
+// Keep legacy reset links working for already-issued links and admin tools.
+const passwordResetHandler = (purpose, action) => async (req, res) => {
   try {
-    const user = await getPasswordExpiryUser(req);
-    const isInternal = Number(user?.userType?.is_internal_member || 0) === 1;
-    const status = user ? await passwordExpiryService.getExpiryStatus(user, isInternal) : null;
-    if (!user || !status?.expired) {
-      return res.status(403).json({ success: false, message: 'Password expiry verification is not available for this account.' });
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (purpose === 'forgot' && (!email || email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+      return res.status(400).json({ success: false, message: 'Enter a valid email address.' });
     }
-    const previousExpiry = user.password_expiry_otp_expires_at
-      ? new Date(user.password_expiry_otp_expires_at).getTime()
-      : 0;
-    if (previousExpiry > Date.now() + 9 * 60 * 1000) {
-      return res.status(429).json({ success: false, message: 'Please wait one minute before requesting another verification code.' });
-    }
-
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
-    const emailResult = await emailService.sendPasswordExpiryOTP({ name: user.name, email: user.email }, otp);
-    if (!emailResult.success) {
-      return res.status(503).json({ success: false, message: 'We could not send a verification code. Please try again later.' });
-    }
-    await user.update({
-      password_expiry_otp_hash: await bcrypt.hash(otp, 10),
-      password_expiry_otp_expires_at: new Date(Date.now() + 10 * 60 * 1000),
-      password_expiry_otp_verified_at: null,
-      password_expiry_otp_attempts: 0
-    });
-    return res.json({ success: true, message: 'A verification code has been sent to your registered email.' });
+    const identity = purpose === 'expiry' ? { id: req.user.userId } : { email };
+    let result;
+    if (action === 'request') result = await passwordResetService.request(identity, purpose);
+    else if (action === 'verify') result = await passwordResetService.verify(identity, purpose, req.body?.otp);
+    else result = await passwordResetService.complete(identity, purpose, req.body,
+      (user, transaction) => buildAuthenticatedUserResponse(user, req, 'password_reset', transaction));
+    const { status = 200, ...body } = result;
+    if (status === 429) res.set('Retry-After', String(body.retry_after_seconds));
+    res.set('Cache-Control', 'no-store');
+    return res.status(status).json(body);
   } catch (error) {
-    console.error('Request password expiry OTP error:', error);
-    return res.status(500).json({ success: false, message: 'Unable to request verification code.' });
+    console.error('Password reset flow error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to complete this request. Please try again.' });
   }
 };
 
-exports.verifyPasswordExpiryOtp = async (req, res) => {
-  try {
-    const otp = String(req.body?.otp || '').trim();
-    const user = await getPasswordExpiryUser(req);
-    if (!user || !/^\d{6}$/.test(otp) || !user.password_expiry_otp_hash || !user.password_expiry_otp_expires_at) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
-    }
-    if (new Date(user.password_expiry_otp_expires_at).getTime() < Date.now() || Number(user.password_expiry_otp_attempts) >= 5) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
-    }
-    const valid = await bcrypt.compare(otp, user.password_expiry_otp_hash);
-    if (!valid) {
-      await user.update({ password_expiry_otp_attempts: Number(user.password_expiry_otp_attempts) + 1 });
-      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
-    }
-    await user.update({ password_expiry_otp_verified_at: new Date() });
-    return res.json({ success: true, message: 'Email verified. You can now set a new password.' });
-  } catch (error) {
-    console.error('Verify password expiry OTP error:', error);
-    return res.status(500).json({ success: false, message: 'Unable to verify code.' });
-  }
-};
-
-exports.changeExpiredPassword = async (req, res) => {
-  try {
-    const { currentPassword, newPassword, confirmPassword } = req.body || {};
-    const user = await getPasswordExpiryUser(req);
-    const verifiedAt = user?.password_expiry_otp_verified_at ? new Date(user.password_expiry_otp_verified_at).getTime() : 0;
-    if (!user || !verifiedAt || Date.now() - verifiedAt > 10 * 60 * 1000) {
-      return res.status(403).json({ success: false, message: 'Verify your email before changing your password.' });
-    }
-    if (typeof currentPassword !== 'string' || !currentPassword) {
-      return res.status(400).json({ success: false, message: 'Enter your current password.' });
-    }
-    if (typeof newPassword !== 'string' || typeof confirmPassword !== 'string' || newPassword !== confirmPassword || newPassword.length < 8) {
-      return res.status(400).json({ success: false, message: 'Passwords must match and be at least 8 characters long.' });
-    }
-    if (!user.password_hash || !await bcrypt.compare(currentPassword, user.password_hash)) {
-      return res.status(400).json({ success: false, message: 'Your current password is incorrect.' });
-    }
-    // Compare against the stored hash, not just the supplied current-password text.
-    if (await bcrypt.compare(newPassword, user.password_hash)) {
-      return res.status(400).json({ success: false, message: 'Your new password must be different from your current password.' });
-    }
-    await user.update({
-      password_hash: await bcrypt.hash(newPassword, 10),
-      password_changed_at: new Date(),
-      password_expiry_otp_hash: null,
-      password_expiry_otp_expires_at: null,
-      password_expiry_otp_verified_at: null,
-      password_expiry_otp_attempts: 0,
-      permissions_version: Number(user.permissions_version || 1) + 1,
-      updated_at: new Date()
-    });
-    return res.json({ success: true, force_logout: true, message: 'Password changed. Please sign in again on this device.' });
-  } catch (error) {
-    console.error('Change expired password error:', error);
-    return res.status(500).json({ success: false, message: 'Unable to change password.' });
-  }
-};
+exports.requestPasswordExpiryOtp = passwordResetHandler('expiry', 'request');
+exports.verifyPasswordExpiryOtp = passwordResetHandler('expiry', 'verify');
+exports.changeExpiredPassword = passwordResetHandler('expiry', 'complete');
+exports.requestForgotPasswordOtp = passwordResetHandler('forgot', 'request');
+exports.verifyForgotPasswordOtp = passwordResetHandler('forgot', 'verify');
+exports.resetForgottenPassword = passwordResetHandler('forgot', 'complete');
 
 /**
  * Admin Action: Generates a manual reset link to be copied
