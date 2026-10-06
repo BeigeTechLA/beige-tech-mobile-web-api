@@ -75,6 +75,7 @@ const {
   MEETING_RESCHEDULED_TEMPLATE_ID,
   MEETING_SCHEDULED_TEMPLATE_ID,
   MESSAGING_INITIATED_TEMPLATE_ID,
+  CHAT_MESSAGE_DIGEST_TEMPLATE_ID,
   PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
   POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
   EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID,
@@ -3488,6 +3489,28 @@ const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} 
   });
 };
 
+const sendChatMessageDigestTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!CHAT_MESSAGE_DIGEST_TEMPLATE_ID) {
+    return { success: false, error: 'CHAT_MESSAGE_DIGEST_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'New messages in your chat room',
+    templateId: CHAT_MESSAGE_DIGEST_TEMPLATE_ID,
+    dynamicTemplateData: {
+      chat_room_id: data?.chat_room_id || '',
+      chat_name: data?.chat_name || '',
+      project_name: data?.project_name || data?.chat_name || '',
+      shoot_name: data?.shoot_name || data?.project_name || data?.chat_name || 'your conversation',
+      sender_name: data?.sender_name || '',
+      message_preview: data?.message_preview || '',
+      event_type: 'six_hour_message_digest',
+      sent_at: data?.sent_at || new Date().toISOString(),
+    },
+  });
+};
+
 const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {
   if (!PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID) {
     return { success: false, error: 'PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID is not configured' };
@@ -4308,6 +4331,7 @@ module.exports = {
   sendBeigeCreditsReceivedEmail,
   sendMeetingScheduledTemplateEmail,
   sendMessagingInitiatedTemplateEmail,
+  sendChatMessageDigestTemplateEmail,
   sendPreProductionUploadedTemplateEmail,
   sendPostProductionUploadedTemplateEmail,
   sendRawFilesUploadedClientEmail,

@@ -73,7 +73,7 @@ const runChatMessageEmailDigestJob = async () => {
         if (messageAt <= (toDate(state?.last_message_at) || cutoff)) continue;
         const recipients = recipientsFrom(await request(`/participants/${encodeURIComponent(roomId)}`));
         if (!recipients.length) continue;
-        const emailResult = await emailService.sendMessagingInitiatedTemplateEmail({
+        const emailResult = await emailService.sendChatMessageDigestTemplateEmail({
           recipients: recipients.map((recipient) => ({ ...recipient, data: { client_name: recipient.name || 'there', recipient_name: recipient.name, shoot_name: 'your conversation', chat_url: dashboardUrl(recipient.role) } })),
           data: { chat_room_id: roomId, chat_name: 'your conversation', project_name: 'your conversation', sender_name: message.sent_by_name || message.sent_by_email || '', message_preview: message.message || message.file_name || 'A new message was posted', event_type: 'six_hour_message_digest', sent_at: new Date().toISOString() },
         });
