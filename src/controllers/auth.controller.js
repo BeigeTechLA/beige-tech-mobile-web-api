@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
-const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { randomUUID } = require('node:crypto');
+const { ipType } = require('../utils/login-session-details');
 const { Op } = require('sequelize');
 const db = require('../models');
 const { users, user_type, crew_members, crew_member_files } = require('../models');
@@ -32,6 +33,83 @@ const {
   syncCreatorRegistrationComplete,
 } = require('../utils/creatorOnboarding');
 const accountCreditService = require('../services/account-credit.service');
+const passwordExpiryService = require('../services/internal-password-expiry.service');
+const webSessionService = require('../services/web-session.service');
+const passwordResetService = require('../services/password-reset.service')({ db, emailService, passwordExpiryService });
+
+const getRequestIpAddress = (req) => {
+  return String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/i, '').trim().slice(0, 45) || null;
+};
+
+const isPublicIpAddress = (ipAddress) => {
+  return ipType(ipAddress) === 'public';
+};
+
+const getIpLocation = async (ipAddress) => {
+  if (!isPublicIpAddress(ipAddress) || typeof fetch !== 'function') return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const configuredProviderBaseUrl = process.env.IP_GEOLOCATION_BASE_URL;
+    const lookupUrl = configuredProviderBaseUrl
+      ? `${String(configuredProviderBaseUrl).replace(/\/+$/, '')}/${encodeURIComponent(ipAddress)}`
+      : `https://ipwho.is/${encodeURIComponent(ipAddress)}`;
+    const response = await fetch(lookupUrl, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) throw new Error(`IP geolocation provider returned HTTP ${response.status}`);
+
+    const location = await response.json();
+    if (location.success === false) {
+      throw new Error(location.message || 'IP geolocation provider could not resolve the IP address');
+    }
+    return {
+      city: String(location.city || '').trim().slice(0, 120) || null,
+      country: String(location.country_name || location.country || '').trim().slice(0, 120) || null
+    };
+  } catch (error) {
+    console.error('IP geolocation lookup error:', error.message);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const recordSuccessfulLogin = async (req, user, loginMethod, token, sessionExpiresAt, transaction) => {
+  try {
+    if (Number(user?.userType?.is_internal_member || 0) !== 1) return;
+    const decoded = jwt.decode(token);
+    if (!decoded?.sessionId || !decoded.exp) throw new Error('Missing login session claims');
+    const ipAddress = getRequestIpAddress(req);
+    const loginHistory = await db.user_login_history.create({
+      user_id: user.id,
+      ip_address: ipAddress,
+      login_method: loginMethod,
+      user_agent: String(req.get('user-agent') || '').slice(0, 512) || null,
+      logged_in_at: new Date(),
+      session_id: decoded.sessionId,
+      session_version: user.permissions_version,
+      expires_at: sessionExpiresAt || new Date(decoded.exp * 1000),
+      last_seen_at: new Date()
+    }, { transaction });
+
+    // Do not delay a successful login while the external IP lookup completes.
+    const updateLocation = () => {
+      void getIpLocation(ipAddress).then((location) => {
+        if (!location || (!location.city && !location.country)) return;
+        return loginHistory.update(location);
+      }).catch((error) => console.error('Login location audit update error:', error.message));
+    };
+    if (transaction) transaction.afterCommit(updateLocation);
+    else updateLocation();
+  } catch (error) {
+    // Never issue a tracked credential without persisting its revocable session.
+    console.error('Login audit logging error:', error);
+    throw error;
+  }
+};
 
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(getGoogleClientId());
@@ -349,9 +427,9 @@ const PERMISSIONS_MAP = {
 /**
  * Generate JWT tokens
  */
-const generateTokens = (userId, userRole, permissionsVersion, userTypeId) => {
+const generateTokens = (userId, userRole, permissionsVersion, userTypeId, sessionId) => {
   const token = jwt.sign(
-    { userId, userRole, permissionsVersion, userTypeId },
+    { userId, userRole, permissionsVersion, userTypeId, ...(sessionId ? { sessionId } : {}) },
     process.env.JWT_SECRET,
     { expiresIn: config.jwtExpiresIn }
   );
@@ -359,42 +437,24 @@ const generateTokens = (userId, userRole, permissionsVersion, userTypeId) => {
   return { token };
 };
 
-const REFRESH_COOKIE = 'revure_refresh_session';
-const hashSessionToken = (value) => crypto.createHash('sha256').update(value).digest('hex');
-const getRefreshCookie = (req) => String(req.headers.cookie || '').split(';').map((part) => part.trim())
-  .find((part) => part.startsWith(REFRESH_COOKIE + '='))?.slice(REFRESH_COOKIE.length + 1) || null;
-const refreshCookieOptions = () => ({
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax',
-  path: '/v1/auth',
-  maxAge: config.refreshSessionDays * 24 * 60 * 60 * 1000
-});
-const clearRefreshCookieOptions = () => ({
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax',
-  path: '/v1/auth'
-});
-
-async function startWebSession(res, req, userId) {
-  const rawToken = crypto.randomBytes(48).toString('base64url');
-  const now = new Date();
-  await db.user_sessions.create({
-    user_id: userId,
-    token_hash: hashSessionToken(rawToken),
-    expires_at: new Date(now.getTime() + config.refreshSessionDays * 24 * 60 * 60 * 1000),
-    last_used_at: now,
-    user_agent: String(req.get('user-agent') || '').slice(0, 512) || null,
-    ip_address: String(req.ip || '').slice(0, 64) || null,
-    created_at: now
-  });
-  res.cookie(REFRESH_COOKIE, rawToken, refreshCookieOptions());
-}
-
-async function rotateWebSession(res, req, session) {
-  await session.update({ revoked_at: new Date(), last_used_at: new Date() });
-  await startWebSession(res, req, session.user_id);
+async function issueLoginSession(req, res, user, loginMethod, existingTransaction) {
+  const internal = Number(user.userType?.is_internal_member || 0) === 1;
+  const sessionId = internal ? randomUUID() : undefined;
+  const tokens = generateTokens(user.id, user.userType?.user_role || 'client', user.permissions_version,
+    user.userType?.user_type_id || user.user_type, sessionId);
+  const createSession = async (transaction) => {
+    const webSession = await webSessionService.create(req, user, sessionId, transaction);
+    await recordSuccessfulLogin(req, user, loginMethod, tokens.token, webSession.expiresAt, transaction);
+    return webSession;
+  };
+  const session = existingTransaction
+    ? await createSession(existingTransaction)
+    : await db.sequelize.transaction(createSession);
+  // A password reset supplies its transaction. Do not publish a refresh
+  // credential until the password, revocations and new session have committed.
+  if (existingTransaction) existingTransaction.afterCommit(() => webSessionService.setCookie(res, session.rawToken));
+  else webSessionService.setCookie(res, session.rawToken);
+  return tokens;
 }
 
 /**
@@ -569,7 +629,7 @@ function splitGoogleName(displayName, email) {
   return { firstName, lastName };
 }
 
-async function buildAuthenticatedUserResponse(user) {
+async function buildAuthenticatedUserResponse(user, req, res, loginMethod = 'google', transaction) {
   const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
 
   if (!user.userType) {
@@ -609,10 +669,12 @@ async function buildAuthenticatedUserResponse(user) {
   });
   affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-  const { token } = generateTokens(user.id, role, user.permissions_version, user_type_id);
   const permissions = await getCombinedUserPermissions(user.id, user.user_type);
+  const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
+  const { token } = await issueLoginSession(req, res, user, loginMethod, transaction);
 
   return {
+    password_expired: passwordStatus.expired,
     role,
     user_type_id,
     token,
@@ -1081,7 +1143,9 @@ exports.verifyEmail = async (req, res) => {
     });
 
     const role = userTypeRecord?.user_role || 'client';
-    const { token } = generateTokens(user.id, role);
+    const { token } = await issueLoginSession(req, res, {
+      id: user.id, permissions_version: user.permissions_version, user_type: user.user_type, userType: userTypeRecord
+    }, 'email_otp');
     const permissions = getPermissionsForRole(role);
 
     return res.status(200).json({
@@ -1189,49 +1253,8 @@ const getCombinedUserPermissions = async (userId, roleId) => {
   return formattedPermissions;
 };
 
-exports.refreshSession = async (req, res) => {
-  try {
-    const rawToken = getRefreshCookie(req);
-    if (!rawToken) return res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
-    const session = await db.user_sessions.findOne({
-      where: { token_hash: hashSessionToken(rawToken), revoked_at: null, expires_at: { [Op.gt]: new Date() } }
-    });
-    if (!session) {
-      res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
-      return res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
-    }
-    const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
-    const user = await UserAll.findOne({
-      where: { id: session.user_id, is_active: 1 },
-      include: [{ model: UserType, as: 'userType', attributes: ['user_type_id', 'user_role'] }]
-    });
-    if (!user) {
-      await session.update({ revoked_at: new Date() });
-      res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
-      return res.status(401).json({ success: false, message: 'Session is no longer valid.' });
-    }
-    await rotateWebSession(res, req, session);
-    const role = user.userType?.user_role || 'client';
-    const userTypeId = user.userType?.user_type_id || user.user_type || null;
-    const { token } = generateTokens(user.id, role, user.permissions_version, userTypeId);
-    return res.status(200).json({ success: true, token });
-  } catch (error) {
-    console.error('Refresh session error:', error);
-    return res.status(500).json({ success: false, message: 'Unable to refresh session.' });
-  }
-};
-
-exports.logout = async (req, res) => {
-  try {
-    const rawToken = getRefreshCookie(req);
-    if (rawToken) await db.user_sessions.update({ revoked_at: new Date() }, { where: { token_hash: hashSessionToken(rawToken), revoked_at: null } });
-    res.clearCookie(REFRESH_COOKIE, clearRefreshCookieOptions());
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Logout error:', error);
-    return res.status(500).json({ success: false, message: 'Unable to log out.' });
-  }
-};
+exports.refreshSession = (req, res) => webSessionService.refresh(req, res, generateTokens);
+exports.logout = webSessionService.logout;
 
 /**
  * Login user with email/password or phone/OTP
@@ -1332,22 +1355,21 @@ exports.login = async (req, res) => {
       });
       affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      // Generate tokens
-      const { token } = generateTokens(user.id, role, user.permissions_version, user_type_id);
-
       const permissions = await getCombinedUserPermissions(
         user.id,
         user.user_type
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
-      // const permissions = getPermissionsForRole(role);
+      const { token } = await issueLoginSession(req, res, user, 'password');
+      const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
 
-      await startWebSession(res, req, user.id);
+      // const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
         success: true,
         message: "Login successful",
+        password_expired: passwordStatus.expired,
         user: {
           id: user.id,
           name: user.name,
@@ -1484,7 +1506,6 @@ const affiliate = await Affiliate.findOne({
 });
 affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      const { token } = generateTokens(user.id, role, user.permissions_version);
       
       const permissions = await getCombinedUserPermissions(
         user.id,
@@ -1492,9 +1513,13 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
+      const { token } = await issueLoginSession(req, res, user, 'otp');
+      const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
+
       return res.json({
         success: true,
         message: "OTP login successful",
+        password_expired: passwordStatus.expired,
         user: {
           id: user.id,
           name: user.name,
@@ -1902,8 +1927,7 @@ exports.googleLogin = async (req, res) => {
       });
     }
 
-    const authPayload = await buildAuthenticatedUserResponse(user);
-    await startWebSession(res, req, user.id);
+    const authPayload = await buildAuthenticatedUserResponse(user, req, res);
 
     return res.status(isSignup && (createdClientId || createdCrewMemberId) ? 201 : 200).json({
       success: true,
@@ -1938,7 +1962,8 @@ exports.googleLogin = async (req, res) => {
  */
 exports.changePassword = async (req, res) => {
   try {
-    const { oldPassword, newPassword, confirmPassword, userId } = req.body;
+    const { oldPassword, newPassword, confirmPassword } = req.body;
+    const userId = req.user?.userId;
 
     if (!userId || !oldPassword || !newPassword || !confirmPassword) {
       return res.status(400).json({
@@ -1974,13 +1999,19 @@ exports.changePassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
     await User.update(
-      { password_hash: hashedPassword },
+      {
+        password_hash: hashedPassword,
+        password_changed_at: new Date(),
+        permissions_version: Number(user.permissions_version || 1) + 1,
+        updated_at: new Date()
+      },
       { where: { id: user.id } }
     );
 
     return res.json({
       success: true,
-      message: 'Password changed successfully'
+      force_logout: true,
+      message: 'Password changed successfully. Please sign in again.'
     });
 
   } catch (error) {
@@ -2099,15 +2130,19 @@ exports.resetPassword = async (req, res) => {
     await User.update(
       {
         password_hash: hashedPassword,
+        password_changed_at: new Date(),
         reset_token: null,
-        reset_token_expiry: null
+        reset_token_expiry: null,
+        permissions_version: Number(user.permissions_version || 1) + 1,
+        updated_at: new Date()
       },
       { where: { id: user.id } }
     );
 
     return res.json({
       success: true,
-      message: 'Password has been reset successfully'
+      force_logout: true,
+      message: 'Password has been reset successfully. Please sign in again.'
     });
 
   } catch (error) {
@@ -2119,6 +2154,37 @@ exports.resetPassword = async (req, res) => {
     });
   }
 };
+
+// Expiry and recovery share a single-use OTP proof and transactional reset.
+// Keep legacy reset links working for already-issued links and admin tools.
+const passwordResetHandler = (purpose, action) => async (req, res) => {
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (purpose === 'forgot' && (!email || email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+      return res.status(400).json({ success: false, message: 'Enter a valid email address.' });
+    }
+    const identity = purpose === 'expiry' ? { id: req.user.userId } : { email };
+    let result;
+    if (action === 'request') result = await passwordResetService.request(identity, purpose);
+    else if (action === 'verify') result = await passwordResetService.verify(identity, purpose, req.body?.otp);
+    else result = await passwordResetService.complete(identity, purpose, req.body,
+      (user, transaction) => buildAuthenticatedUserResponse(user, req, res, 'password_reset', transaction));
+    const { status = 200, ...body } = result;
+    if (status === 429) res.set('Retry-After', String(body.retry_after_seconds));
+    res.set('Cache-Control', 'no-store');
+    return res.status(status).json(body);
+  } catch (error) {
+    console.error('Password reset flow error:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to complete this request. Please try again.' });
+  }
+};
+
+exports.requestPasswordExpiryOtp = passwordResetHandler('expiry', 'request');
+exports.verifyPasswordExpiryOtp = passwordResetHandler('expiry', 'verify');
+exports.changeExpiredPassword = passwordResetHandler('expiry', 'complete');
+exports.requestForgotPasswordOtp = passwordResetHandler('forgot', 'request');
+exports.verifyForgotPasswordOtp = passwordResetHandler('forgot', 'verify');
+exports.resetForgottenPassword = passwordResetHandler('forgot', 'complete');
 
 /**
  * Admin Action: Generates a manual reset link to be copied
@@ -2415,6 +2481,10 @@ exports.quickRegister = async (req, res) => {
 
     // If user exists, return user info
     if (existingUser) {
+      // Internal accounts must authenticate, never receive tokens via a booking signup.
+      if (Number(existingUser.userType?.is_internal_member || 0) === 1) {
+        return res.status(409).json({ success: false, message: 'Please sign in to your existing account.' });
+      }
       const role = existingUser.userType?.user_role || 'client';
       const { token } = generateTokens(existingUser.id, role);
       const permissions = getPermissionsForRole(role);
@@ -3412,12 +3482,16 @@ exports.changePasswordclient = async (req, res) => {
     // Update the user's password in the database
     user.password_hash = hashedNewPassword;
     user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
+    user.password_changed_at = new Date();
+    user.permissions_version = Number(user.permissions_version || 1) + 1;
+    user.updated_at = new Date();
     await user.save();
 
     return res.status(200).json({
       success: true,
       message: hadPassword ? 'Password updated successfully' : 'Password set successfully',
-      has_password: true
+      has_password: true,
+      force_logout: true
     });
 
   } catch (error) {
@@ -3483,12 +3557,16 @@ exports.changePasswordCrewMember = async (req, res) => {
 
     user.password_hash = hashedNewPassword;
     user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
+    user.password_changed_at = new Date();
+    user.permissions_version = Number(user.permissions_version || 1) + 1;
+    user.updated_at = new Date();
     await user.save();
 
     return res.status(200).json({
       success: true,
       message: hadPassword ? 'Password changed successfully' : 'Password set successfully',
-      has_password: true
+      has_password: true,
+      force_logout: true
     });
 
   } catch (error) {
