@@ -1043,8 +1043,8 @@ const sendChatPushNotifications = async ({
   messagePreview = '',
   recipientTargets = [],
   mentionedUserIds = [],
+  sendPush = true,
 }) => {
-  /*
   try {
     const senderId = String(sender?.id || '').trim();
     const mentionIds = new Set(
@@ -1103,7 +1103,7 @@ const sendChatPushNotifications = async ({
         referenceType: 'chat_room',
         payload,
         actionLabel: 'View message',
-        sendPush: true,
+        sendPush,
       });
     }));
 
@@ -1123,7 +1123,6 @@ const sendChatPushNotifications = async ({
       message: error.message || error,
     });
   }
-    */
 };
 
 const sendChatNotificationTemplate = async ({
@@ -1158,6 +1157,15 @@ const sendChatNotificationTemplate = async ({
     if (!recipientTargets.length) {
       recipientTargets = await getChatBookingFallbackRecipients(projectId);
     }
+
+    await sendChatPushNotifications({
+      roomId,
+      bookingId: projectId,
+      sender,
+      eventType: eventType === 'participant_added' ? 'messaging_initiated' : eventType,
+      messagePreview,
+      recipientTargets,
+    });
 
     // A room-creation email is intentionally sent to every chat member with a
     // valid email address. The email service removes duplicate addresses.
@@ -2239,6 +2247,47 @@ exports.sendChatMessage = async (req, res) => {
         },
       }),
     });
+
+    const mentionedUserIds =
+      req.body.mentioned_user_ids ||
+      req.body.mentionedUserIds ||
+      req.body.mentions ||
+      req.body.mentionedUsers ||
+      [];
+
+    const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+    const { envelope } = extractParticipantEnvelope(participantPayload || {});
+    const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
+    let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
+    const mappedBookingId = await getMappedBookingIdForRoom(req.params.roomId);
+
+    if (!recipientTargets.length && mappedBookingId) {
+      recipientTargets = await getChatBookingFallbackRecipients(mappedBookingId);
+    }
+
+    // The centralized chat service already sends the normal message push.
+    // Store the matching MySQL dashboard record here without a second popup.
+    await sendChatPushNotifications({
+      roomId: req.params.roomId,
+      bookingId: mappedBookingId,
+      sender,
+      eventType: 'direct_message',
+      messagePreview: req.body.message,
+      recipientTargets,
+      sendPush: false,
+    });
+
+    if (Array.isArray(mentionedUserIds) && mentionedUserIds.length) {
+      await sendChatPushNotifications({
+        roomId: req.params.roomId,
+        bookingId: mappedBookingId,
+        sender,
+        eventType: 'mention',
+        messagePreview: req.body.message,
+        recipientTargets,
+        mentionedUserIds,
+      });
+    }
 
     return res.status(200).json(result);
   } catch (error) {

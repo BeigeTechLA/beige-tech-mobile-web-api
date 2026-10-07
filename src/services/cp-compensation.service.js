@@ -3,7 +3,7 @@ const config = require('../config/config');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const bookingPricingService = require('./booking-pricing.service');
 const emailService = require('../utils/emailService');
-const pushNotificationService = require('./push-notification.service');
+const appNotificationService = require('./app-notification.service');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -1655,11 +1655,17 @@ async function sendNewShootRequestPushNotifications({ bookingId, creatorIds, cre
 
       const estimatedEarnings = Number(creator.total_compensation || 0).toFixed(2);
       try {
-        await pushNotificationService.sendPushToUser({
+        await appNotificationService.createAndPushNotification({
           userId: recipientUserId,
           title: 'New shoot request',
-          body: `${shootName} has been assigned to you. Estimated earnings: $${estimatedEarnings}.`,
-          data: {
+          message: `${shootName} has been assigned to you. Estimated earnings: $${estimatedEarnings}.`,
+          topic: 'shoots',
+          category: 'shoots',
+          type: 'new_shoot_request',
+          referenceId: String(bookingId),
+          referenceType: 'booking',
+          actionLabel: 'View details',
+          payload: {
             topic: 'shoots',
             category: 'shoots',
             type: 'new_shoot_request',

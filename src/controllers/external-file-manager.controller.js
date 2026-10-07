@@ -621,7 +621,6 @@ const sendClientFilePush = async ({
   data = {},
   dedupeWindowSeconds = 0,
 }) => {
-  /*
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const userId = await resolveClientPushUserId(plainBooking);
@@ -658,7 +657,6 @@ const sendClientFilePush = async ({
       message: error.message || error,
     });
   }
-    */
 };
 
 const sendAssignedCpFilePush = async ({
@@ -669,7 +667,6 @@ const sendAssignedCpFilePush = async ({
   data = {},
   dedupeWindowSeconds = 0,
 }) => {
-  /*
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const assignedCrews = Array.isArray(plainBooking?.assigned_crews) ? plainBooking.assigned_crews : [];
@@ -712,7 +709,6 @@ const sendAssignedCpFilePush = async ({
       message: error.message || error,
     });
   }
-    */
 };
 
 const sendFilesForEditingInternalEmailForCopy = async ({
