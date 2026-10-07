@@ -1796,7 +1796,9 @@ exports.addParticipants = async (req, res) => {
   try {
     const { meeting, booking, state } = await getMeetingByIdInternal(req.params.meetingId);
     const role = String(req.body.role || '').toLowerCase();
-    const userIds = Array.isArray(req.body.user_ids) ? req.body.user_ids : [];
+    const userIds = [...new Set(
+      (Array.isArray(req.body.user_ids) ? req.body.user_ids : []).map(toPositiveInt)
+    )];
 
     if (!['cp', 'manager'].includes(role)) {
       return res.status(400).json({ message: 'role must be cp or manager' });
@@ -1810,6 +1812,12 @@ exports.addParticipants = async (req, res) => {
       role === 'cp' ? state.cps : state.participants,
       additions
     );
+
+    // Re-submitting existing participants is a successful no-op. This avoids
+    // duplicate writes and duplicate invitations when the UI retries a request.
+    if (!newAdditions.length) {
+      return res.status(200).json(formatMeeting(meeting, booking, state));
+    }
 
     const nextState = {
       ...state,
