@@ -901,9 +901,7 @@ const writeMeetingShootHistory = async ({ req, meeting, action, reason }) => {
   }
 };  
 
-const getCrewRecordById = async (crewMemberId) => {
-  const normalizedCrewId = toPositiveInt(crewMemberId);
-  if (!normalizedCrewId) return null;
+const getCrewRecordById = async (identifier, idType = 'legacy') => {
 
   // CPs are now exposed to the web app by their users.id. Keep accepting the
   // old crew_member_id as a fallback so existing clients and saved payloads
