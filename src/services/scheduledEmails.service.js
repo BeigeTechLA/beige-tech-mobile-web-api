@@ -2,6 +2,7 @@ const db = require('../models');
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
+const { DIGEST_INTERVAL_HOURS, runChatMessageEmailDigestJob } = require('./chat-message-email-digest.service');
 
 const JOB_INTERVAL_MINUTES = parseInt(process.env.SHOOT_REMINDER_JOB_INTERVAL_MINUTES || '30', 10);
 const REMINDER_MARKER = 'shoot_reminder_5_days';
@@ -1327,6 +1328,12 @@ const startScheduledEmailJobs = () => {
     console.error('[Quote Expiration Job] Initial run failed:', err.message);
   });
 
+  // The initial run only considers messages from the preceding digest window,
+  // so older chat history is never emailed after a deployment or restart.
+  runChatMessageEmailDigestJob().catch((err) => {
+    console.error('[Chat Email Digest] Initial run failed:', err.message);
+  });
+
   setInterval(() => {
     runShootReminder5DaysJob().catch((err) => {
       console.error('[Email Job] Interval 5-day reminder run failed:', err.message);
@@ -1360,6 +1367,14 @@ const startScheduledEmailJobs = () => {
       console.error('[Quote Expiration Job] Interval run failed:', err.message);
     });
   }, intervalMs);
+
+  const chatDigestIntervalMs = DIGEST_INTERVAL_HOURS * 60 * 60 * 1000;
+  console.log(`[Chat Email Digest] Scheduled every ${DIGEST_INTERVAL_HOURS} hour(s)`);
+  setInterval(() => {
+    runChatMessageEmailDigestJob().catch((err) => {
+      console.error('[Chat Email Digest] Interval run failed:', err.message);
+    });
+  }, chatDigestIntervalMs);
 };
 
 module.exports = {
@@ -1368,6 +1383,7 @@ module.exports = {
   runShootReminder2HoursJob,
   runShootCompletionNextDayJob,
   runFinalNudge7DaysJob,
+  runChatMessageEmailDigestJob,
   runShootCompletedPaymentDueJob,
   runCPPaymentDue7DaysJob,
   runCPPaymentOverdue1DayJob,
