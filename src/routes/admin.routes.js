@@ -321,6 +321,8 @@ router.get('/users/:user_id/role-details', authMiddleware, rolesPermissionsView,
 router.get('/permissions/modules', authMiddleware, rolesPermissionsView, admin.getPermissionModules);
 router.delete('/delete-user/:user_id', authMiddleware, adminUsersDelete, admin.deleteUser);
 router.get('/users/:user_id/reassignments',authMiddleware,adminUsersDelete,admin.getUserReassignments);
+router.post('/users/:user_id/reassignments', authMiddleware, rolesPermissionsEdit, admin.reassignUserSalesRecords);
+router.get('/users/:user_id/reassignment-history', authMiddleware, rolesPermissionsView, admin.getUserReassignmentHistory);
 router.post('/restore-user/:user_id', authMiddleware, adminUsersDelete, admin.restoreUser);
 router.post('/users/permissions/assign', authMiddleware, rolesPermissionsEdit, admin.assignPermissionsToUser);
 router.put('/users/permissions/update', authMiddleware, rolesPermissionsEdit, admin.updateUserPermissions);

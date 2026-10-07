@@ -17823,6 +17823,12 @@ exports.getPermissionModules = async (req, res) => {
 exports.getUserReassignments = async (req, res) => {
   try {
     const user_id = Number(req.params.user_id);
+    const search = String(req.query.search || '').trim();
+    const idSearch = search.replace(/^[lq]\s*-\s*/i, '').trim();
+    const requestedTypeParam = String(req.query.type || 'all').toLowerCase();
+    const requestedType = ['lead', 'quote'].includes(requestedTypeParam) ? requestedTypeParam : 'all';
+    const requestedPage = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 10));
 
     if (!Number.isInteger(user_id) || user_id <= 0) {
       return res.status(400).json({
@@ -17831,24 +17837,27 @@ exports.getUserReassignments = async (req, res) => {
       });
     }
 
-    // Get this user's active, assignable leads, whether or not they have a booking.
+    const leadWhere = {
+      assigned_sales_rep_id: user_id,
+      is_active: 1,
+      lead_status: { [Op.notIn]: ['paid', 'closed_lost'] }
+    };
+    if (search) {
+      leadWhere[Op.or] = [
+        { client_name: { [Op.like]: `%${search}%` } },
+        ...(idSearch ? [{ lead_id: { [Op.like]: `%${idSearch}%` } }] : [])
+      ];
+    }
+
+    // Keep active leads that have a future event and are not paid or closed lost.
     const leads = await db.sales_leads.findAll({
-      where: {
-        assigned_sales_rep_id: user_id,
-        is_active: 1,
-        lead_status: {
-          [Op.ne]: 'closed_lost'
-        },
-        [Op.or]: [
-          { lead_source: null },
-          { lead_source: { [Op.ne]: 'converted bookings' } }
-        ]
-      },
+      where: leadWhere,
 
       attributes: [
         'lead_id',
         'booking_id',
         'user_id',
+        'client_name',
         'guest_email',
         'lead_status',
         'created_at',
@@ -17859,12 +17868,16 @@ exports.getUserReassignments = async (req, res) => {
         {
           model: db.stream_project_booking,
           as: 'booking',
-          required: false,
+          required: true,
+          where: {
+            event_date: { [Op.gt]: Sequelize.literal('CURRENT_DATE') }
+          },
 
           attributes: [
             'stream_project_booking_id',
             'event_date',
-            'status'
+            'status',
+            'payment_id'
           ]
         }
       ],
@@ -17882,11 +17895,10 @@ exports.getUserReassignments = async (req, res) => {
     ];
 
     // Fetch this user's assignable quotes independently of the lead list.
-    const quotes = await db.sales_quotes.findAll({
-      where: {
-        assigned_sales_rep_id: user_id,
-        status: { [Op.notIn]: ['rejected', 'expired', 'paid'] },
-        [Op.or]: [
+    const quoteWhere = {
+      assigned_sales_rep_id: user_id,
+      status: { [Op.notIn]: ['rejected', 'expired', 'paid'] },
+      [Op.or]: [
           { lead_id: null },
           {
             lead_id: {
@@ -17895,11 +17907,26 @@ exports.getUserReassignments = async (req, res) => {
               )
             }
           }
+      ]
+    };
+    if (search) {
+      quoteWhere[Op.and] = [{
+        [Op.or]: [
+          { client_name: { [Op.like]: `%${search}%` } },
+          ...(idSearch ? [
+            { sales_quote_id: { [Op.like]: `%${idSearch}%` } },
+            { quote_number: { [Op.like]: `%${idSearch}%` } }
+          ] : [])
         ]
-      },
+      }];
+    }
+
+    const quotes = await db.sales_quotes.findAll({
+      where: quoteWhere,
       attributes: [
         'sales_quote_id',
         'quote_number',
+        'client_name',
         'status',
         'total',
         'start_date',
@@ -17942,22 +17969,42 @@ exports.getUserReassignments = async (req, res) => {
     const result = leads.map((lead) => {
       const payment = paymentMap.get(Number(lead.booking_id));
       const data = lead.toJSON();
+      const paymentState = bookingPaymentSummaryService.normalizePaymentSummaryState(payment, {
+        quoteTotal: payment?.quote_total,
+        paidAmount: payment?.paid_amount,
+        paymentStatus: data.booking?.payment_id ? 'paid' : 'unpaid'
+      });
 
       return {
+        is_paid: paymentState.isPaid,
         lead_id: data.lead_id,
         booking_id: data.booking_id,
         user_id: data.user_id,
+        client_name: data.client_name,
         guest_email: data.guest_email,
         lead_status: data.lead_status,
         event_date: data.booking?.event_date || null,
         paid_amount: Number(payment?.paid_amount || 0),
-        payment_status: payment?.payment_status || 'unpaid',
+        payment_status: paymentState.paymentStatus,
         quote_total: Number(payment?.quote_total || 0),
         due_amount: Number(payment?.due_amount || 0),
         created_at: data.created_at,
         updated_at: data.updated_at
       };
-    });
+    }).filter((lead) => !lead.is_paid);
+    const allRecords = [
+      ...result.map((lead) => ({ ...lead, record_type: 'lead' })),
+      ...quoteData.map((quote) => ({ ...quote, record_type: 'quote' }))
+    ].sort((first, second) => new Date(second.created_at || 0) - new Date(first.created_at || 0));
+    const filteredRecords = requestedType === 'lead'
+      ? allRecords.filter((record) => record.record_type === 'lead')
+      : requestedType === 'quote'
+        ? allRecords.filter((record) => record.record_type === 'quote')
+        : allRecords;
+    const total_pages = Math.ceil(filteredRecords.length / limit);
+    const page = Math.min(requestedPage, Math.max(1, total_pages));
+    const offset = (page - 1) * limit;
+    const pageRecords = filteredRecords.slice(offset, offset + limit);
 
     return res.status(200).json({
       error: false,
@@ -17965,9 +18012,14 @@ exports.getUserReassignments = async (req, res) => {
       message: 'User reassignment leads and quotes fetched successfully',
       count: result.length,
       quote_count: quoteData.length,
+      total_count: filteredRecords.length,
+      page,
+      limit,
+      total_pages,
       data: {
-        leads: result,
-        quotes: quoteData
+        records: pageRecords,
+        leads: pageRecords.filter((record) => record.record_type === 'lead'),
+        quotes: pageRecords.filter((record) => record.record_type === 'quote')
       }
     });
 
@@ -17978,6 +18030,109 @@ exports.getUserReassignments = async (req, res) => {
       error: true,
       message: 'Internal server error'
     });
+  }
+};
+
+exports.reassignUserSalesRecords = async (req, res) => {
+  const fromUserId = Number(req.params.user_id);
+  const assignments = req.body?.assignments;
+  if (!Number.isInteger(fromUserId) || fromUserId <= 0 || !Array.isArray(assignments) || !assignments.length) {
+    return res.status(400).json({ success: false, message: 'A valid user_id and at least one assignment are required' });
+  }
+  if (assignments.length > 500) {
+    return res.status(400).json({ success: false, message: 'A maximum of 500 records can be reassigned at once' });
+  }
+
+  const actor = await getRequestActor(req);
+  if (!actor) return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const historyRows = [];
+    const uniqueRecordIds = new Set();
+    for (const assignment of assignments) {
+      const recordId = String(assignment?.recordId || '');
+      const toUserId = Number(assignment?.repId);
+      const match = recordId.match(/^([LQ])-(.+)$/);
+      if (!match || !Number.isInteger(toUserId) || toUserId <= 0 || toUserId === fromUserId || uniqueRecordIds.has(recordId)) {
+        throw Object.assign(new Error(`Invalid assignment for record ${recordId || '(missing)'}`), { statusCode: 400 });
+      }
+      uniqueRecordIds.add(recordId);
+      const [, kind, rawRecordId] = match;
+      const target = await users.findOne({
+        where: { id: toUserId, is_active: 1 }, attributes: ['id'], transaction
+      });
+      if (!target) throw Object.assign(new Error(`Target sales representative ${toUserId} is unavailable`), { statusCode: 400 });
+
+      let model;
+      let where;
+      let recordNumber;
+      let clientName;
+      if (kind === 'L' && /^\d+$/.test(rawRecordId)) {
+        model = db.sales_leads;
+        where = { lead_id: Number(rawRecordId), assigned_sales_rep_id: fromUserId, is_active: 1 };
+        recordNumber = recordId;
+      } else if (kind === 'Q') {
+        model = db.sales_quotes;
+        where = { assigned_sales_rep_id: fromUserId, [Op.or]: [{ quote_number: rawRecordId }, ...( /^\d+$/.test(rawRecordId) ? [{ sales_quote_id: Number(rawRecordId) }] : [])] };
+      } else {
+        throw Object.assign(new Error(`Unsupported record ${recordId}`), { statusCode: 400 });
+      }
+
+      const record = await model.findOne({ where, transaction, lock: transaction.LOCK.UPDATE });
+      if (!record) throw Object.assign(new Error(`${recordId} is no longer assigned to this user`), { statusCode: 409 });
+      if (kind === 'Q') {
+        recordNumber = `Q-${record.quote_number || record.sales_quote_id}`;
+        clientName = record.client_name || null;
+      } else {
+        clientName = record.client_name || record.guest_email || null;
+      }
+      await record.update({ assigned_sales_rep_id: toUserId }, { transaction });
+      historyRows.push({
+        record_type: kind === 'L' ? 'lead' : 'quote', record_id: recordNumber,
+        client_name: clientName, from_user_id: fromUserId, to_user_id: toUserId,
+        actor_user_id: actor.id, created_at: new Date().toISOString().slice(0, 23).replace('T', ' ')
+      });
+    }
+
+    await db.sequelize.query(
+      `INSERT INTO sales_record_reassignment_history
+        (record_type, record_id, client_name, from_user_id, to_user_id, actor_user_id, created_at)
+       VALUES ${historyRows.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ')}`,
+      { replacements: historyRows.flatMap((row) => [row.record_type, row.record_id, row.client_name, row.from_user_id, row.to_user_id, row.actor_user_id, row.created_at]), transaction }
+    );
+    await transaction.commit();
+    return res.status(200).json({ success: true, message: 'Sales records reassigned successfully', count: historyRows.length });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Reassign User Sales Records Error:', error);
+    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Failed to reassign sales records' });
+  }
+};
+
+exports.getUserReassignmentHistory = async (req, res) => {
+  const userId = Number(req.params.user_id);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ success: false, message: 'Valid user_id is required' });
+  }
+  try {
+    const history = await db.sequelize.query(
+      `SELECT h.record_type, h.record_id, h.client_name,
+              CONCAT(DATE_FORMAT(h.created_at, '%Y-%m-%dT%H:%i:%s'), '.000Z') AS created_at_utc,
+              source.name AS from_name, target.name AS to_name, actor.name AS actor_name
+       FROM sales_record_reassignment_history h
+       LEFT JOIN users source ON source.id = h.from_user_id
+       LEFT JOIN users target ON target.id = h.to_user_id
+       LEFT JOIN users actor ON actor.id = h.actor_user_id
+       WHERE h.from_user_id = :userId OR h.to_user_id = :userId
+       ORDER BY h.created_at DESC, h.id DESC
+       LIMIT 100`,
+      { replacements: { userId }, type: QueryTypes.SELECT }
+    );
+    return res.status(200).json({ success: true, count: history.length, data: history });
+  } catch (error) {
+    console.error('Get User Reassignment History Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch reassignment history' });
   }
 };
 
