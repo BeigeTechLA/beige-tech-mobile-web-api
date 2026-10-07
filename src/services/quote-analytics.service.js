@@ -94,7 +94,17 @@ function resolveDateRange(query = {}, nowValue = new Date()) {
   // Analytics opens on All Time.  Keeping this default in the API (rather than
   // relying on the client to send a parameter) also makes direct API consumers
   // and rep drill-downs consistent with the dashboard.
-  const preset = String(query.date_preset || 'all_time').trim().toLowerCase();
+  const hasStartDate = Boolean(String(query.start_date || '').trim());
+  const hasEndDate = Boolean(String(query.end_date || '').trim());
+  if (hasStartDate !== hasEndDate) {
+    throw badRequest('start_date and end_date must be provided together');
+  }
+
+  // Direct API consumers often provide dates without date_preset. Treat an
+  // explicit pair as a custom range instead of silently falling back to all time.
+  const preset = hasStartDate
+    ? 'custom'
+    : String(query.date_preset || 'all_time').trim().toLowerCase();
   if (!DATE_PRESETS.includes(preset)) {
     throw badRequest(`date_preset must be one of: ${DATE_PRESETS.join(', ')}`);
   }
@@ -144,6 +154,7 @@ function resolveDateRange(query = {}, nowValue = new Date()) {
     start = parseDateOnly(query.start_date, 'start_date');
     const end = parseDateOnly(query.end_date, 'end_date');
     if (start > end) throw badRequest('start_date cannot be after end_date');
+    if (end > today) throw badRequest('end_date cannot be in the future');
     endExclusive = addDays(end, 1);
   }
 
@@ -405,7 +416,7 @@ function buildRepPerformance(segmentedRecords, cohortRecords, nowValue = new Dat
       rep_name: rep.name || rep.email || `Rep ${repId}`,
       rep_email: rep.email || null,
       ...summarizeCohort(cohortForRep),
-      ...summarizeCurrentState(allForRep, nowValue)
+      ...summarizeCurrentState(cohortForRep, nowValue)
     };
   }).sort((left, right) => right.won_revenue - left.won_revenue || left.rep_name.localeCompare(right.rep_name));
 }
@@ -581,7 +592,7 @@ function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
   const filters = normalizeFilterQuery(query);
   const segmentedRecords = applyFilters(records, filters);
   const cohortRecords = segmentedRecords.filter((record) => isInRange(record.sentAt, range));
-  const currentState = summarizeCurrentState(segmentedRecords, nowValue);
+  const currentState = summarizeCurrentState(cohortRecords, nowValue);
 
   return {
     filters: {
@@ -599,10 +610,7 @@ function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
       ...summarizeCohort(cohortRecords),
       ...currentState
     },
-    // This visualization is intentionally a rolling six-month trend. Date
-    // filters continue to control the dashboard totals above it; non-date
-    // filters (rep, status, source, etc.) are still applied to the chart.
-    performance_chart: buildPerformanceChart(segmentedRecords, nowValue),
+    performance_chart: buildPerformanceChart(cohortRecords, nowValue),
     rep_performance: buildRepPerformance(segmentedRecords, cohortRecords, nowValue),
     definitions: getDefinitions()
   };
@@ -762,10 +770,11 @@ async function listAnalyticsQuotes(query, user) {
   const records = await loadAnalyticsRecords(user, nowValue);
   const range = resolveDateRange(query, nowValue);
   const filters = normalizeFilterQuery(query);
-  let matching = applyFilters(records, filters);
+  let matching = applyFilters(records, filters)
+    .filter((record) => isInRange(record.sentAt, range));
 
   if (bucket === 'deals_won') {
-    matching = matching.filter((record) => record.fullPaid && isInRange(record.sentAt, range));
+    matching = matching.filter((record) => record.fullPaid);
   } else if (bucket === 'open_pipeline') {
     matching = matching.filter(isOpenPipeline);
     if (query.status) {
