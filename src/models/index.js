@@ -13,6 +13,8 @@ const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
 const assignmentHistoryFactory = require('./assignment_history');
 const userSessionsFactory = require('./user_sessions');
+const userLoginHistoryFactory = require('./user_login_history');
+const internalPasswordExpirySettingsFactory = require('./internal_password_expiry_settings');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -32,6 +34,9 @@ if (models.user_sessions && models.users) {
   models.user_sessions.belongsTo(models.users, { foreignKey: 'user_id', as: 'user' });
   models.users.hasMany(models.user_sessions, { foreignKey: 'user_id', as: 'sessions' });
 }
+models.user_login_history = userLoginHistoryFactory(sequelize, DataTypes);
+models.user_login_history.belongsTo(models.users, { foreignKey: 'user_id', as: 'sessionUser' });
+models.internal_password_expiry_settings = internalPasswordExpirySettingsFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
@@ -134,6 +139,11 @@ if (models.app_notifications && models.users) {
     foreignKey: 'sender_user_id',
     as: 'sender_user_app_notifications'
   });
+}
+
+if (models.user_login_history && models.users) {
+  models.user_login_history.belongsTo(models.users, { foreignKey: 'user_id', as: 'user' });
+  models.users.hasMany(models.user_login_history, { foreignKey: 'user_id', as: 'login_history' });
 }
 models.signup_credit_promotion_settings.belongsTo(models.users, {
   foreignKey: 'updated_by_user_id',
