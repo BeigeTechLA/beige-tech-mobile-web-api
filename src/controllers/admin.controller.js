@@ -3563,6 +3563,94 @@ exports.updateProjectName = async (req, res) => {
   }
 };
 
+exports.updateProjectDescription = async (req, res) => {
+  let transaction = null;
+  try {
+    const { project_id } = req.params;
+
+    if (!project_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Project ID is required'
+      });
+    }
+
+    if (typeof req.body?.description !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'description is required'
+      });
+    }
+
+    const description = req.body.description.trim();
+
+    const project = await stream_project_booking.findOne({
+      where: {
+        stream_project_booking_id: project_id,
+        is_active: 1
+      }
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found'
+      });
+    }
+
+    const previousDescription = project.description;
+
+    if (String(previousDescription || '').trim() === description) {
+      return res.status(200).json({
+        success: true,
+        message: 'No changes to save',
+        data: {
+          stream_project_booking_id: project.stream_project_booking_id,
+          description: project.description
+        }
+      });
+    }
+
+    transaction = await db.sequelize.transaction();
+    await project.update({ description }, { transaction });
+
+    const actor = await getRequestActor(req);
+    await writeShootHistory({
+      projectId: project.stream_project_booking_id,
+      action: 'project_description_updated',
+      actor,
+      reason: 'Project description updated',
+      metadata: {
+        changes: [{
+          field: 'description',
+          old_value: previousDescription || null,
+          new_value: description || null
+        }]
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Project description updated successfully',
+      data: {
+        stream_project_booking_id: project.stream_project_booking_id,
+        description: project.description
+      }
+    });
+  } catch (error) {
+    if (transaction && !transaction.finished) await transaction.rollback();
+    console.error('Error updating project description:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update project description',
+      error: error.message
+    });
+  }
+};
+
 // exports.getAllProjectDetails = async (req, res) => {
 //   try {
 //     const { status, event_type, search } = req.query;  // Get filters from query params
@@ -13021,6 +13109,7 @@ exports.getProjectHistory = async (req, res) => {
             'post_production_member_assigned',
             'post_production_member_removed',
             'project_name_updated',
+            'project_description_updated',
             'schedule_location_updated',
             'chat_room_created',
             'meeting_created',   
