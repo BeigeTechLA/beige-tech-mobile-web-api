@@ -4212,7 +4212,7 @@ exports.updateProjectName = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, post_production_user_id, summary_only, board_view } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, post_production_user_id, post_production_assignment, summary_only, board_view } = req.query;
     const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
     const today = new Date();
     const isBoardView = String(board_view || '').toLowerCase() === 'true' || String(board_view) === '1';
@@ -4224,7 +4224,8 @@ exports.getAllProjectDetails = async (req, res) => {
     const hasPostFetchFilters = Boolean(
       (cp_assignment && cp_assignment !== 'all') ||
       (production_filter && production_filter !== 'all') ||
-      (payment_filter && payment_filter !== 'all')
+      (payment_filter && payment_filter !== 'all') ||
+      (post_production_assignment && post_production_assignment !== 'all')
     );
     const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
     const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
@@ -4826,6 +4827,20 @@ exports.getAllProjectDetails = async (req, res) => {
       });
     }
 
+    if (post_production_assignment && post_production_assignment !== 'all') {
+      const normalizedPostProdAssignment = String(post_production_assignment).toLowerCase().trim();
+      projectDetails = projectDetails.filter((entry) => {
+        const members = Array.isArray(entry?.assignedPostProductionMembers)
+          ? entry.assignedPostProductionMembers
+          : [];
+        const hasPostProdAssigned = members.length > 0;
+
+        if (normalizedPostProdAssignment === 'assigned') return hasPostProdAssigned;
+        if (normalizedPostProdAssignment === 'not_assigned') return !hasPostProdAssigned;
+        return true;
+      });
+    }
+
     if (payment_filter && payment_filter !== 'all') {
       const normalizedPaymentFilter = String(payment_filter).toLowerCase().trim();
       projectDetails = projectDetails.filter((entry) => {
@@ -5277,6 +5292,7 @@ exports.exportShootsCsv = async (req, res) => {
       cp_assignment,
       production_filter,
       post_production_user_id,
+      post_production_assignment,
     } = req.query;
     const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
 
@@ -5672,6 +5688,33 @@ exports.exportShootsCsv = async (req, res) => {
       .filter((project) => matchesCategoryFilter(project))
       .filter((project) => matchesSearchFilter(project))
       .filter((project) => matchesCpAssignmentFilter(project));
+
+    const normalizedPostProductionAssignment = String(post_production_assignment || '').trim().toLowerCase();
+    if (normalizedPostProductionAssignment === 'assigned' || normalizedPostProductionAssignment === 'not_assigned') {
+      const exportBookingIds = filteredProjects
+        .map((project) => Number(project?.stream_project_booking_id || 0))
+        .filter((id) => Number.isInteger(id) && id > 0);
+
+      const postProdAssignedRows = exportBookingIds.length
+        ? await assigned_post_production_member.findAll({
+            where: {
+              project_id: { [Op.in]: exportBookingIds },
+              is_active: 1
+            },
+            attributes: ['project_id'],
+            raw: true
+          })
+        : [];
+
+      const postProdAssignedSet = new Set(
+        postProdAssignedRows.map((row) => Number(row.project_id))
+      );
+
+      filteredProjects = filteredProjects.filter((project) => {
+        const hasPostProd = postProdAssignedSet.has(Number(project?.stream_project_booking_id));
+        return normalizedPostProductionAssignment === 'assigned' ? hasPostProd : !hasPostProd;
+      });
+    }
 
     if (normalizedProductionFilter && normalizedProductionFilter !== 'all') {
       const authHeader = req.headers?.authorization || null;
