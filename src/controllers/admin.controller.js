@@ -5412,6 +5412,29 @@ const getCalendarShoots = (view) => async (req, res) => {
     }
 
     const paidFilter = await getPaidCalendarFilter(req);
+    let filteredBookingIds = null;
+    let projectDetailsByBookingId = new Map();
+
+    const projectSnapshot = await invokeProjectsBoardSnapshot(req, {
+      range: undefined,
+      start_date: range.start,
+      end_date: range.end,
+      date_on: undefined,
+      limit: undefined,
+      page: undefined,
+      summary_only: undefined,
+      board_view: undefined,
+    });
+    projectDetailsByBookingId = new Map(
+      (projectSnapshot?.data?.projects || []).map((entry) => [
+        Number(entry?.project?.stream_project_booking_id),
+        entry,
+      ])
+    );
+    filteredBookingIds = new Set(
+      [...projectDetailsByBookingId.keys()]
+        .filter((bookingId) => Number.isInteger(bookingId) && bookingId > 0)
+    );
 
     const fetchShoots = (isActive) => stream_project_booking.findAll({
       attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'start_time', 'end_time', 'time_zone', 'is_active'],
@@ -5419,25 +5442,61 @@ const getCalendarShoots = (view) => async (req, res) => {
         ...paidFilter,
         is_active: isActive,
         event_date: { [Op.between]: [range.start, range.end] },
+        ...(filteredBookingIds ? {
+          stream_project_booking_id: {
+            [Op.in]: filteredBookingIds.size ? [...filteredBookingIds] : [-1],
+          },
+        } : {}),
       },
       order: [['event_date', 'ASC'], ['start_time', 'ASC'], ['stream_project_booking_id', 'ASC']],
       raw: true,
     });
 
-    const formatShoot = (shoot) => ({
-      id: shoot.stream_project_booking_id,
-      title: shoot.project_name || 'Untitled Shoot',
-      date: shoot.event_date,
-      start_time: shoot.start_time,
-      end_time: shoot.end_time,
-      time_zone: shoot.time_zone,
-      is_active: Number(shoot.is_active) === 1,
-    });
+    const formatShoot = (shoot) => {
+      const detail = projectDetailsByBookingId.get(Number(shoot.stream_project_booking_id));
+      const project = detail?.project || {};
+      const assignedCrew = Array.isArray(detail?.assignedCrew) ? detail.assignedCrew : [];
+      const assignedEquipment = Array.isArray(detail?.assignedEquipment) ? detail.assignedEquipment : [];
+      const assignedPostProductionMembers = Array.isArray(detail?.assignedPostProductionMembers)
+        ? detail.assignedPostProductionMembers
+        : [];
+      const selectedCrewIds = Array.isArray(project.selected_crew_ids) ? project.selected_crew_ids : [];
+      const assignedCrewIds = assignedCrew
+        .map((member) => Number(member?.crew_member_id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+      const hasAssignedCp = assignedCrewIds.length > 0 || selectedCrewIds.length > 0;
+
+      return {
+        id: shoot.stream_project_booking_id,
+        title: shoot.project_name || 'Untitled Shoot',
+        date: shoot.event_date,
+        start_time: shoot.start_time,
+        end_time: shoot.end_time,
+        time_zone: shoot.time_zone,
+        is_active: Number(shoot.is_active) === 1,
+        status: project.timeline_label || project.status || null,
+        status_code: project.status ?? null,
+        category: project.event_type_labels || project.content_type || project.event_type || project.shoot_type || null,
+        payment_status: project.payment_status || null,
+        paid_amount: project.paid_amount ?? null,
+        pending_amount: project.pending_amount ?? null,
+        cp_assignment: hasAssignedCp ? 'assigned' : 'not_assigned',
+        has_assigned_cp: hasAssignedCp,
+        assigned_crew_ids: assignedCrewIds.length ? assignedCrewIds : selectedCrewIds,
+        // Keep the same detailed project and assignment payload used by the shoots table.
+        project,
+        assignedCrew,
+        assignedEquipment,
+        assignedPostProductionMembers,
+      };
+    };
 
     const [activeRows, deletedRows, meetings] = await Promise.all([
       fetchShoots(1),
       fetchShoots(0),
-      fetchCalendarMeetings(req, range),
+      fetchCalendarMeetings(req, range).then((rows) => filteredBookingIds
+        ? rows.filter((meeting) => filteredBookingIds.has(Number(meeting.booking_id)))
+        : rows),
     ]);
 
     return res.status(200).json({
@@ -5445,6 +5504,14 @@ const getCalendarShoots = (view) => async (req, res) => {
       data: {
         view,
         range,
+        filters_applied: {
+          search: req.query.search || '',
+          status: req.query.status || 'all',
+          category: req.query.category || 'all',
+          payment_filter: req.query.payment_filter || 'all',
+          production_filter: req.query.production_filter || 'all',
+          cp_assignment: req.query.cp_assignment || 'all',
+        },
         active_shoots: activeRows.map(formatShoot),
         deleted_shoots: deletedRows.map(formatShoot),
         meetings,
