@@ -10,6 +10,10 @@ const signatureRoutes = require('./routes/signature.routes');
 const creatorEarningsRoutes = require('./routes/creator-earnings.routes');
 
 const app = express();
+// Our nginx deployment connects over loopback. For other proxies, explicitly list
+// their trusted IPs/CIDRs in TRUST_PROXY; never trust arbitrary forwarded headers.
+const trustedProxies = process.env.TRUST_PROXY ?? 'loopback';
+app.set('trust proxy', trustedProxies === 'false' ? false : trustedProxies.split(',').map((ip) => ip.trim()).filter(Boolean));
 
 // CORS configuration - allow frontend origins
 const corsOrigins = process.env.CORS_ORIGINS

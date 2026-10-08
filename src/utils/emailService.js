@@ -400,6 +400,16 @@ const renderEmailTemplate = (templateName, values = {}) => {
   const templatePath = path.join(__dirname, '..', 'emailTemplates', 'NewTemplates', templateName);
   let html = fs.readFileSync(templatePath, 'utf8');
 
+  // Reuse the file-share OTP design for other verification purposes while
+  // retaining the original copy for callers that do not supply an override.
+  if (templateName === 'OTPVerificationFileShare.html') {
+    values = {
+      verification_message: 'To securely access the files shared with you on Beige, please verify your email address using the OTP below',
+      unsolicited_message: "If you didn't request this access, you can safely ignore this email.",
+      ...values
+    };
+  }
+
   Object.entries(values).forEach(([key, value]) => {
     html = html.replace(new RegExp(`{{\\s*${key}\\s*}}`, 'g'), escapeHtml(value));
   });
@@ -868,6 +878,21 @@ const sendVerificationOTP = async (userData, otp) => {
     return { success: false, error: error.message };
   }
 };
+
+// Render the shared branded HTML locally so password-specific wording does not
+// depend on updating the hosted SendGrid file-share template.
+const sendPasswordExpiryOTP = async (userData, otp) => sendRenderedTemplateEmail({
+  to: userData?.email,
+  subject: 'Your Beige password change code',
+  templateName: 'OTPVerificationFileShare.html',
+  values: {
+    otp,
+    expiry_minutes: 10,
+    verification_message: 'To securely change your Beige password, please verify your email address using the OTP below.',
+    unsolicited_message: "If you didn't request a password change, do not share this code. Please contact your administrator if you suspect someone is using your account."
+  },
+  text: `Your Beige password change code is ${otp}. It expires in 10 minutes. Never share this code with anyone. If you did not request a password change, please contact your administrator if you suspect someone is using your account.`
+});
 
 /**
  * Send file share access OTP
@@ -2194,11 +2219,21 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
   try {
     const to = process.env.SALES_NOTIFICATION_EMAIL;
     const normalizedPaymentType = String(paymentData?.payment_type || paymentData?.paymentType || '').toLowerCase();
+    const normalizedPaymentSource = String(paymentData?.payment_source || paymentData?.paymentSource || '').toLowerCase();
+    // An additional quote invoice is issued only after the booking has already
+    // received a payment. Keep Book a Shoot and first quote payments on the
+    // existing "Payment Confirmed" template.
+    const isAdditionalPayment =
+      paymentData?.is_additional_payment === true ||
+      paymentData?.isAdditionalPayment === true ||
+      normalizedPaymentType === 'additional' ||
+      normalizedPaymentSource === 'additional_invoice';
     const isPartialPayment =
       paymentData?.is_partial_payment === true ||
       paymentData?.isPartialPayment === true ||
       normalizedPaymentType === 'partial';
-    const templateId = isPartialPayment
+    const useAdditionalPaymentTemplate = isAdditionalPayment || isPartialPayment;
+    const templateId = useAdditionalPaymentTemplate
       ? SALES_NOTIF_PARTIAL_PAYMENT_RECEIVED_TEMPLATE_ID
       : SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID;
     const formatOptionalAmount = (value) => (
@@ -2252,7 +2287,9 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
 
     return await sendEmail({
       to: recipients,
-      subject: isPartialPayment ? 'Partial Payment Received' : 'Payment Received',
+      subject: useAdditionalPaymentTemplate
+        ? 'Additional Payment Received - Accounts Receivable Update'
+        : 'Payment Confirmed - A new booking has been finalized',
       templateId,
       dynamicTemplateData: {
         first_name: paymentData?.first_name || firstName,
@@ -2267,7 +2304,8 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
         total_paid: totalPaid,
         pending_amount: remainingBalance,
         remaining_balance: remainingBalance,
-        payment_type: isPartialPayment ? 'Partial' : 'Full',
+        payment_type: isAdditionalPayment ? 'Additional' : (isPartialPayment ? 'Partial' : 'Initial'),
+        payment_source: normalizedPaymentSource,
         payment_mode: paymentMethod,
         payment_method: paymentMethod,
         shootType: formatShootTypes(paymentData?.shootType) || 'N/A',
@@ -2286,7 +2324,7 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
         view_details_url: viewDetailsUrl,
         booking_url: viewDetailsUrl,
         year: new Date().getFullYear(),
-        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
+        frontend_url: viewDetailsUrl,
       }
     });
   } catch (error) {
@@ -4448,6 +4486,7 @@ module.exports = {
   formatShootTypes,
   sendTaskAssignmentEmail,
   sendVerificationOTP,
+  sendPasswordExpiryOTP,
   sendFileShareVerificationOTP,
   sendPasswordResetEmail,
   // sendPaymentLinkEmail,
