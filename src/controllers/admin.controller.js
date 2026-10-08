@@ -4833,7 +4833,9 @@ exports.getAllProjectDetails = async (req, res) => {
         const pendingAmount = Number(project.pending_amount || 0);
         const paidAmount = Number(project.paid_amount || project.total_paid_amount || 0);
 
-        if (normalizedPaymentFilter === 'pending') return pendingAmount > 0;
+        if (normalizedPaymentFilter === 'partially_paid') {
+          return paidAmount > 0 && pendingAmount > 0;
+        }
         if (normalizedPaymentFilter === 'paid') return pendingAmount <= 0 && paidAmount > 0;
         return true;
       });
