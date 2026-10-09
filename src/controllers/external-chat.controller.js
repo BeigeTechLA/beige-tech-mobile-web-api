@@ -394,11 +394,6 @@ const isAdminRequestUser = (user = {}) => {
   return ['admin', 'administrator', 'sales_admin'].includes(role);
 };
 
-const isSuperAdminRequestUser = (user = {}) => {
-  const role = String(user?.userRole || user?.role || '').trim().toLowerCase();
-  return ['super_admin', 'superadmin', 'super-admin'].includes(role);
-};
-
 const resolveChatSender = async (requestUser = {}) => {
   const userId = Number(requestUser?.userId || requestUser?.id);
   const platformUser = Number.isFinite(userId) ? await getPlatformUserById(userId) : null;
@@ -2339,10 +2334,9 @@ exports.editChatMessage = async (req, res) => {
   }
 };
 
-exports.deleteChatMessage = async (req, res) => {
+const deleteChatMessage = async (req, res, allowAnySender = false) => {
   try {
     const sender = await resolveChatSender(req.user);
-    const allowAnySender = isSuperAdminRequestUser(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
@@ -2366,7 +2360,10 @@ exports.deleteChatMessage = async (req, res) => {
   }
 };
 
-exports.batchDeleteChatMessages = async (req, res) => {
+exports.deleteChatMessage = (req, res) => deleteChatMessage(req, res, false);
+exports.moderateDeleteChatMessage = (req, res) => deleteChatMessage(req, res, true);
+
+const batchDeleteChatMessages = async (req, res, allowAnySender = false) => {
   try {
     const roomId = String(req.params.roomId || '').trim();
     const messageIds = Array.isArray(req.body.messageIds)
@@ -2384,7 +2381,6 @@ exports.batchDeleteChatMessages = async (req, res) => {
     }
 
     const sender = await resolveChatSender(req.user);
-    const allowAnySender = isSuperAdminRequestUser(req.user);
 
     const result = await proxyRequest(`/room/${roomId}/messages/batch-delete`, {
       method: 'POST',
@@ -2408,12 +2404,11 @@ exports.batchDeleteChatMessages = async (req, res) => {
   }
 };
 
+exports.batchDeleteChatMessages = (req, res) => batchDeleteChatMessages(req, res, false);
+exports.moderateBatchDeleteChatMessages = (req, res) => batchDeleteChatMessages(req, res, true);
+
 exports.updateChatRoomStatus = async (req, res) => {
   try {
-    if (!isSuperAdminRequestUser(req.user)) {
-      return res.status(403).json({ success: false, message: 'Only super admins can archive or restore chats' });
-    }
-
     const roomId = String(req.params.roomId || '').trim();
     const status = String(req.body.status || '').trim().toLowerCase();
     if (!roomId) {

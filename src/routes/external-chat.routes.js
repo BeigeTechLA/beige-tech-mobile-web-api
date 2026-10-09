@@ -55,7 +55,9 @@ const shootMessagesEdit = requireAnyPermission([
   'client_messages.edit',
   'creative_partner_messages.edit'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'client', 'creative'] });
-
+const messageDeletePermission = requireAnyPermission([
+  'admin_messages.delete'
+], { allowAdminBypass: false });
 router.get('/rooms', authenticate, messagesView, externalChatController.listChatRooms);
 router.get('/directory', authenticate, directoryView, externalChatController.getChatDirectory);
 router.post('/room', authenticate, shootMessagesCreate, externalChatController.createChatRoom);
@@ -63,13 +65,15 @@ router.get('/room/:bookingId', authenticate, shootMessagesView, externalChatCont
 router.post('/room/:roomId/participants', authenticate, shootMessagesEdit, externalChatController.addChatParticipants);
 router.delete('/room/:roomId/participants/:userId', authenticate, shootMessagesEdit, externalChatController.removeChatParticipant);
 router.patch('/room/:roomId/mark-read', authenticate, shootMessagesView, externalChatController.markChatRoomRead);
-router.patch('/room/:roomId/status', authenticate, shootMessagesEdit, externalChatController.updateChatRoomStatus);
+router.patch('/room/:roomId/status', authenticate, messageDeletePermission, externalChatController.updateChatRoomStatus);
 router.post('/messages/:roomId', authenticate, shootMessagesCreate, externalChatController.sendChatMessage);
 router.post('/digest/run', authenticate, messagesCreate, externalChatController.runChatMessageEmailDigest);
 router.get('/messages/:roomId', authenticate, shootMessagesView, externalChatController.getChatMessages);
 router.post('/messages/:messageId/edit', authenticate, shootMessagesEdit, externalChatController.editChatMessage);
 router.post('/messages/:messageId/delete', authenticate, shootMessagesEdit, externalChatController.deleteChatMessage);
+router.post('/messages/:messageId/moderation-delete', authenticate, messageDeletePermission, externalChatController.moderateDeleteChatMessage);
 router.post('/room/:roomId/messages/batch-delete', authenticate, shootMessagesEdit, externalChatController.batchDeleteChatMessages);
+router.post('/room/:roomId/messages/moderation-batch-delete', authenticate, messageDeletePermission, externalChatController.moderateBatchDeleteChatMessages);
 router.post('/messages/:messageId/reaction', authenticate, shootMessagesCreate, externalChatController.reactToChatMessage);
 router.get('/participants/:roomId', authenticate, shootMessagesView, externalChatController.getChatParticipants);
 
