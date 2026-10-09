@@ -18726,7 +18726,38 @@ exports.updateRole = async (req, res) => {
     }
 
     if (hasPermissionsUpdate) {
+      const previousRolePermissions = await db.role_permissions.findAll({
+        where: {
+          role_id,
+          is_active: 1
+        },
+        attributes: ['permission_id'],
+        transaction
+      });
+
       await syncRolePermissions(role_id, permissions, transaction);
+
+      const updatedRolePermissions = await db.role_permissions.findAll({
+        where: {
+          role_id,
+          is_active: 1
+        },
+        attributes: ['permission_id'],
+        transaction
+      });
+
+      const previousPermissionIds = new Set(
+        previousRolePermissions.map((item) => Number(item.permission_id))
+      );
+      const updatedPermissionIds = new Set(
+        updatedRolePermissions.map((item) => Number(item.permission_id))
+      );
+      const changedPermissionIds = [
+        ...new Set([
+          ...[...previousPermissionIds].filter((permissionId) => !updatedPermissionIds.has(permissionId)),
+          ...[...updatedPermissionIds].filter((permissionId) => !previousPermissionIds.has(permissionId))
+        ])
+      ];
 
       const roleUsers = await db.users.findAll({
         where: {
@@ -18737,9 +18768,27 @@ exports.updateRole = async (req, res) => {
         transaction
       });
 
-      await Promise.all(
-        roleUsers.map((user) => syncUserPermissionsFromRole(user.id, role_id, transaction))
-      );
+      const roleUserIds = roleUsers.map((user) => Number(user.id));
+
+      // A role change must win for the permission being changed:
+      // - removing it clears every explicit user grant for that role;
+      // - adding it clears every explicit deny so all role users inherit it.
+      // Unrelated individual overrides remain untouched.
+      if (roleUserIds.length && changedPermissionIds.length) {
+        await db.user_permissions.update(
+          {
+            is_active: 0,
+            is_allowed: 0
+          },
+          {
+            where: {
+              user_id: { [Op.in]: roleUserIds },
+              permission_id: { [Op.in]: changedPermissionIds }
+            },
+            transaction
+          }
+        );
+      }
 
       // Force affected users to log in again so their token cannot retain old permissions.
       await db.users.update(
