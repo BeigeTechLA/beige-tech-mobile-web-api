@@ -21,21 +21,4 @@ async function validateSession(decoded) {
   }
 }
 
-async function logout(req, res) {
-  try {
-    if (req.user.sessionId) {
-      await db.user_login_history.update({ logged_out_at: new Date() }, { where: {
-        session_id: req.user.sessionId, user_id: req.user.userId, logged_out_at: null
-      } });
-    } else if (req.user.isInternalMember) {
-      // A legacy JWT has no individual session ID. Revoke all its account's legacy tokens.
-      await db.users.increment('permissions_version', { where: { id: req.user.userId } });
-    }
-    return res.json({ success: true, message: 'Signed out successfully.' });
-  } catch (error) {
-    console.error('Session logout failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Could not sign out. Please try again.' });
-  }
-}
-
-module.exports = { validateSession, logout };
+module.exports = { validateSession };

@@ -13,6 +13,7 @@ function fixture(overrides = {}) {
   let time = Date.now();
   const sent = [];
   const history = [{ user_id: 288, session_version: 3, logged_out_at: null }];
+  const sessions = [{ user_id: 288, permissions_version: 3, revoked_at: null }];
   const row = { id: 288, email: 'test@example.com', is_active: 1,
     password_hash: hash, permissions_version: 3, userType: { is_internal_member: 1 },
     password_expiry_otp_attempts: 0, ...overrides };
@@ -23,6 +24,10 @@ function fixture(overrides = {}) {
   let tail = Promise.resolve();
   const db = {
     user_type: {},
+    user_sessions: { update: async (values, options) => {
+      assert.ok(options.transaction);
+      for (const entry of sessions) if (entry.user_id === options.where.user_id && entry.revoked_at === null) Object.assign(entry, values);
+    } },
     users: { findOne: async ({ where, transaction, lock }) => {
       assert.ok(transaction); assert.equal(lock, 'UPDATE');
       return row.is_active === where.is_active && (!where.id || where.id === row.id) &&
@@ -36,8 +41,14 @@ function fixture(overrides = {}) {
       const run = tail.then(async () => {
         const snapshot = { ...row };
         const previousHistory = history.map((item) => ({ ...item }));
+        const previousSessions = sessions.map((item) => ({ ...item }));
         try { return await callback({ LOCK: { UPDATE: 'UPDATE' } }); }
-        catch (error) { Object.assign(row, snapshot); history.splice(0, history.length, ...previousHistory); throw error; }
+        catch (error) {
+          Object.assign(row, snapshot);
+          history.splice(0, history.length, ...previousHistory);
+          sessions.splice(0, sessions.length, ...previousSessions);
+          throw error;
+        }
       });
       tail = run.catch(() => {});
       return run;
@@ -52,6 +63,7 @@ function fixture(overrides = {}) {
   const issue = async (user, transaction) => {
     assert.ok(transaction);
     history.push({ user_id: user.id, session_version: user.permissions_version, logged_out_at: null });
+    sessions.push({ user_id: user.id, permissions_version: user.permissions_version, revoked_at: null });
     return { token: 'new-device-token', user: { id: user.id, permissions_version: user.permissions_version }, permissions: {} };
   };
   const advance = (milliseconds) => { time += milliseconds; };
@@ -61,7 +73,7 @@ function fixture(overrides = {}) {
     assert.equal(result.success, true);
     return { currentPassword: oldPassword, newPassword, confirmPassword: newPassword, resetProof: result.resetProof };
   };
-  return { service, row, sent, history, issue, advance, verified };
+  return { service, row, sent, history, sessions, issue, advance, verified };
 }
 
 test('request sends six-digit branded email code and enforces exact resend cooldown', async () => {
@@ -203,6 +215,9 @@ test('successful change increments version, ends old sessions, creates current-d
   assert.ok(f.history[0].logged_out_at);
   assert.equal(f.history[1].logged_out_at, null);
   assert.equal(f.history[1].session_version, 4);
+  assert.ok(f.sessions[0].revoked_at);
+  assert.equal(f.sessions[1].revoked_at, null);
+  assert.equal(f.sessions[1].permissions_version, 4);
 });
 
 test('session issuance failure rolls back password, proof consumption and revocation', async () => {
@@ -210,5 +225,6 @@ test('session issuance failure rolls back password, proof consumption and revoca
   await assert.rejects(f.service.complete(identity, 'expiry', body, async () => { throw new Error('session write failed'); }), /session write failed/);
   assert.equal(f.row.password_hash, hash); assert.equal(f.row.permissions_version, 3);
   assert.ok(f.row.password_reset_proof_hash); assert.equal(f.history[0].logged_out_at, null);
+  assert.equal(f.sessions[0].revoked_at, null);
   assert.equal((await f.service.complete(identity, 'expiry', body, f.issue)).success, true);
 });

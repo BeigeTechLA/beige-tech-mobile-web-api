@@ -960,6 +960,166 @@ const extractChatRecipientTargets = (envelope = {}) => {
   return recipients;
 };
 
+const resolveChatRecipientUserId = async (recipient = {}) => {
+  const directId = Number(recipient.user_id || recipient.userId || recipient.id);
+  if (Number.isInteger(directId) && directId > 0) return String(directId);
+
+  const email = normalizeEmailAddress(recipient.email);
+  if (!email) return null;
+
+  const role = String(recipient.role || '').trim().toLowerCase();
+  const userType = ['cp', 'creator', 'creative'].includes(role)
+    ? 2
+    : role === 'client'
+      ? 3
+      : null;
+
+  const user = await db.users.findOne({
+    where: {
+      email,
+      is_active: 1,
+      ...(userType ? { user_type: userType } : {}),
+    },
+    attributes: ['id'],
+    raw: true,
+  });
+  if (user?.id) return String(user.id);
+
+  if (['cp', 'creator', 'creative'].includes(role)) {
+    const crew = await db.crew_members.findOne({
+      where: { email },
+      attributes: ['user_id'],
+      raw: true,
+    });
+    if (crew?.user_id) return String(crew.user_id);
+  }
+
+  if (role === 'client') {
+    const client = await db.clients.findOne({
+      where: { email },
+      attributes: ['user_id'],
+      raw: true,
+    });
+    if (client?.user_id) return String(client.user_id);
+  }
+
+  return null;
+};
+
+const buildChatPushContent = ({ eventType, sender, messagePreview }) => {
+  const senderName = sender?.name || sender?.email || 'Someone';
+  const preview = String(messagePreview || '').replace(/\s+/g, ' ').trim();
+
+  if (eventType === 'mention') {
+    return {
+      title: 'You were mentioned',
+      body: preview ? `${senderName}: ${preview}` : `${senderName} mentioned you.`,
+    };
+  }
+
+  if (eventType === 'direct_message') {
+    return {
+      title: 'New message',
+      body: preview ? `${senderName}: ${preview}` : `${senderName} sent you a message.`,
+    };
+  }
+
+  return {
+    title: 'New message thread started',
+    body: `${senderName} started a conversation.`,
+  };
+};
+
+const sendChatPushNotifications = async ({
+  roomId,
+  bookingId = '',
+  sender,
+  eventType = 'messaging_initiated',
+  messagePreview = '',
+  recipientTargets = [],
+  mentionedUserIds = [],
+  sendPush = true,
+}) => {
+  try {
+    const senderId = String(sender?.id || '').trim();
+    const mentionIds = new Set(
+      (Array.isArray(mentionedUserIds) ? mentionedUserIds : [])
+        .map((value) => String(value?.id || value?.user_id || value || '').trim())
+        .filter(Boolean)
+    );
+    const notificationType = eventType === 'mention'
+      ? 'mention'
+      : eventType === 'direct_message'
+        ? 'direct_message'
+        : 'messaging_initiated';
+    const targets = [];
+    const seen = new Set();
+
+    for (const recipient of recipientTargets) {
+      const userId = await resolveChatRecipientUserId(recipient);
+      if (!userId || userId === senderId || seen.has(userId)) continue;
+      if (notificationType === 'mention' && mentionIds.size && !mentionIds.has(userId)) continue;
+      targets.push({ userId });
+      seen.add(userId);
+    }
+
+    if (!targets.length) return;
+
+    const content = buildChatPushContent({
+      eventType: notificationType,
+      sender,
+      messagePreview,
+    });
+
+    const results = await Promise.allSettled(targets.map(({ userId }) => {
+      const payload = {
+        topic: 'messages',
+        category: 'messages',
+        type: notificationType,
+        event_type: eventType === 'participant_added' ? 'participant_added' : notificationType,
+        room_id: String(roomId || ''),
+        chat_room_id: String(roomId || ''),
+        booking_id: String(bookingId || ''),
+        sender_id: senderId,
+        sender_name: sender?.name || sender?.email || '',
+      };
+
+      const numericSenderId = Number(senderId);
+
+      return appNotificationService.createAndPushNotification({
+        userId,
+        senderUserId: Number.isInteger(numericSenderId) && numericSenderId > 0 ? numericSenderId : null,
+        title: content.title,
+        message: content.body,
+        topic: 'messages',
+        category: 'messages',
+        type: notificationType,
+        referenceId: String(roomId || ''),
+        referenceType: 'chat_room',
+        payload,
+        actionLabel: 'View message',
+        sendPush,
+      });
+    }));
+
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error('[PushNotification] Chat push failed:', {
+          roomId,
+          recipientUserId: targets[index]?.userId || null,
+          type: notificationType,
+          message: result.reason?.message || result.reason,
+        });
+      }
+    });
+  } catch (error) {
+    console.error('[PushNotification] Chat push notification failed:', {
+      roomId,
+      message: error.message || error,
+    });
+  }
+};
+
 const sendChatNotificationTemplate = async ({
   roomId,
   sender,
@@ -992,6 +1152,15 @@ const sendChatNotificationTemplate = async ({
     if (!recipientTargets.length) {
       recipientTargets = await getChatBookingFallbackRecipients(projectId);
     }
+
+    await sendChatPushNotifications({
+      roomId,
+      bookingId: projectId,
+      sender,
+      eventType: eventType === 'participant_added' ? 'messaging_initiated' : eventType,
+      messagePreview,
+      recipientTargets,
+    });
 
     // A room-creation email is intentionally sent to every chat member with a
     // valid email address. The email service removes duplicate addresses.
@@ -1232,6 +1401,7 @@ const getCreativePartnerDirectory = async (search = '') => {
     const profilePhoto = Array.isArray(plain.crew_member_files) ? plain.crew_member_files[0] : null;
     return {
       id: String(plain.user_id || plain.crew_member_id),
+      crew_member_id: String(plain.crew_member_id),
       name: `${plain.first_name || ''} ${plain.last_name || ''}`.trim() || plain.email || `CP ${plain.crew_member_id}`,
       email: plain.email || null,
       role: 'cp',
@@ -1862,6 +2032,7 @@ exports.listChatRooms = async (req, res) => {
       'production_id',
       'order_id',
       'populate',
+      'status',
     ].forEach((key) => {
       const value = req.query[key];
       if (value == null || String(value).trim() === '') return;
@@ -2072,6 +2243,47 @@ exports.sendChatMessage = async (req, res) => {
       }),
     });
 
+    const mentionedUserIds =
+      req.body.mentioned_user_ids ||
+      req.body.mentionedUserIds ||
+      req.body.mentions ||
+      req.body.mentionedUsers ||
+      [];
+
+    const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+    const { envelope } = extractParticipantEnvelope(participantPayload || {});
+    const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
+    let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
+    const mappedBookingId = await getMappedBookingIdForRoom(req.params.roomId);
+
+    if (!recipientTargets.length && mappedBookingId) {
+      recipientTargets = await getChatBookingFallbackRecipients(mappedBookingId);
+    }
+
+    // The centralized chat service already sends the normal message push.
+    // Store the matching MySQL dashboard record here without a second popup.
+    await sendChatPushNotifications({
+      roomId: req.params.roomId,
+      bookingId: mappedBookingId,
+      sender,
+      eventType: 'direct_message',
+      messagePreview: req.body.message,
+      recipientTargets,
+      sendPush: false,
+    });
+
+    if (Array.isArray(mentionedUserIds) && mentionedUserIds.length) {
+      await sendChatPushNotifications({
+        roomId: req.params.roomId,
+        bookingId: mappedBookingId,
+        sender,
+        eventType: 'mention',
+        messagePreview: req.body.message,
+        recipientTargets,
+        mentionedUserIds,
+      });
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
@@ -2122,10 +2334,9 @@ exports.editChatMessage = async (req, res) => {
   }
 };
 
-exports.deleteChatMessage = async (req, res) => {
+const deleteChatMessage = async (req, res, allowAnySender = false) => {
   try {
     const sender = await resolveChatSender(req.user);
-    const allowAnySender = isAdminRequestUser(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
@@ -2137,6 +2348,85 @@ exports.deleteChatMessage = async (req, res) => {
           email: sender.email || null,
           name: sender.name || sender.email || 'Beige User',
         },
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.deleteChatMessage = (req, res) => deleteChatMessage(req, res, false);
+exports.moderateDeleteChatMessage = (req, res) => deleteChatMessage(req, res, true);
+
+const batchDeleteChatMessages = async (req, res, allowAnySender = false) => {
+  try {
+    const roomId = String(req.params.roomId || '').trim();
+    const messageIds = Array.isArray(req.body.messageIds)
+      ? [...new Set(req.body.messageIds.map((id) => String(id || '').trim()).filter(Boolean))]
+      : [];
+
+    if (!roomId) {
+      return res.status(400).json({ success: false, message: 'roomId is required' });
+    }
+    if (!messageIds.length) {
+      return res.status(400).json({ success: false, message: 'messageIds are required' });
+    }
+    if (messageIds.length > 100) {
+      return res.status(400).json({ success: false, message: 'You can delete at most 100 messages at once' });
+    }
+
+    const sender = await resolveChatSender(req.user);
+
+    const result = await proxyRequest(`/room/${roomId}/messages/batch-delete`, {
+      method: 'POST',
+      body: JSON.stringify({
+        messageIds,
+        allowAnySender,
+        sender: {
+          id: sender.id != null ? String(sender.id) : null,
+          email: sender.email || null,
+          name: sender.name || sender.email || 'Beige User',
+        },
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.batchDeleteChatMessages = (req, res) => batchDeleteChatMessages(req, res, false);
+exports.moderateBatchDeleteChatMessages = (req, res) => batchDeleteChatMessages(req, res, true);
+
+exports.updateChatRoomStatus = async (req, res) => {
+  try {
+    const roomId = String(req.params.roomId || '').trim();
+    const status = String(req.body.status || '').trim().toLowerCase();
+    if (!roomId) {
+      return res.status(400).json({ success: false, message: 'roomId is required' });
+    }
+    if (!['active', 'read_only', 'archived'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    const adminUser = await getPlatformUserById(req.user?.userId || null);
+    const result = await proxyRequest(`/rooms/${roomId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status,
+        adminId: req.user?.userId != null ? String(req.user.userId) : null,
+        adminUser: adminUser
+          ? { id: String(adminUser.id), email: adminUser.email, name: adminUser.name, role: 'admin' }
+          : null,
       }),
     });
 

@@ -240,14 +240,17 @@ exports.createAndPushNotification = async ({
   appUserType = null,
   dedupeWindowSeconds = 0
 }) => {
-  /*
   const pushData = normalizePayload({
     topic,
     category: category || topic,
     type,
     ...(payload || {})
   });
-  const targetSurfaces = normalizeDeliverySurfaces(deliverySurfaces, [deliverySurface]);
+  // The dashboard inbox is the source of truth. Put its record first so the
+  // same ID can be included in an FCM payload and marked read after a web-push
+  // tap. Other delivery-surface records are still created when requested.
+  const targetSurfaces = normalizeDeliverySurfaces(deliverySurfaces, [deliverySurface])
+    .sort((left, right) => (left === 'web_app' ? -1 : 0) - (right === 'web_app' ? -1 : 0));
   const dedupeSeconds = Math.max(parseInt(dedupeWindowSeconds, 10) || 0, 0);
 
   if (dedupeSeconds > 0) {
@@ -270,36 +273,9 @@ exports.createAndPushNotification = async ({
     if (existingNotification) return existingNotification;
   }
 
-  if (sendPush) {
-    try {
-      await pushNotificationService.sendPushToUser({
-        userId,
-        title: pushTitle || title,
-        body: pushBody || message,
-        data: pushData || {
-          topic,
-          category: category || topic,
-          type
-        }
-      });
-    } catch (err) {
-      console.error('[AppNotification] Push send failed:', {
-        user_id: userId,
-        topic,
-        type,
-        message: err.message
-      });
-    }
-  }
-
-  const inWebAllowed = await pushNotificationService.isInAppNotificationAllowedForUser({
-    userId,
-    topic: category || topic,
-    priority
-  });
-
-  if (!inWebAllowed) return null;
-
+  // Persist the inbox item before attempting delivery. FCM delivery is best
+  // effort: a missing token, disabled browser permission, or Firebase failure
+  // must not make the user lose the notification in the dashboard.
   const notifications = await Promise.all(targetSurfaces.map((surface) => (
     exports.createNotification({
       userId,
@@ -318,11 +294,34 @@ exports.createAndPushNotification = async ({
       appUserType
     })
   )));
+  const webNotification = notifications.find((notification) => notification.delivery_surface === 'web_app') || notifications[0];
 
-  return notifications[0] || null;
-  */
+  if (sendPush) {
+    try {
+      await pushNotificationService.sendPushToUser({
+        userId,
+        title: pushTitle || title,
+        body: pushBody || message,
+        data: {
+          ...(pushData || {
+            topic,
+            category: category || topic,
+            type
+          }),
+          notification_id: String(webNotification.notification_id)
+        }
+      });
+    } catch (err) {
+      console.error('[AppNotification] Push send failed:', {
+        user_id: userId,
+        topic,
+        type,
+        message: err.message
+      });
+    }
+  }
 
-  return null;
+  return webNotification || null;
 };
 
 exports.listNotifications = async ({

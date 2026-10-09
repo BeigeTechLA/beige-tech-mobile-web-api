@@ -47,7 +47,6 @@ function isMobileAppPaymentMetadata(metadata = {}) {
 }
 
 async function sendBookingConfirmedPush({ booking, bookingId }) {
-  /*
   const clientUserId = Number(booking?.user_id || 0);
   if (!clientUserId) return;
 
@@ -89,7 +88,6 @@ async function sendBookingConfirmedPush({ booking, bookingId }) {
       message: error.message || error
     });
   }
-    */
 }
 
 async function getQuoteCreatorNotificationRecipient({
@@ -1596,6 +1594,7 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       paymentIntentId,
       booking_id,
       lead_id: lead?.lead_id || '',
+      payment_source: paymentSource,
       ...quoteCreatorRecipient
     }).catch(err => console.error('Sales Notification Error:', err));
 
@@ -2149,6 +2148,7 @@ const notifySalesPaymentReceivedForBooking = async ({
       payment_link_id: paymentLink?.payment_link_id || '',
       booking_id: resolvedBookingId,
       lead_id: lead?.lead_id || '',
+      payment_source: paymentSource,
       ...quoteCreatorRecipient
     });
   } catch (err) {
@@ -3705,6 +3705,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       paymentIntentId,
       booking_id,
       lead_id: lead?.lead_id || '',
+      payment_source: paymentSource,
       ...quoteCreatorRecipient
     }).catch(err => console.error('Sales Notification Error:', err));
     sendBookingConfirmationForBooking({
@@ -4396,6 +4397,7 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       paymentIntentId,
       booking_id: bookingId,
       lead_id: lead?.lead_id || '',
+      payment_source: paymentSource,
       ...quoteCreatorRecipient
     }).catch(err => console.error('Manual webhook sales notification error:', err));
 

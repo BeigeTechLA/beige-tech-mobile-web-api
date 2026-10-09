@@ -1,5 +1,6 @@
 const constants = require('../utils/constants');
 const quoteService = require('../services/sales-quote.service');
+const quoteAnalyticsService = require('../services/quote-analytics.service');
 const masterPricingExportService = require('../services/master-pricing-export.service');
 const db = require('../models');
 const { Op } = require('sequelize');
@@ -642,6 +643,70 @@ exports.getQuoteDashboard = async (req, res) => {
   } catch (error) {
     console.error('Error fetching sales quote dashboard:', error);
     return sendError(res, error, 'Failed to fetch quote dashboard', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+
+exports.getQuoteAnalytics = async (req, res) => {
+  try {
+    const data = await quoteAnalyticsService.getAnalytics(req.query, getUserContext(req));
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error fetching quote analytics:', error);
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to fetch quote analytics',
+      error.statusCode || constants.INTERNAL_SERVER_ERROR.code
+    );
+  }
+};
+
+exports.getQuoteAnalyticsFilters = async (req, res) => {
+  try {
+    const data = await quoteAnalyticsService.getAnalyticsFilters(getUserContext(req));
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error fetching quote analytics filters:', error);
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to fetch quote analytics filters',
+      error.statusCode || constants.INTERNAL_SERVER_ERROR.code
+    );
+  }
+};
+
+exports.getQuoteAnalyticsByRep = async (req, res) => {
+  try {
+    const data = await quoteAnalyticsService.getRepAnalytics(
+      req.params.salesRepId,
+      req.query,
+      getUserContext(req)
+    );
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error fetching sales representative quote analytics:', error);
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to fetch sales representative quote analytics',
+      error.statusCode || constants.INTERNAL_SERVER_ERROR.code
+    );
+  }
+};
+
+exports.listQuoteAnalyticsCards = async (req, res) => {
+  try {
+    const data = await quoteAnalyticsService.listAnalyticsQuotes(req.query, getUserContext(req));
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error listing quote analytics cards:', error);
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to fetch quote analytics cards',
+      error.statusCode || constants.INTERNAL_SERVER_ERROR.code
+    );
   }
 };
 

@@ -10,11 +10,11 @@ function response() {
     set(key, value) { this.headers[key] = value; return this; }, json(body) { this.body = body; return this; } };
 }
 
-function handlers(service) {
+function handlers(service, buildResponse = async () => ({ token: 'new-token' })) {
   const source = fs.readFileSync(path.join(root, 'src/controllers/auth.controller.js'), 'utf8');
   const start = source.indexOf('const passwordResetHandler =');
   const context = { exports: {}, passwordResetService: service,
-    buildAuthenticatedUserResponse: async () => ({ token: 'new-token' }), console };
+    buildAuthenticatedUserResponse: buildResponse, console };
   vm.runInNewContext(source.slice(start, source.indexOf('\n/**', start)), context);
   return context.exports;
 }
@@ -42,6 +42,21 @@ test('forgot routes validate and normalize email without requiring an authentica
   }
   const res = response(); await handler({ body: { email: ' TEST@EXAMPLE.COM ' } }, res);
   assert.equal(calls, 1); assert.equal(res.statusCode, 200);
+});
+
+test('password reset forwards the response and transaction to refresh-session issuance', async () => {
+  const user = { id: 288 }; const transaction = {}; const res = response();
+  const req = { user: { userId: 288 }, body: {} };
+  const handler = handlers({ complete: async (_identity, purpose, _body, issue) => {
+    assert.equal(purpose, 'expiry');
+    return { success: true, ...await issue(user, transaction) };
+  } }, async (...args) => {
+    assert.equal(args[0], user); assert.equal(args[1], req); assert.equal(args[2], res);
+    assert.equal(args[3], 'password_reset'); assert.equal(args[4], transaction);
+    return { token: 'new-token' };
+  }).changeExpiredPassword;
+  await handler(req, res);
+  assert.equal(res.statusCode, 200); assert.equal(res.body.token, 'new-token');
 });
 
 test('both mandatory and optional alternate middleware enforce password expiry before granting access', async () => {

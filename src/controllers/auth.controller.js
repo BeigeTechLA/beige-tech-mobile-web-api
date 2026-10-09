@@ -34,6 +34,7 @@ const {
 } = require('../utils/creatorOnboarding');
 const accountCreditService = require('../services/account-credit.service');
 const passwordExpiryService = require('../services/internal-password-expiry.service');
+const webSessionService = require('../services/web-session.service');
 const passwordResetService = require('../services/password-reset.service')({ db, emailService, passwordExpiryService });
 
 const getRequestIpAddress = (req) => {
@@ -76,7 +77,7 @@ const getIpLocation = async (ipAddress) => {
   }
 };
 
-const recordSuccessfulLogin = async (req, user, loginMethod, token, transaction) => {
+const recordSuccessfulLogin = async (req, user, loginMethod, token, sessionExpiresAt, transaction) => {
   try {
     if (Number(user?.userType?.is_internal_member || 0) !== 1) return;
     const decoded = jwt.decode(token);
@@ -90,7 +91,7 @@ const recordSuccessfulLogin = async (req, user, loginMethod, token, transaction)
       logged_in_at: new Date(),
       session_id: decoded.sessionId,
       session_version: user.permissions_version,
-      expires_at: new Date(decoded.exp * 1000),
+      expires_at: sessionExpiresAt || new Date(decoded.exp * 1000),
       last_seen_at: new Date()
     }, { transaction });
 
@@ -112,6 +113,18 @@ const recordSuccessfulLogin = async (req, user, loginMethod, token, transaction)
 
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(getGoogleClientId());
+
+const normalizeIanaTimezone = (value) => {
+  const timezone = String(value || '').trim();
+  if (!timezone) return null;
+
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch (_) {
+    return null;
+  }
+};
 
 const findCreatorTypeId = async (transaction = null) => {
   const creatorType = await user_type.findOne({
@@ -430,17 +443,31 @@ const generateTokens = (userId, userRole, permissionsVersion, userTypeId, sessio
   const token = jwt.sign(
     { userId, userRole, permissionsVersion, userTypeId, ...(sessionId ? { sessionId } : {}) },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    { expiresIn: config.jwtExpiresIn }
   );
 
-  const refreshToken = jwt.sign(
-    { userId, userRole, permissionsVersion, userTypeId, ...(sessionId ? { sessionId } : {}), type: 'refresh' },
-    process.env.JWT_SECRET,
-    { expiresIn: '30d' }
-  );
-
-  return { token, refreshToken };
+  return { token };
 };
+
+async function issueLoginSession(req, res, user, loginMethod, existingTransaction) {
+  const internal = Number(user.userType?.is_internal_member || 0) === 1;
+  const sessionId = internal ? randomUUID() : undefined;
+  const tokens = generateTokens(user.id, user.userType?.user_role || 'client', user.permissions_version,
+    user.userType?.user_type_id || user.user_type, sessionId);
+  const createSession = async (transaction) => {
+    const webSession = await webSessionService.create(req, user, sessionId, transaction);
+    await recordSuccessfulLogin(req, user, loginMethod, tokens.token, webSession.expiresAt, transaction);
+    return webSession;
+  };
+  const session = existingTransaction
+    ? await createSession(existingTransaction)
+    : await db.sequelize.transaction(createSession);
+  // A password reset supplies its transaction. Do not publish a refresh
+  // credential until the password, revocations and new session have committed.
+  if (existingTransaction) existingTransaction.afterCommit(() => webSessionService.setCookie(res, session.rawToken));
+  else webSessionService.setCookie(res, session.rawToken);
+  return tokens;
+}
 
 /**
  * Get permissions for a role
@@ -614,7 +641,7 @@ function splitGoogleName(displayName, email) {
   return { firstName, lastName };
 }
 
-async function buildAuthenticatedUserResponse(user, req, loginMethod = 'google', transaction) {
+async function buildAuthenticatedUserResponse(user, req, res, loginMethod = 'google', transaction) {
   const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
 
   if (!user.userType) {
@@ -654,17 +681,15 @@ async function buildAuthenticatedUserResponse(user, req, loginMethod = 'google',
   });
   affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-  const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id, is_internal_member ? randomUUID() : undefined);
-  await recordSuccessfulLogin(req, user, loginMethod, token, transaction);
   const permissions = await getCombinedUserPermissions(user.id, user.user_type);
   const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
+  const { token } = await issueLoginSession(req, res, user, loginMethod, transaction);
 
   return {
     password_expired: passwordStatus.expired,
     role,
     user_type_id,
     token,
-    refreshToken,
     permissions,
     user: {
       id: user.id,
@@ -683,6 +708,7 @@ async function buildAuthenticatedUserResponse(user, req, loginMethod = 'google',
       is_registration_complete,
       temp_event_popup,
       permissions_version: user.permissions_version,
+      timezone: user.timezone || null,
       has_password: Boolean(user.password_hash)
     }
   };
@@ -1130,9 +1156,9 @@ exports.verifyEmail = async (req, res) => {
     });
 
     const role = userTypeRecord?.user_role || 'client';
-    const isInternal = Number(userTypeRecord?.is_internal_member || 0) === 1;
-    const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user.user_type, isInternal ? randomUUID() : undefined);
-    if (isInternal) await recordSuccessfulLogin(req, { id: user.id, permissions_version: user.permissions_version, userType: userTypeRecord }, 'email_otp', token);
+    const { token } = await issueLoginSession(req, res, {
+      id: user.id, permissions_version: user.permissions_version, user_type: user.user_type, userType: userTypeRecord
+    }, 'email_otp');
     const permissions = getPermissionsForRole(role);
 
     return res.status(200).json({
@@ -1145,8 +1171,7 @@ exports.verifyEmail = async (req, res) => {
         role: role
       },
       token,
-      refreshToken,
-      permissions
+        permissions
     });
 
   } catch (error) {
@@ -1241,13 +1266,17 @@ const getCombinedUserPermissions = async (userId, roleId) => {
   return formattedPermissions;
 };
 
+exports.refreshSession = (req, res) => webSessionService.refresh(req, res, generateTokens);
+exports.logout = webSessionService.logout;
+
 /**
  * Login user with email/password or phone/OTP
  * POST /auth/login
  */
 exports.login = async (req, res) => {
   try {
-    const { email, password, mobile, otp } = req.body;
+    const { email, password, mobile, otp, timezone: requestedTimezone } = req.body;
+    const loginTimezone = normalizeIanaTimezone(requestedTimezone);
 
     // EMAIL/PASSWORD LOGIN
     if (email) {
@@ -1313,6 +1342,10 @@ exports.login = async (req, res) => {
         });
       }
 
+      if (!user.timezone && loginTimezone) {
+        await user.update({ timezone: loginTimezone, updated_at: new Date() });
+      }
+
       // Get user role
       const role = user.userType?.user_role || "client";
       const user_type_id = user.userType?.user_type_id || null;
@@ -1340,16 +1373,13 @@ exports.login = async (req, res) => {
       });
       affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      // Generate tokens
-      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id, is_internal_member ? randomUUID() : undefined);
-
       const permissions = await getCombinedUserPermissions(
         user.id,
         user.user_type
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
-      await recordSuccessfulLogin(req, user, 'password', token);
+      const { token } = await issueLoginSession(req, res, user, 'password');
       const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
 
       // const permissions = getPermissionsForRole(role);
@@ -1375,11 +1405,11 @@ exports.login = async (req, res) => {
           is_registration_complete,
         temp_event_popup,
           permissions_version: user.permissions_version,
+          timezone: user.timezone || null,
           has_password: Boolean(user.password_hash)
         },
         token,
-        refreshToken,
-        permissions,
+            permissions,
       });
     }
 
@@ -1463,6 +1493,10 @@ exports.login = async (req, res) => {
         });
       }
 
+      if (!user.timezone && loginTimezone) {
+        await user.update({ timezone: loginTimezone, updated_at: new Date() });
+      }
+
       // Clear OTP code (otp_expiry left as-is since it doesn't allow null)
       await User.update(
         { otp_code: null },
@@ -1495,7 +1529,6 @@ const affiliate = await Affiliate.findOne({
 });
 affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id, is_internal_member ? randomUUID() : undefined);
       
       const permissions = await getCombinedUserPermissions(
         user.id,
@@ -1503,7 +1536,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
       );
       const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
-      await recordSuccessfulLogin(req, user, 'otp', token);
+      const { token } = await issueLoginSession(req, res, user, 'otp');
       const passwordStatus = await passwordExpiryService.getExpiryStatus(user, is_internal_member);
 
       return res.json({
@@ -1527,12 +1560,12 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           is_registration_complete,
           temp_event_popup,
           permissions_version: user.permissions_version,
+          timezone: user.timezone || null,
           has_password: Boolean(user.password_hash)
         },
 
         token,
-        refreshToken,
-        permissions,
+            permissions,
       });
     }
 
@@ -1558,8 +1591,10 @@ exports.googleLogin = async (req, res) => {
       credential,
       mode = 'login',
       phone_number,
-      account_type = 'client'
+      account_type = 'client',
+      timezone: requestedTimezone
     } = req.body;
+    const loginTimezone = normalizeIanaTimezone(requestedTimezone);
     const idToken = googleToken || credential;
     const googleClientId = getGoogleClientId();
     const isSignup = mode === 'signup';
@@ -1918,7 +1953,11 @@ exports.googleLogin = async (req, res) => {
       });
     }
 
-    const authPayload = await buildAuthenticatedUserResponse(user, req);
+    if (!user.timezone && loginTimezone) {
+      await user.update({ timezone: loginTimezone, updated_at: new Date() });
+    }
+
+    const authPayload = await buildAuthenticatedUserResponse(user, req, res);
 
     return res.status(isSignup && (createdClientId || createdCrewMemberId) ? 201 : 200).json({
       success: true,
@@ -2159,7 +2198,7 @@ const passwordResetHandler = (purpose, action) => async (req, res) => {
     if (action === 'request') result = await passwordResetService.request(identity, purpose);
     else if (action === 'verify') result = await passwordResetService.verify(identity, purpose, req.body?.otp);
     else result = await passwordResetService.complete(identity, purpose, req.body,
-      (user, transaction) => buildAuthenticatedUserResponse(user, req, 'password_reset', transaction));
+      (user, transaction) => buildAuthenticatedUserResponse(user, req, res, 'password_reset', transaction));
     const { status = 200, ...body } = result;
     if (status === 429) res.set('Retry-After', String(body.retry_after_seconds));
     res.set('Cache-Control', 'no-store');
@@ -2289,6 +2328,7 @@ exports.getCurrentUser = async (req, res) => {
         is_crew_verified: crewMember?.is_crew_verified || null,
         is_registration_complete: crewMember?.is_registration_complete ?? null,
         temp_event_popup: getTempCpEventPopup(crewMember),
+        timezone: user.timezone || null,
         has_password: Boolean(user.password_hash)
       },
       permissions
@@ -2301,6 +2341,29 @@ exports.getCurrentUser = async (req, res) => {
       message: 'Server error fetching user info',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+exports.updateTimezone = async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    const timezone = normalizeIanaTimezone(req.body?.timezone);
+    const onlyIfMissing = req.body?.only_if_missing === true;
+
+    if (!userId) return res.status(401).json({ success: false, message: 'Not authenticated' });
+    if (!timezone) return res.status(400).json({ success: false, message: 'timezone must be a valid IANA timezone' });
+
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (!onlyIfMissing || !user.timezone) {
+      await user.update({ timezone, updated_at: new Date() });
+    }
+
+    return res.status(200).json({ success: true, message: 'Timezone saved successfully', timezone: user.timezone || timezone });
+  } catch (error) {
+    console.error('Update Timezone Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to save timezone' });
   }
 };
 
@@ -2477,7 +2540,7 @@ exports.quickRegister = async (req, res) => {
         return res.status(409).json({ success: false, message: 'Please sign in to your existing account.' });
       }
       const role = existingUser.userType?.user_role || 'client';
-      const { token, refreshToken } = generateTokens(existingUser.id, role);
+      const { token } = generateTokens(existingUser.id, role);
       const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
@@ -2491,8 +2554,7 @@ exports.quickRegister = async (req, res) => {
           role: role
         },
         token,
-        refreshToken,
-        permissions
+            permissions
       });
     }
 
@@ -2545,7 +2607,7 @@ exports.quickRegister = async (req, res) => {
     });
 
     // Generate tokens
-    const { token, refreshToken } = generateTokens(newUser.id, 'client');
+    const { token } = generateTokens(newUser.id, 'client');
     const permissions = getPermissionsForRole('client');
 
     return res.status(201).json({
@@ -2561,8 +2623,7 @@ exports.quickRegister = async (req, res) => {
       affiliate: affiliateData,
       linked_bookings_count: linkedBookingsCount,
       token,
-      refreshToken,
-      permissions,
+        permissions,
       tempPassword: tempPassword // Send temp password for user to set new one
     });
 

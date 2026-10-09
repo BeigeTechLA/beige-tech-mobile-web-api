@@ -18,6 +18,36 @@ const normalizeString = (value) => {
   return text || null;
 };
 
+const resolveFcmRecipientAliases = async ({ userId, appUserType }) => {
+  const normalizedAppUserType = String(appUserType || "").trim();
+  if (!userId || !["2", "3"].includes(normalizedAppUserType)) return [];
+
+  const user = await modelUsers.findByPk(userId, {
+    attributes: ["email"],
+    raw: true,
+  });
+  const email = normalizeString(user?.email)?.toLowerCase();
+  const identityConditions = [{ user_id: userId }];
+  if (email) identityConditions.push({ email });
+
+  const profileModel = normalizedAppUserType === "2" ? db.crew_members : db.clients;
+  const profileIdField = normalizedAppUserType === "2" ? "crew_member_id" : "client_id";
+  if (!profileModel) return [];
+
+  const profiles = await profileModel.findAll({
+    where: {
+      is_active: 1,
+      [db.Sequelize.Op.or]: identityConditions,
+    },
+    attributes: [profileIdField],
+    raw: true,
+  });
+
+  return [...new Set(profiles
+    .map((profile) => normalizeString(profile[profileIdField]))
+    .filter((profileId) => profileId && profileId !== String(userId)))];
+};
+
 const normalizeBoolean = (value, fallback = true) => {
   if (value == null) return fallback;
   if (typeof value === 'boolean') return value;
@@ -312,6 +342,8 @@ exports.saveUserFcmToken = async ({
     throw error;
   }
 
+  const recipientIds = await resolveFcmRecipientAliases({ userId, appUserType });
+
   const result = await callThirdPartyPushApi({
     method: 'POST',
     path: '/v1/internal/push/tokens',
@@ -321,6 +353,7 @@ exports.saveUserFcmToken = async ({
       session_id: normalizeString(sessionId),
       device_type: normalizedDeviceType,
       app_user_type: appUserType,
+      recipient_ids: recipientIds,
       notification_preferences: notificationPreferences || undefined,
     },
   });
@@ -555,7 +588,6 @@ exports.sendPushToUser = async ({
     throw error;
   }
 
-  /*
   return callThirdPartyPushApi({
     method: 'POST',
     path: '/v1/internal/push/send',
@@ -566,7 +598,4 @@ exports.sendPushToUser = async ({
       data,
     },
   });
-  */
-
-  return null;
 };

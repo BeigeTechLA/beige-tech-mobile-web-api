@@ -34,7 +34,8 @@ router.post('/verify-email', authController.verifyEmail);
 // ===== LOGIN =====
 router.post('/login', authController.login);
 router.post('/google', authController.googleLogin);
-router.post('/logout', authenticate, require('../services/login-session.service').logout);
+router.post('/refresh', authController.refreshSession);
+router.post('/logout', authController.logout);
 
 // ===== PASSWORD MANAGEMENT =====
 router.post('/forgot-password', authController.forgotPassword);
@@ -56,6 +57,7 @@ router.get('/permissions/:role', authController.getPermissions);
 
 // GET /auth/me - Get current user info
 router.get('/me', authenticate, authController.getCurrentUser);
+router.patch('/timezone', authenticate, authController.updateTimezone);
 router.get('/onboarding-status', authenticate, authController.getOnboardingStatus);
 router.post('/cp-event-location/confirm', authenticate, authController.confirmCpEventLocation);
 router.post('/admin/create-internal-credential', authenticate, adminUsersCreate, authController.createInternalCredential);

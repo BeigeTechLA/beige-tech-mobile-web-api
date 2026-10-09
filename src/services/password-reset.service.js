@@ -121,6 +121,7 @@ module.exports = function createPasswordResetService({ db, emailService, passwor
         password_reset_proof_hash: null, password_reset_purpose: null,
         password_reset_sent_at: null, password_reset_blocked_until: null, password_reset_version: null
       }, { transaction });
+      await db.user_sessions.update({ revoked_at: changedAt }, { where: { user_id: user.id, revoked_at: null }, transaction });
       await db.user_login_history.update({ logged_out_at: changedAt }, { where: { user_id: user.id, logged_out_at: null }, transaction });
       // Consume the proof, revoke old sessions and create the new login atomically.
       // Failed session creation must roll the password change back as well.

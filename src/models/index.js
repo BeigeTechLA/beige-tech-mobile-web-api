@@ -12,8 +12,12 @@ const signupCreditPromoHistoryFactory = require('./signup_credit_promo_history')
 const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
 const assignmentHistoryFactory = require('./assignment_history');
+const userSessionsFactory = require('./user_sessions');
 const userLoginHistoryFactory = require('./user_login_history');
 const internalPasswordExpirySettingsFactory = require('./internal_password_expiry_settings');
+const creatorAvailabilityRulesFactory = require('./creator_availability_rules');
+const creatorAvailabilityBlocksFactory = require('./creator_availability_blocks');
+const creatorCalendarConnectionsFactory = require('./creator_calendar_connections');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -27,9 +31,18 @@ models.signup_credit_promo_history = signupCreditPromoHistoryFactory(sequelize, 
 models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
+models.user_sessions = userSessionsFactory(sequelize, DataTypes);
+
+if (models.user_sessions && models.users) {
+  models.user_sessions.belongsTo(models.users, { foreignKey: 'user_id', as: 'user' });
+  models.users.hasMany(models.user_sessions, { foreignKey: 'user_id', as: 'sessions' });
+}
 models.user_login_history = userLoginHistoryFactory(sequelize, DataTypes);
 models.user_login_history.belongsTo(models.users, { foreignKey: 'user_id', as: 'sessionUser' });
 models.internal_password_expiry_settings = internalPasswordExpirySettingsFactory(sequelize, DataTypes);
+models.creator_availability_rules = creatorAvailabilityRulesFactory(sequelize, DataTypes);
+models.creator_availability_blocks = creatorAvailabilityBlocksFactory(sequelize, DataTypes);
+models.creator_calendar_connections = creatorCalendarConnectionsFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
@@ -40,6 +53,39 @@ if (models.sales_rep_availability && models.users) {
   models.users.hasMany(models.sales_rep_availability, {
     foreignKey: 'sales_rep_id',
     as: 'sales_rep_availability_entries'
+  });
+}
+
+if (models.creator_availability_rules && models.crew_members) {
+  models.creator_availability_rules.belongsTo(models.crew_members, {
+    foreignKey: 'crew_member_id',
+    as: 'crew_member'
+  });
+  models.crew_members.hasMany(models.creator_availability_rules, {
+    foreignKey: 'crew_member_id',
+    as: 'availability_rules'
+  });
+}
+
+if (models.creator_availability_blocks && models.crew_members) {
+  models.creator_availability_blocks.belongsTo(models.crew_members, {
+    foreignKey: 'crew_member_id',
+    as: 'crew_member'
+  });
+  models.crew_members.hasMany(models.creator_availability_blocks, {
+    foreignKey: 'crew_member_id',
+    as: 'availability_blocks'
+  });
+}
+
+if (models.creator_calendar_connections && models.crew_members) {
+  models.creator_calendar_connections.belongsTo(models.crew_members, {
+    foreignKey: 'crew_member_id',
+    as: 'crew_member'
+  });
+  models.crew_members.hasMany(models.creator_calendar_connections, {
+    foreignKey: 'crew_member_id',
+    as: 'calendar_connections'
   });
 }
 

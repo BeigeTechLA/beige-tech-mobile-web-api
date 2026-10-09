@@ -17,7 +17,8 @@ const rejectExpiredPassword = async (req, res, user) => {
   const status = await passwordExpiryService.getExpiryStatus(user, Number(user.userType?.is_internal_member || 0) === 1);
   if (!status.expired) return false;
   res.status(403).json({ success: false, code: 'PASSWORD_EXPIRED', password_expired: true,
-    expires_at: status.expires_at, message: 'Your password has expired. Please reset your password to continue.' });
+    expires_at: status.expires_at,
+    message: 'Your password has expired. Please reset your password to continue.' });
   return true;
 };
 

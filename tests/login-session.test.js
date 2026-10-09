@@ -57,20 +57,6 @@ test('session validation is user/version scoped, denies revoked sessions and ref
   await service.validateSession({ userId: 288, permissionsVersion: 3 });
 });
 
-test('logout revokes only the current tracked session; legacy internal logout revokes account tokens', async () => {
-  let query; let incremented = false;
-  const service = load('src/services/login-session.service.js', { '../models': {
-    user_login_history: { update: async (values, options) => { query = { values, ...options }; } },
-    users: { increment: async () => { incremented = true; } }
-  } });
-  const res = { json: (body) => body };
-  assert.equal((await service.logout({ user: { userId: 288, sessionId: 'session-a', isInternalMember: true } }, res)).success, true);
-  assert.equal(query.where.session_id, 'session-a'); assert.equal(query.where.user_id, 288);
-  assert.ok(query.values.logged_out_at instanceof Date); assert.equal(incremented, false);
-  await service.logout({ user: { userId: 288, isInternalMember: true } }, res);
-  assert.equal(incremented, true);
-});
-
 test('auth rejects revoked/version-invalid sessions; logout remains available when password expired', async () => {
   let revoked = false;
   const auth = load('src/middleware/auth.js', {
@@ -144,6 +130,7 @@ test('issued sessions persist JWT expiry/version, fail closed on DB error, and s
   let saved; let failure = false; let lookups = 0;
   const context = {
     jwt, ipType, Date, AbortController, setTimeout, clearTimeout,
+    config: { jwtExpiresIn: '30m' },
     process: { env: { JWT_SECRET: 'test-secret' } }, console: { error: () => {} },
     fetch: async () => { lookups++; return { ok: true, json: async () => ({ city: 'Test City', country: 'Test Country' }) }; },
     db: { user_login_history: { create: async (values) => { if (failure) throw new Error('db unavailable'); saved = values; return { update: async () => {} }; } } }
@@ -152,7 +139,8 @@ test('issued sessions persist JWT expiry/version, fail closed on DB error, and s
   const pair = context.issue(288, 'Admin', 3, 1, 'session-a');
   const claims = jwt.verify(pair.token, 'test-secret');
   assert.equal(claims.sessionId, 'session-a');
-  assert.equal(jwt.verify(pair.refreshToken, 'test-secret').type, 'refresh');
+  assert.equal(pair.refreshToken, undefined); // Refresh lives only in an HttpOnly cookie.
+  assert.equal(claims.exp - claims.iat, 1800);
   const req = { ip: '::1', get: () => 'Chrome/154 Linux', headers: { 'x-forwarded-for': '8.8.8.8' } };
   await context.record(req, account, 'password', pair.token);
   assert.equal(saved.ip_address, '::1'); assert.equal(saved.session_id, claims.sessionId);
