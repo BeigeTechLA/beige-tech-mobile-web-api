@@ -18,8 +18,7 @@ router.get('/admin/general-agreements/history', authMiddleware, agreementsView, 
 router.get('/admin/general-agreements/:id/pdf', authMiddleware, agreementsView, agreementController.downloadAdminGeneralAgreementPdf);
 router.get('/admin/general-agreements/:id', authMiddleware, agreementsView, agreementController.getGeneralAgreement);
 router.post('/admin/general-agreements/:id/send', authMiddleware, agreementsEdit, agreementController.sendGeneralAgreement);
-router.post('/admin/shoot-requests', authMiddleware, agreementsCreate, agreementController.createShootRequest);
-router.post('/admin/shoot-agreements', authMiddleware, agreementsCreate, agreementController.createShootAgreement);
+router.post('/admin/shoots/:bookingId/agreements/draft', authMiddleware, agreementsCreate, agreementController.createShootAgreement);
 router.put('/admin/shoot-agreements/:id', authMiddleware, agreementsEdit, agreementController.updateShootAgreement);
 router.get('/admin/shoot-agreements/history', authMiddleware, agreementsView, agreementController.getShootAgreementHistory);
 router.get('/admin/shoot-agreements/:id', authMiddleware, agreementsView, agreementController.getShootAgreement);
@@ -27,8 +26,6 @@ router.post('/admin/shoot-agreements/:id/send', authMiddleware, agreementsEdit, 
 router.get('/cp/general-agreement/current', authMiddleware, cpAgreementView, agreementController.getCurrentGeneralAgreement);
 router.post('/cp/general-agreement/:versionId/accept', authMiddleware, cpAgreementEdit, agreementController.acceptCurrentGeneralAgreement);
 router.get('/cp/general-agreement/:id/pdf', authMiddleware, cpAgreementView, agreementController.downloadCurrentGeneralAgreementPdf);
-router.get('/cp/shoot-requests', authMiddleware, cpAgreementView, agreementController.getMyShootRequests);
-router.get('/cp/shoot-requests/:id', authMiddleware, cpAgreementView, agreementController.getMyShootRequest);
 router.get('/cp/shoot-agreements/:id', authMiddleware, cpAgreementView, agreementController.getMyShootAgreement);
 router.post('/cp/shoot-agreements/:id/accept', authMiddleware, cpAgreementEdit, agreementController.acceptShootAgreement);
 router.post('/cp/shoot-agreements/:id/reject', authMiddleware, cpAgreementEdit, agreementController.rejectShootAgreement);

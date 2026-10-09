@@ -4,7 +4,7 @@
 
 @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NSwidXNlclJvbGUiOiJDbGllbnQiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjMsImlhdCI6MTc4NjUyMTc0MiwiZXhwIjoxNzg3MTI2NTQyfQ.CoI96iZ3wFPAsULYefe4gGA2-SYhoiPGNjItzOqnYpI
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjMsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc5MDA1MzAzMywiZXhwIjoxNzkwNjU3ODMzfQ.q66lipW0vhDO_76y21AAqxBV01AAtNBGlOC8WCtkj0I
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjIsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc5MTU1MTM2NCwiZXhwIjoxNzkxNTUzMTY0fQ.f5pjgPZpLzXDSfIhjpPoOn5AAWeJTYVTL0uhGDlIV5Y
 
 @CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNCwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzkwMDU0ODE3LCJleHAiOjE3OTA2NTk2MTd9.SBjvgh0x2h6K1Ka2-hfA2GahYWN_jNwZP9Rcv4FyNWI
 
@@ -3790,60 +3790,99 @@ Content-Type: application/json
 Authorization: {{TOKEN2}}
 
 {
-  "crew_member_ids": [2107],
-  "role": "Videographer",
-  "project_id": null
+  "crew_member_ids": [2107]
 }
 
 ### STEP 4 — Admin: Get General Agreement History
 GET {{URL}}admin/general-agreements/history HTTP/1.1
 Authorization: {{TOKEN2}}
 
-### STEP 5 — Admin: Create Shoot Request
-POST {{URL}}admin/shoot-requests HTTP/1.1
+###
+GET {{URL}}admin/general-agreements/history?creative_partner_id=2107&date=today&version=v1.0&status=pending&search=Beige&page=1&limit=10 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### STEP 5 — Admin: Create Shoot Agreement Draft from Existing Shoot
+POST {{URL}}admin/shoots/1438/agreements/draft HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
 {
-  "project_name": "ABC Corporate Shoot",
-  "project_id": "PRJ-1024",
-  "client_name": "Test Client Co.",
- "crew_member_id": 2107,
-  "role": "Videographer",
-  "shoot_type": "CORPORATE",
-  "compensation_offer": 2000.00,
-  "production_date": "2026-10-15",
-  "location": "Los Angeles"
+  "mode": "common",
+  "recipients": [
+    {
+      "crew_member_id": 2020,
+      "compensation": 562.50,
+      "compensation_items": [
+        { "label": "Base Payout", "amount": 562.50 }
+      ]
+    },
+    {
+      "crew_member_id": 2021,
+      "compensation": 562.50,
+      "compensation_items": [
+        { "label": "Base Payout", "amount": 562.50 }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "section_order": 1,
+      "section_title": "Scope of Services",
+      "section_body": "Capture photography coverage for the shoot."
+    },
+    {
+      "section_order": 2,
+      "section_title": "Equipment Requirements",
+      "section_body": "Use agreed professional production equipment."
+    }
+  ]
 }
 
-### STEP 6 — Admin: Create Shoot Agreement
-POST {{URL}}admin/shoot-agreements HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN2}}
-
-{
-  "shoot_request_id": 1,
-  "assignment_id": "ASN-2012",
-  "crew_member_id": 2107,
-  "role": "Videographer",
-  "compensation": 2000.00,
-  "production_date": "2026-10-15",
-  "location": "Los Angeles",
-  "call_time": "08:00:00",
-  "expected_end_time": "18:00:00",
-  "scope_of_services": "Capture photography coverage for the corporate event, including event highlights and speaker sessions.",
-  "equipment_requirements": "Sony FX3 or equivalent cinema camera, prime lenses (24mm, 50mm, 85mm), tripod, gimbal stabilizer, audio recording equipment.",
-  "deliverables": "Upload all raw media to the designated Beige folder within 24 hours of shoot completion.",
-  "approved_expenses": "Travel to and from shoot location (up to $75 round trip). Parking at venue.",
-  "special_instructions": "Client requires all crew to sign NDA upon arrival. Business casual attire."
-}
-
-### STEP 7 — Admin: Get Shoot Agreement by ID
+### STEP 6 — Admin: Get Shoot Agreement by ID
 GET {{URL}}admin/shoot-agreements/1 HTTP/1.1
 Authorization: {{TOKEN2}}
 
+### STEP 7 — Admin: Edit Shoot Agreement (draft updates v1; sent/accepted creates a new version)
+PUT {{URL}}admin/shoot-agreements/4 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "create_new_version": true,
+  "recipients": [
+    {
+      "crew_member_id": 2020,
+      "compensation": 650.00,
+      "compensation_items": [
+        { "label": "Base Payout", "amount": 600.00 },
+        { "label": "Travel Adjustment", "amount": 50.00 }
+      ]
+    },
+    {
+      "crew_member_id": 2021,
+      "compensation": 650.00,
+      "compensation_items": [
+        { "label": "Base Payout", "amount": 600.00 },
+        { "label": "Travel Adjustment", "amount": 50.00 }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "section_order": 1,
+      "section_title": "Scope of Services",
+      "section_body": "Capture photography and video coverage for the shoot."
+    },
+    {
+      "section_order": 2,
+      "section_title": "Equipment Requirements",
+      "section_body": "Use agreed professional production equipment."
+    }
+  ]
+}
+
 ### STEP 8 — Admin: Send Shoot Agreement to CP
-POST {{URL}}admin/shoot-agreements/1/send HTTP/1.1
+POST {{URL}}admin/shoot-agreements/4/send HTTP/1.1
 Authorization: {{TOKEN2}}
 
 ### STEP 9 — Admin: Get Shoot Agreement History
@@ -3867,19 +3906,11 @@ Authorization: {{CP_TOKEN}}
   "confirmed": true
 }
 
-### STEP 12 — CP: List my Shoot Requests
-GET {{URL}}cp/shoot-requests HTTP/1.1
-Authorization: {{CP_TOKEN}}
-
-### STEP 13 — CP: Get single Shoot Request detail
-GET {{URL}}cp/shoot-requests/1 HTTP/1.1
-Authorization: {{CP_TOKEN}}
-
-### STEP 14 — CP: Get Shoot Agreement detail for review
+### STEP 12 — CP: Get Shoot Agreement detail for review
 GET {{URL}}cp/shoot-agreements/1 HTTP/1.1
 Authorization: {{CP_TOKEN}}
 
-### STEP 15 — CP: Accept the Shoot Agreement
+### STEP 13 — CP: Accept the Shoot Agreement
 POST {{URL}}cp/shoot-agreements/1/accept HTTP/1.1
 Content-Type: application/json
 Authorization: {{CP_TOKEN}}
@@ -3888,11 +3919,11 @@ Authorization: {{CP_TOKEN}}
   "confirmed": true
 }
 
-### STEP 16 — Verify: Admin re-checks shoot agreement history
+### STEP 14 — Verify: Admin re-checks shoot agreement history
 GET {{URL}}admin/shoot-agreements/history HTTP/1.1
 Authorization: {{TOKEN2}}
 
-### STEP 17 — CP: Reject a Shoot Agreement (use a 2nd shoot request/agreement)
+### STEP 15 — CP: Reject a Shoot Agreement (use a second agreement)
 POST {{URL}}cp/shoot-agreements/2/reject HTTP/1.1
 Content-Type: application/json
 Authorization: {{CP_TOKEN}}
@@ -3901,7 +3932,7 @@ Authorization: {{CP_TOKEN}}
   "reason": "Not available on this date"
 }
 
-### STEP 18 — CP: Profile — Documents & Agreements
+### STEP 16 — CP: Profile — Documents & Agreements
 GET {{URL}}cp/profile/agreements HTTP/1.1
 Authorization: {{CP_TOKEN}}
 
@@ -3939,25 +3970,19 @@ Content-Type: application/json
   "password": "test@123"
 }
 ###
-POST {{URL}}admin/shoot-agreements HTTP/1.1
+POST {{URL}}admin/shoots/1438/agreements/draft HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
 {
-  "shoot_request_id": 2,
-  "assignment_id": "ASN-2013",
-  "crew_member_id": 2107,
-  "role": "Videographer",
-  "compensation": 1500.00,
-  "production_date": "2026-11-01",
-  "location": "San Francisco",
-  "call_time": "09:00:00",
-  "expected_end_time": "17:00:00",
-  "scope_of_services": "Wedding coverage.",
-  "equipment_requirements": "Standard kit.",
-  "deliverables": "Upload within 48 hours.",
-  "approved_expenses": "N/A",
-  "special_instructions": "N/A"
+  "mode": "common",
+  "recipients": [
+    { "crew_member_id": 2020, "compensation": 750.00 },
+    { "crew_member_id": 2107, "compensation": 750.00 }
+  ],
+  "sections": [
+    { "section_order": 1, "section_title": "Scope of Services", "section_body": "Wedding coverage." }
+  ]
 }
 ###
 POST {{URL}}admin/shoot-agreements/2/send HTTP/1.1

@@ -20,6 +20,10 @@ const cpGeneralAgreementAcceptanceFactory = require('./cp_general_agreement_acce
 const shootRequestsFactory = require('./shoot_requests');
 const shootAgreementsFactory = require('./shoot_agreements');
 const shootAgreementVersionsFactory = require('./shoot_agreement_versions');
+const shootAgreementSectionsFactory = require('./shoot_agreement_sections');
+const shootAgreementRecipientsFactory = require('./shoot_agreement_recipients');
+const shootAgreementVersionRecipientsFactory = require('./shoot_agreement_version_recipients');
+const shootAgreementAcceptancesFactory = require('./shoot_agreement_acceptances');
 const agreementActivityLogFactory = require('./agreement_activity_log');
 
 // initialize all auto-generated models properly
@@ -47,6 +51,10 @@ models.cp_general_agreement_acceptance = cpGeneralAgreementAcceptanceFactory(seq
 models.shoot_requests = shootRequestsFactory(sequelize, DataTypes);
 models.shoot_agreements = shootAgreementsFactory(sequelize, DataTypes);
 models.shoot_agreement_versions = shootAgreementVersionsFactory(sequelize, DataTypes);
+models.shoot_agreement_sections = shootAgreementSectionsFactory(sequelize, DataTypes);
+models.shoot_agreement_recipients = shootAgreementRecipientsFactory(sequelize, DataTypes);
+models.shoot_agreement_version_recipients = shootAgreementVersionRecipientsFactory(sequelize, DataTypes);
+models.shoot_agreement_acceptances = shootAgreementAcceptancesFactory(sequelize, DataTypes);
 models.agreement_activity_log = agreementActivityLogFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
@@ -177,16 +185,25 @@ if (models.agreements && models.agreement_versions && models.agreement_sections)
   models.agreements.belongsTo(models.agreement_versions, { foreignKey: 'current_version_id', as: 'current_version' });
   models.cp_general_agreement_acceptance.belongsTo(models.agreement_versions, { foreignKey: 'agreement_version_id' });
   models.cp_general_agreement_acceptance.belongsTo(models.crew_members, { foreignKey: 'creative_partner_id', targetKey: 'crew_member_id', as: 'creative_partner' });
+  models.crew_members.hasMany(models.crew_member_files, { foreignKey: 'crew_member_id', sourceKey: 'crew_member_id', as: 'agreement_profile_photos' });
 }
 
-if (models.shoot_requests && models.shoot_agreements && models.shoot_agreement_versions) {
-  models.shoot_agreements.belongsTo(models.shoot_requests, { foreignKey: 'shoot_request_id' });
-  models.shoot_requests.hasOne(models.shoot_agreements, { foreignKey: 'shoot_request_id', as: 'agreement' });
+if (models.shoot_agreements && models.shoot_agreement_versions && models.shoot_agreement_recipients && models.shoot_agreement_version_recipients && models.shoot_agreement_acceptances) {
   models.shoot_agreements.hasMany(models.shoot_agreement_versions, { foreignKey: 'shoot_agreement_id', as: 'versions' });
   models.shoot_agreement_versions.belongsTo(models.shoot_agreements, { foreignKey: 'shoot_agreement_id' });
   models.shoot_agreements.belongsTo(models.shoot_agreement_versions, { foreignKey: 'current_version_id', as: 'current_version' });
-  models.shoot_requests.belongsTo(models.crew_members, { foreignKey: 'creative_partner_id', targetKey: 'crew_member_id', as: 'creative_partner' });
-  models.shoot_agreements.belongsTo(models.crew_members, { foreignKey: 'creative_partner_id', targetKey: 'crew_member_id', as: 'creative_partner' });
+  models.shoot_agreement_versions.hasMany(models.shoot_agreement_sections, { foreignKey: 'shoot_agreement_version_id', as: 'sections' });
+  models.shoot_agreement_sections.belongsTo(models.shoot_agreement_versions, { foreignKey: 'shoot_agreement_version_id' });
+  models.shoot_agreements.hasMany(models.shoot_agreement_recipients, { foreignKey: 'shoot_agreement_id', as: 'recipients' });
+  models.shoot_agreement_recipients.belongsTo(models.shoot_agreements, { foreignKey: 'shoot_agreement_id' });
+  models.shoot_agreement_recipients.belongsTo(models.crew_members, { foreignKey: 'crew_member_id', targetKey: 'crew_member_id', as: 'creative_partner' });
+  models.shoot_agreement_versions.hasMany(models.shoot_agreement_version_recipients, { foreignKey: 'shoot_agreement_version_id', as: 'recipient_snapshots' });
+  models.shoot_agreement_version_recipients.belongsTo(models.shoot_agreement_versions, { foreignKey: 'shoot_agreement_version_id', as: 'version' });
+  models.shoot_agreement_version_recipients.belongsTo(models.shoot_agreement_recipients, { foreignKey: 'shoot_agreement_recipient_id', as: 'recipient' });
+  models.shoot_agreement_version_recipients.belongsTo(models.crew_members, { foreignKey: 'crew_member_id', targetKey: 'crew_member_id', as: 'creative_partner' });
+  models.shoot_agreement_recipients.hasMany(models.shoot_agreement_acceptances, { foreignKey: 'shoot_agreement_recipient_id', as: 'acceptances' });
+  models.shoot_agreement_acceptances.belongsTo(models.shoot_agreement_recipients, { foreignKey: 'shoot_agreement_recipient_id', as: 'recipient' });
+  models.shoot_agreement_acceptances.belongsTo(models.shoot_agreement_versions, { foreignKey: 'shoot_agreement_version_id', as: 'version' });
 }
 
 if (models.quotes && models.signatures) {

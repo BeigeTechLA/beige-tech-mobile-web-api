@@ -1,5 +1,5 @@
 const agreementService = require('../services/agreement.service');
-const { agreements, agreement_versions, cp_general_agreement_acceptance, shoot_agreements, shoot_requests, crew_members, Sequelize } = require('../models');
+const { agreements, agreement_versions, cp_general_agreement_acceptance, shoot_agreements, shoot_agreement_recipients, crew_members, Sequelize } = require('../models');
 
 const getAuthenticatedUserId = (req) => {
   const userId = Number(req.user?.userId || req.user?.id || req.userId);
@@ -51,10 +51,7 @@ exports.downloadAdminGeneralAgreementPdf = async (req, res) => {
 exports.sendGeneralAgreement = async (req, res) => {
   try {
     const actorId = getAuthenticatedUserId(req);
-    await agreementService.sendGeneral(req.params.id, req.body.crew_member_ids, actorId, {
-      role: req.body.role,
-      project_id: req.body.project_id
-    });
+    await agreementService.sendGeneral(req.params.id, req.body.crew_member_ids, actorId);
     return res.status(200).json({ error: false, message: 'General agreement sent successfully', data: null });
   } catch (error) { return respondError(res, error, 'Send General Agreement Error'); }
 };
@@ -77,22 +74,22 @@ exports.createShootRequest = async (req, res) => {
 exports.createShootAgreement = async (req, res) => {
   try {
     const actorId = getAuthenticatedUserId(req);
-    const data = await agreementService.createShootAgreement(req.body, actorId);
-    return res.status(201).json({ error: false, message: 'Shoot agreement created successfully', data });
+    const data = await agreementService.createShootAgreementDraft(req.params.bookingId, req.body, actorId);
+    return res.status(201).json({ error: false, message: 'Shoot agreement draft created successfully', data });
   } catch (error) { return respondError(res, error, 'Create Shoot Agreement Error'); }
 };
 
 exports.updateShootAgreement = async (req, res) => {
   try {
     const actorId = getAuthenticatedUserId(req);
-    const data = await agreementService.updateShootAgreement(req.params.id, req.body, actorId);
+    const data = await agreementService.updateShootAgreementV2(req.params.id, req.body, actorId);
     return res.status(200).json({ error: false, message: 'Shoot agreement updated successfully', data });
   } catch (error) { return respondError(res, error, 'Update Shoot Agreement Error'); }
 };
 
 exports.getShootAgreement = async (req, res) => {
   try {
-    const data = await agreementService.getShootAgreement(req.params.id);
+    const data = await agreementService.getShootAgreementV2(req.params.id);
     return res.status(200).json({ error: false, message: 'Shoot agreement fetched successfully', data });
   } catch (error) { return respondError(res, error, 'Get Shoot Agreement Error'); }
 };
@@ -100,14 +97,14 @@ exports.getShootAgreement = async (req, res) => {
 exports.sendShootAgreement = async (req, res) => {
   try {
     const actorId = getAuthenticatedUserId(req);
-    await agreementService.sendShoot(req.params.id, actorId);
-    return res.status(200).json({ error: false, message: 'Shoot agreement sent successfully', data: null });
+    const data = await agreementService.sendShootAgreementV2(req.params.id, actorId);
+    return res.status(200).json({ error: false, message: 'Shoot agreement sent successfully', data });
   } catch (error) { return respondError(res, error, 'Send Shoot Agreement Error'); }
 };
 
 exports.getShootAgreementHistory = async (req, res) => {
   try {
-    const data = await agreementService.getShootHistory(req.query);
+    const data = await agreementService.getShootHistoryV2(req.query);
     return res.status(200).json({ error: false, message: 'Shoot agreement history fetched successfully', data });
   } catch (error) { return respondError(res, error, 'Get Shoot Agreement History Error'); }
 };
@@ -165,7 +162,7 @@ exports.getMyShootAgreement = async (req, res) => {
   try {
     const actorId = getAuthenticatedUserId(req);
     const crewMemberId = await agreementService.resolveCreativePartnerId(actorId);
-    const data = await agreementService.getShootAgreement(req.params.id, crewMemberId);
+    const data = await agreementService.getShootAgreementV2(req.params.id, crewMemberId);
     return res.status(200).json({ error: false, message: 'Shoot agreement fetched successfully', data });
   } catch (error) { return respondError(res, error, 'Get My Shoot Agreement Error'); }
 };
@@ -175,7 +172,7 @@ exports.acceptShootAgreement = async (req, res) => {
     if (req.body.confirmed !== true) return res.status(400).json({ error: true, message: 'confirmation is required', data: null });
     const actorId = getAuthenticatedUserId(req);
     const crewMemberId = await agreementService.resolveCreativePartnerId(actorId);
-    const data = await agreementService.decideShoot(req.params.id, crewMemberId, actorId, 'accepted');
+    const data = await agreementService.decideShootV2(req.params.id, crewMemberId, actorId, 'accepted');
     return res.status(200).json({ error: false, message: 'Shoot agreement accepted successfully', data });
   } catch (error) { return respondError(res, error, 'Accept Shoot Agreement Error'); }
 };
@@ -184,7 +181,7 @@ exports.rejectShootAgreement = async (req, res) => {
   try {
     const actorId = getAuthenticatedUserId(req);
     const crewMemberId = await agreementService.resolveCreativePartnerId(actorId);
-    const data = await agreementService.decideShoot(req.params.id, crewMemberId, actorId, 'rejected');
+    const data = await agreementService.decideShootV2(req.params.id, crewMemberId, actorId, 'rejected');
     return res.status(200).json({ error: false, message: 'Shoot agreement rejected successfully', data });
   } catch (error) { return respondError(res, error, 'Reject Shoot Agreement Error'); }
 };
@@ -194,12 +191,9 @@ exports.getProfileAgreements = async (req, res) => {
     const actorId = getAuthenticatedUserId(req);
     const crewMemberId = await agreementService.resolveCreativePartnerId(actorId);
     const general = await cp_general_agreement_acceptance.findAll({ where: { creative_partner_id: crewMemberId, is_deleted: 0 }, include: [{ model: agreement_versions, required: false }] });
-    const shoots = await shoot_agreements.findAll({
-      where: { creative_partner_id: crewMemberId, is_deleted: 0 },
-      include: [
-        { model: crew_members, as: 'creative_partner', required: false, attributes: ['crew_member_id', 'first_name', 'last_name', 'email'] },
-        { model: shoot_requests, required: false }
-      ]
+    const shoots = await shoot_agreement_recipients.findAll({
+      where: { crew_member_id: crewMemberId },
+      include: [{ model: shoot_agreements, required: true, where: { is_deleted: 0 } }]
     });
     return res.status(200).json({ error: false, message: 'Profile agreements fetched successfully', data: { general_agreements: general, shoot_agreements: shoots } });
   } catch (error) { return respondError(res, error, 'Get Profile Agreements Error'); }
