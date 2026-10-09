@@ -3622,34 +3622,15 @@ exports.getDashboardDetails = async (req, res) => {
 
     const pendingRequests = await getSmartPendingRequestsForCrew(crew_member_id, projectWhere);
 
-    // The dashboard map needs the creator's complete assignment history,
-    // including accepted, pending, rejected, upcoming, and past shoots.
-    // Keep this separate so the existing dashboard cards retain their current logic.
-    const mapShoots = await assigned_crew.findAll({
-      where: {
-        crew_member_id,
-        crew_accept: { [Op.in]: [0, 1, 2] },
-      },
-      include: [
-        {
-          model: stream_project_booking,
-          as: "project",
-          where: projectWhere,
-          required: true,
-        },
-      ],
-      order: [
-        [{ model: stream_project_booking, as: "project" }, "event_date", "ASC"]
-      ],
-    });
-
     return res.status(200).json({
       error: false,
       message: 'Dashboard details fetched successfully',
       data: {
         allShoots,
         pendingRequests,
-        mapShoots,
+        // The map includes every accepted assignment, regardless of whether
+        // its shoot date is today, upcoming, or in the past.
+        mapShoots: allShoots,
         equipmentRequests: 5,
       },
     });

@@ -40,7 +40,7 @@ test('a deal is won only after full payment, while partial cash still counts as 
     won_revenue: 1000,
     collected_revenue: 1400,
     win_rate: 50,
-    quote_to_cash_conversion: 70,
+    quote_to_cash_conversion: 50,
     average_deal_size: 1000
   });
 });
@@ -55,6 +55,18 @@ test('custom date ranges include both selected calendar dates', () => {
   assert.equal(range.start_date, '2026-09-01');
   assert.equal(range.end_date, '2026-09-03');
   assert.equal(range.endExclusive.getDate(), 4);
+});
+
+test('quote-to-cash uses won revenue divided by quote value and rounds to two decimals', () => {
+  const metrics = _private.summarizeCohort([
+    { quoteValue: 294047.99, fullPaid: true, collectedAmount: 294047.99 },
+    { quoteValue: 1632435.39, fullPaid: false, collectedAmount: 67212.18 }
+  ]);
+
+  assert.equal(metrics.quote_value, 1926483.38);
+  assert.equal(metrics.won_revenue, 294047.99);
+  assert.equal(metrics.collected_revenue, 361260.17);
+  assert.equal(metrics.quote_to_cash_conversion, 15.26);
 });
 
 test('quote analytics defaults to an unbounded all-time sent cohort', () => {

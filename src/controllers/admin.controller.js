@@ -189,7 +189,7 @@ exports.getLoginHistory = async (req, res) => {
 const POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES = [
   'Post Production Manager',
   'Producer',
-  'super_admin'
+  // 'super_admin'
 ];
 const normalizePhoneNumber = (number) => String(number || '').replace(/\D/g, '');
 

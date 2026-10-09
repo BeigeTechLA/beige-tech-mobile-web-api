@@ -369,7 +369,7 @@ function summarizeCohort(records) {
     won_revenue: wonRevenue,
     collected_revenue: collectedRevenue,
     win_rate: quotesSent ? roundPercent((dealsWon / quotesSent) * 100) : 0,
-    quote_to_cash_conversion: quoteValue ? roundPercent((collectedRevenue / quoteValue) * 100) : 0,
+    quote_to_cash_conversion: quoteValue ? roundPercent((wonRevenue / quoteValue) * 100) : 0,
     average_deal_size: dealsWon ? roundMoney(wonRevenue / dealsWon) : 0
   };
 }
@@ -429,7 +429,7 @@ function getDefinitions() {
     won_revenue: 'Total quote value of fully paid deals won.',
     collected_revenue: 'Actual cash collected from sent quotes, including partial payments.',
     win_rate: 'Deals won divided by quotes sent, multiplied by 100.',
-    quote_to_cash_conversion: 'Actual collected revenue, including partial payments, divided by quote value, multiplied by 100.',
+    quote_to_cash_conversion: 'Won revenue divided by quote value, multiplied by 100.',
     average_deal_size: 'Won revenue divided by deals won.',
     open_pipeline: 'Current outstanding value of sent, accepted, or partially paid quotes that are not paid, rejected, or expired.',
     overdue_follow_ups: `Current active unpaid quotes whose last sales contact (or sent time when never contacted) is at least ${OVERDUE_HOURS} hours old.`
