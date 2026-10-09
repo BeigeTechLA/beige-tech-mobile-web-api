@@ -78,6 +78,11 @@ router.post('/get-crew-stats', authenticate, crewDashboardView, creator.getCrewS
 router.get('/get-random-crew', creator.getRandomCrewMembers);
 router.post('/check-verification-status', authenticate, crewDashboardOrRequestShootsView, creator.checkVerificationStatus);
 router.get('/check-cp-status', authenticate, crewDashboardOrRequestShootsView, creator.checkCrewStatus);
+router.get('/inventory', authenticate, creator.listAvailableItems);
+router.get('/inventory/assigned-shoots', authenticate, creator.listAssignedShoots);
+router.post('/inventory/requests', authenticate, creator.createRequest);
+router.get('/inventory/requests', authenticate, creator.listMyRequests);
+router.get('/inventory/:id', authenticate, creator.getAvailableItem);
 
 
 module.exports = router;

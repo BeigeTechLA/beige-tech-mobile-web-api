@@ -3,8 +3,8 @@ const { Sequelize } = require('../models')
 const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
-const { Op } = require('sequelize');
-const { S3UploadFiles } = require('../utils/common.js');
+const { Op, QueryTypes } = require('sequelize');
+const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const emailService = require("../utils/emailService");
@@ -4031,4 +4031,114 @@ exports.checkCrewStatus = async (req, res) => {
       message: "Server error"
     });
   }
+};
+
+
+// Inventory request APIs
+const getCrewMember = async (userId) => db.crew_members.findOne({ where: { user_id: userId } });
+
+const run = (sql, replacements, transaction) => db.sequelize.query(sql, {
+  replacements,
+  transaction,
+  type: QueryTypes.SELECT
+});
+
+exports.listAvailableItems = async (req, res) => {
+  try {
+    const rows = await run(`SELECT i.*,
+      GREATEST(i.total_quantity - COALESCE(SUM(CASE WHEN r.status IN ('pending','accepted') THEN ri.quantity ELSE 0 END),0),0) AS available_quantity,
+      COALESCE(SUM(CASE WHEN r.status='pending' THEN ri.quantity ELSE 0 END),0) AS requested_quantity,
+      COALESCE(SUM(CASE WHEN r.status='accepted' THEN ri.quantity ELSE 0 END),0) AS assigned_quantity
+      FROM inventory_items i LEFT JOIN inventory_request_items ri ON ri.inventory_item_id=i.id
+      LEFT JOIN inventory_requests r ON r.id=ri.request_id
+      WHERE i.is_active=1 GROUP BY i.id ORDER BY i.name`, {});
+    return res.json({ success: true, data: rows.map((row) => ({
+      ...row,
+      image_url: row.image_url ? toAbsoluteBeigeAssetUrl(row.image_url) : row.image_url
+    })) });
+  } catch (error) { return res.status(500).json({ success: false, message: 'Unable to fetch inventory' }); }
+};
+
+exports.getAvailableItem = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ success: false, message: 'Valid inventory item ID is required' });
+    const rows = await run(`SELECT i.*,
+      GREATEST(i.total_quantity - COALESCE(SUM(CASE WHEN r.status IN ('pending','accepted') THEN ri.quantity ELSE 0 END),0),0) AS available_quantity,
+      COALESCE(SUM(CASE WHEN r.status='pending' THEN ri.quantity ELSE 0 END),0) AS requested_quantity,
+      COALESCE(SUM(CASE WHEN r.status='accepted' THEN ri.quantity ELSE 0 END),0) AS assigned_quantity
+      FROM inventory_items i LEFT JOIN inventory_request_items ri ON ri.inventory_item_id=i.id
+      LEFT JOIN inventory_requests r ON r.id=ri.request_id
+      WHERE i.id=? AND i.is_active=1 GROUP BY i.id`, [id]);
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Inventory item not found' });
+    return res.json({ success: true, data: {
+      ...rows[0],
+      image_url: rows[0].image_url ? toAbsoluteBeigeAssetUrl(rows[0].image_url) : rows[0].image_url
+    } });
+  } catch (error) { return res.status(500).json({ success: false, message: 'Unable to fetch inventory item' }); }
+};
+
+exports.listAssignedShoots = async (req, res) => {
+  try {
+    const cp = await getCrewMember(req.user.userId);
+    if (!cp) return res.status(404).json({ success: false, message: 'Creative partner not found' });
+    const rows = await run(`SELECT b.stream_project_booking_id AS id, b.project_name, b.event_date
+      FROM assigned_crew ac JOIN stream_project_booking b ON b.stream_project_booking_id=ac.project_id
+      WHERE ac.crew_member_id=? AND ac.is_active=1 AND ac.crew_accept=1 ORDER BY b.event_date DESC`, [cp.crew_member_id]);
+    return res.json({ success: true, data: rows });
+  } catch (error) { return res.status(500).json({ success: false, message: 'Unable to fetch assigned shoots' }); }
+};
+
+exports.createRequest = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const cp = await getCrewMember(req.user.userId);
+    if (!cp) { await transaction.rollback(); return res.status(404).json({ success: false, message: 'Creative partner not found' }); }
+    const { purpose, shoot_id = null, items } = req.body;
+    if (!['personal', 'shoot'].includes(purpose) || (purpose === 'shoot' && !shoot_id) || !Array.isArray(items) || !items.length) {
+      await transaction.rollback();
+      return res.status(400).json({ success: false, message: 'Provide purpose, shoot_id for shoot requests, and items' });
+    }
+    if (purpose === 'personal' && shoot_id) { await transaction.rollback(); return res.status(400).json({ success: false, message: 'Personal requests cannot include a shoot_id' }); }
+    if (purpose === 'shoot') {
+      const assigned = await run('SELECT id FROM assigned_crew WHERE crew_member_id=? AND project_id=? AND crew_accept=1 AND is_active=1 LIMIT 1', [cp.crew_member_id, shoot_id], transaction);
+      if (!assigned.length) { await transaction.rollback(); return res.status(403).json({ success: false, message: 'Shoot is not assigned to this CP' }); }
+    }
+    const cleanItems = new Map();
+    for (const entry of items) {
+      const id = Number(entry.inventory_item_id), quantity = Number(entry.quantity);
+      if (!Number.isInteger(id) || id < 1 || !Number.isInteger(quantity) || quantity < 1) { await transaction.rollback(); return res.status(400).json({ success: false, message: 'Each item needs a valid inventory_item_id and positive integer quantity' }); }
+      cleanItems.set(id, (cleanItems.get(id) || 0) + quantity);
+    }
+    const ids = [...cleanItems.keys()];
+    await run(`SELECT id FROM inventory_items WHERE id IN (${ids.map(() => '?').join(',')}) FOR UPDATE`, ids, transaction);
+    const inventory = await run(`SELECT i.id,i.price,i.total_quantity,
+      COALESCE(SUM(CASE WHEN r.status IN ('pending','accepted') THEN ri.quantity ELSE 0 END),0) AS reserved
+      FROM inventory_items i LEFT JOIN inventory_request_items ri ON ri.inventory_item_id=i.id
+      LEFT JOIN inventory_requests r ON r.id=ri.request_id
+      WHERE i.id IN (${ids.map(() => '?').join(',')}) AND i.is_active=1 GROUP BY i.id`, ids, transaction);
+    if (inventory.length !== ids.length || inventory.some((item) => Number(item.total_quantity) - Number(item.reserved) < cleanItems.get(Number(item.id)))) {
+      await transaction.rollback(); return res.status(409).json({ success: false, message: 'One or more items are unavailable in the requested quantity' });
+    }
+    const result = await db.sequelize.query('INSERT INTO inventory_requests (cp_id,purpose,shoot_id,status) VALUES (?,?,?,\'pending\')', { replacements: [cp.crew_member_id, purpose, shoot_id], transaction });
+    const requestId = result[0];
+    for (const item of inventory) await db.sequelize.query('INSERT INTO inventory_request_items (request_id,inventory_item_id,quantity,unit_price) VALUES (?,?,?,?)', { replacements: [requestId, item.id, cleanItems.get(Number(item.id)), item.price], transaction });
+    await transaction.commit();
+    return res.status(201).json({ success: true, message: 'Inventory request submitted', data: { id: requestId, status: 'pending' } });
+  } catch (error) { await transaction.rollback(); return res.status(500).json({ success: false, message: 'Unable to submit inventory request' }); }
+};
+
+exports.listMyRequests = async (req, res) => {
+  try {
+    const cp = await getCrewMember(req.user.userId);
+    if (!cp) return res.status(404).json({ success: false, message: 'Creative partner not found' });
+    const rows = await run(`SELECT r.*, b.project_name AS shoot_name, ri.inventory_item_id,ri.quantity,ri.unit_price,i.name AS item_name,i.image_url
+      FROM inventory_requests r LEFT JOIN stream_project_booking b ON b.stream_project_booking_id=r.shoot_id
+      JOIN inventory_request_items ri ON ri.request_id=r.id JOIN inventory_items i ON i.id=ri.inventory_item_id
+      WHERE r.cp_id=? ORDER BY r.created_at DESC`, [cp.crew_member_id]);
+    return res.json({ success: true, data: rows.map((row) => ({
+      ...row,
+      image_url: row.image_url ? toAbsoluteBeigeAssetUrl(row.image_url) : row.image_url
+    })) });
+  } catch (error) { return res.status(500).json({ success: false, message: 'Unable to fetch your requests' }); }
 };

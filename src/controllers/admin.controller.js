@@ -16,7 +16,7 @@ const {
 } = require('../utils/emailService');
 const pushNotificationService = require('../services/push-notification.service');
 const { Parser } = require('json2csv');
-const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
+const { stream_project_booking, crew_members, crew_member_files, tasks, equipment,inventory_items, crew_roles,
   equipment_accessories,
   equipment_category,
   equipment_documents,
@@ -19902,4 +19902,556 @@ exports.getOnboardingStatusById = async (req, res) => {
       error: error.message
     });
   }
+};
+// ==================== INVENTORY APIs ====================
+
+const inventoryItemWithPublicImage = (item) => {
+  const data = typeof item?.toJSON === 'function' ? item.toJSON() : { ...item };
+  if (data.image_url) data.image_url = toAbsoluteBeigeAssetUrl(data.image_url);
+  return data;
+};
+
+// Create inventory item
+exports.createInventoryItem = [
+  upload.fields([{ name: 'image', maxCount: 1 }]),
+
+  async (req, res) => {
+    try {
+
+const { name, description, price = 0, total_quantity = 0 } = req.body;
+
+if (!name || !String(name).trim()) {
+  return res.status(400).json({
+    success: false,
+    message: 'Item name is required'
+  });
+}
+
+const normalizedName = String(name).trim();
+
+const existingItem = await inventory_items.findOne({
+where: {
+name: normalizedName
+}
+});
+
+if (existingItem) {
+return res.status(409).json({
+success: false,
+message: 'An inventory item with this name already exists'
+});
+}
+
+
+      const numericPrice = Number(price);
+      const numericQuantity = Number(total_quantity);
+      const image = req.files?.image?.[0];
+
+      if (!image) {
+        return res.status(400).json({
+          success: false,
+          message: 'Inventory image is required'
+        });
+      }
+
+      if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Price must be a number greater than 0'
+        });
+      }
+
+      if (
+        !Number.isInteger(numericQuantity) ||
+        numericQuantity <= 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: 'Total quantity must be a whole number greater than 0'
+        });
+      }
+
+      if (image && !image.mimetype.startsWith('image/')) {
+        return res.status(400).json({
+          success: false,
+          message: 'Only image files are allowed'
+        });
+      }
+
+      let imageUrl = null;
+
+      if (image) {
+        const uploadedFiles = await S3UploadFiles(req.files);
+        imageUrl =
+          uploadedFiles.find(file => file.file_type === 'image')?.file_path || null;
+      }
+
+      const item = await inventory_items.create({
+        name: normalizedName,
+        description: description || null,
+        image_url: imageUrl,
+        price: numericPrice,
+        total_quantity: numericQuantity,
+        is_active: 1,
+        created_at: new Date(),
+        updated_at: new Date()
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: 'Inventory item created successfully',
+        data: inventoryItemWithPublicImage(item)
+      });
+    } catch (error) {
+      console.error('Create Inventory Item Error:', error);
+
+      return res.status(500).json({
+        success: false,
+        message: 'Unable to create inventory item'
+      });
+    }
+  }
+];
+
+
+exports.uploadInventoryItemImage = [
+  upload.fields([{ name: 'image', maxCount: 1 }]),
+
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Valid inventory item ID is required'
+        });
+      }
+
+      const item = await inventory_items.findByPk(id);
+
+      if (!item) {
+        return res.status(404).json({
+          success: false,
+          message: 'Inventory item not found'
+        });
+      }
+
+      const image = req.files?.image?.[0];
+
+      if (!image) {
+        return res.status(400).json({
+          success: false,
+          message: 'Image is required'
+        });
+      }
+
+    
+const allowedMimeTypes = [
+  'image/jpeg',
+  'image/png',
+  'image/jpg',
+  'image/webp',
+  'image/gif'
+];
+
+const allowedExtensions = [
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.gif'
+];
+
+const fileExtension = require('path')
+  .extname(image.originalname)
+  .toLowerCase();
+
+if (
+  !allowedMimeTypes.includes(image.mimetype) ||
+  !allowedExtensions.includes(fileExtension)
+) {
+  return res.status(400).json({
+    success: false,
+    message: 'Only image files are allowed'
+  });
+}
+
+      const uploadedFiles = await S3UploadFiles(req.files);
+
+      const imageUrl = uploadedFiles.find(
+        file => file.file_type === 'image'
+      )?.file_path;
+
+      if (!imageUrl) {
+        return res.status(500).json({
+          success: false,
+          message: 'Image upload failed'
+        });
+      }
+
+      await item.update({
+        image_url: imageUrl,
+        updated_at: new Date()
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Inventory image uploaded successfully',
+        data: inventoryItemWithPublicImage(item)
+      });
+    } catch (error) {
+      console.error('Upload Inventory Image Error:', error);
+
+      return res.status(500).json({
+        success: false,
+        message: 'Unable to upload inventory image'
+      });
+    }
+  }
+];
+
+
+exports.deleteInventoryItemImage = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid inventory item ID is required'
+      });
+    }
+
+    const item = await inventory_items.findByPk(id);
+
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory item not found'
+      });
+    }
+
+    if (!item.image_url) {
+      return res.status(400).json({
+        success: false,
+        message: 'Inventory item has no image to delete'
+      });
+    }
+
+    await item.update({
+      image_url: null,
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory image deleted successfully',
+      data: inventoryItemWithPublicImage(item)
+    });
+  } catch (error) {
+    console.error('Delete Inventory Image Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to delete inventory image'
+    });
+  }
+};
+
+
+// Get inventory items with search and pagination
+exports.getInventoryItems = async (req, res) => {
+  try {
+    const {
+      search = '',
+      status = 'all',
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    const currentPage = Math.max(parseInt(page, 10) || 1, 1);
+    const pageSize = Math.min(
+      Math.max(parseInt(limit, 10) || 20, 1),
+      100
+    );
+
+    const where = {};
+
+    if (search.trim()) {
+      where[Op.or] = [
+        { name: { [Op.like]: `%${search.trim()}%` } },
+        { description: { [Op.like]: `%${search.trim()}%` } }
+      ];
+    }
+
+    if (status === 'active') {
+      where.is_active = 1;
+    } else if (status === 'inactive') {
+      where.is_active = 0;
+    } else if (status !== 'all') {
+      return res.status(400).json({
+        success: false,
+        message: 'Status must be active, inactive, or all'
+      });
+    }
+
+    const { count, rows } = await inventory_items.findAndCountAll({
+      where,
+      order: [['id', 'DESC']],
+      limit: pageSize,
+      offset: (currentPage - 1) * pageSize
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory items fetched successfully',
+      data: rows.map(inventoryItemWithPublicImage),
+      pagination: {
+        page: currentPage,
+        limit: pageSize,
+        total: count,
+        total_pages: Math.ceil(count / pageSize)
+      }
+    });
+  } catch (error) {
+    console.error('Get Inventory Items Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to fetch inventory items'
+    });
+  }
+};
+
+// Get inventory item by ID
+exports.getInventoryItemById = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid inventory item ID is required'
+      });
+    }
+
+    const item = await inventory_items.findByPk(id);
+
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory item not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory item fetched successfully',
+      data: inventoryItemWithPublicImage(item)
+    });
+  } catch (error) {
+    console.error('Get Inventory Item Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to fetch inventory item'
+    });
+  }
+};
+
+
+// Update inventory item
+
+exports.updateInventoryItem = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid inventory item ID is required'
+      });
+    }
+
+    const item = await inventory_items.findByPk(id);
+
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory item not found'
+      });
+    }
+
+    const { name, description, price, total_quantity } = req.body;
+    const updateData = {};
+
+    if (name !== undefined) {
+      if (!String(name).trim()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Item name cannot be empty'
+        });
+      }
+
+      const normalizedName = String(name).trim();
+
+      const existingItem = await inventory_items.findOne({
+        where: {
+          name: normalizedName,
+          id: { [Op.ne]: id }
+        }
+      });
+
+      if (existingItem) {
+        return res.status(409).json({
+          success: false,
+          message: 'An inventory item with this name already exists'
+        });
+      }
+
+      updateData.name = normalizedName;
+    }
+
+    if (description !== undefined) {
+      updateData.description = description || null;
+    }
+
+    if (price !== undefined) {
+      const numericPrice = Number(price);
+
+      if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Price must be a number greater than 0'
+        });
+      }
+
+      updateData.price = numericPrice;
+    }
+
+    if (total_quantity !== undefined) {
+      const numericQuantity = Number(total_quantity);
+
+      if (!Number.isInteger(numericQuantity) || numericQuantity <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Total quantity must be a whole number greater than 0'
+        });
+      }
+
+      updateData.total_quantity = numericQuantity;
+    }
+
+    updateData.updated_at = new Date();
+
+    await item.update(updateData);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory item updated successfully',
+      data: inventoryItemWithPublicImage(item)
+    });
+  } catch (error) {
+    console.error('Update Inventory Item Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to update inventory item'
+    });
+  }
+};
+
+
+// Activate or deactivate inventory item
+exports.updateInventoryItemStatus = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { is_active } = req.body;
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid inventory item ID is required'
+      });
+    }
+
+    if (![0, 1, '0', '1', true, false].includes(is_active)) {
+      return res.status(400).json({
+        success: false,
+        message: 'is_active must be 0 or 1'
+      });
+    }
+
+    const item = await inventory_items.findByPk(id);
+
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: 'Inventory item not found'
+      });
+    }
+
+    await item.update({
+      is_active: Number(is_active),
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory item status updated successfully',
+      data: inventoryItemWithPublicImage(item)
+    });
+  } catch (error) {
+    console.error('Update Inventory Item Status Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to update inventory item status'
+    });
+  }
+};
+
+
+
+// Inventory request review APIs
+const inventoryRequestQuery = (sql, replacements, transaction) => db.sequelize.query(sql, { replacements, transaction, type: QueryTypes.SELECT });
+
+exports.listAdminRequests = async (req, res) => {
+  try {
+    const status = req.query.status;
+    const rows = await inventoryRequestQuery(`SELECT r.*, c.first_name,c.last_name,b.project_name AS shoot_name,ri.inventory_item_id,ri.quantity,ri.unit_price,i.name AS item_name,i.image_url
+      FROM inventory_requests r JOIN crew_members c ON c.crew_member_id=r.cp_id
+      LEFT JOIN stream_project_booking b ON b.stream_project_booking_id=r.shoot_id
+      JOIN inventory_request_items ri ON ri.request_id=r.id JOIN inventory_items i ON i.id=ri.inventory_item_id
+      WHERE (? IS NULL OR r.status=?) ORDER BY r.created_at DESC`, [status || null,status || null]);
+    return res.json({ success: true, data: rows.map((row) => ({
+      ...row,
+      image_url: row.image_url ? toAbsoluteBeigeAssetUrl(row.image_url) : row.image_url
+    })) });
+  } catch (error) { return res.status(500).json({ success: false, message: 'Unable to fetch inventory requests' }); }
+};
+
+exports.reviewRequest = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const id = Number(req.params.id), { status, admin_note } = req.body;
+    if (!Number.isInteger(id) || id < 1 || !['accepted','rejected'].includes(status)) { await transaction.rollback(); return res.status(400).json({ success: false, message: 'Valid request ID and accepted/rejected status are required' }); }
+    const requests = await inventoryRequestQuery('SELECT * FROM inventory_requests WHERE id=? FOR UPDATE', [id], transaction);
+    if (!requests.length) { await transaction.rollback(); return res.status(404).json({ success: false, message: 'Request not found' }); }
+    if (requests[0].status !== 'pending') { await transaction.rollback(); return res.status(409).json({ success: false, message: 'Request has already been reviewed' }); }
+    if (status === 'accepted') {
+      const items = await inventoryRequestQuery('SELECT inventory_item_id,quantity FROM inventory_request_items WHERE request_id=?', [id], transaction);
+      for (const item of items) {
+        await inventoryRequestQuery('SELECT id FROM inventory_items WHERE id=? FOR UPDATE', [item.inventory_item_id], transaction);
+        const check = await inventoryRequestQuery(`SELECT i.total_quantity,COALESCE(SUM(CASE WHEN r.status IN ('pending','accepted') THEN ri.quantity ELSE 0 END),0) AS reserved
+          FROM inventory_items i LEFT JOIN inventory_request_items ri ON ri.inventory_item_id=i.id LEFT JOIN inventory_requests r ON r.id=ri.request_id
+          WHERE i.id=? GROUP BY i.id`, [item.inventory_item_id], transaction);
+        if (!check.length || Number(check[0].total_quantity) < Number(check[0].reserved)) { await transaction.rollback(); return res.status(409).json({ success: false, message: 'Insufficient stock to accept this request' }); }
+      }
+    }
+    await db.sequelize.query('UPDATE inventory_requests SET status=?,admin_id=?,admin_note=? WHERE id=?', { replacements: [status,req.user.userId,admin_note || null,id],transaction });
+    await transaction.commit();
+    return res.json({ success: true, message: `Request ${status}`, data: { id,status } });
+  } catch (error) { await transaction.rollback(); return res.status(500).json({ success: false, message: 'Unable to review request' }); }
 };

@@ -257,6 +257,52 @@ router.get('/get-equipments', admin.getEquipment);
 router.get('/get-equipment-by-id/:equipment_id', admin.getEquipmentById);
 router.delete('/delete-equipment/:equipment_id', admin.deleteEquipment);
 router.put('/update-equipment/:equipment_id', admin.updateEquipment);
+router.get(
+  '/inventory',
+  authMiddleware,
+  admin.getInventoryItems
+);
+
+router.post(
+  '/inventory',
+  authMiddleware,
+  admin.createInventoryItem
+);
+
+router.post(
+  '/inventory/:id/image',
+  authMiddleware,
+  admin.uploadInventoryItemImage
+);
+
+
+router.delete(
+  '/inventory/:id/image',
+  authMiddleware,
+  admin.deleteInventoryItemImage
+);
+
+router.get(
+  '/inventory/:id',
+  authMiddleware,
+  admin.getInventoryItemById
+);
+
+router.put(
+  '/inventory/:id',
+  authMiddleware,
+  admin.updateInventoryItem
+);
+
+router.patch(
+  '/inventory/:id/status',
+  authMiddleware,
+  admin.updateInventoryItemStatus
+);
+
+router.get('/inventory-requests', authMiddleware, admin.listAdminRequests);
+router.patch('/inventory-requests/:id/review', authMiddleware, admin.reviewRequest);
+
 router.post('/assign-equipment', admin.assignEquipment);
 router.get('/get-equipment-assignment', admin.getAllAssignments);
 router.get('/get-equipment-assignment-by-id/:id', admin.getAssignmentById);
