@@ -17820,6 +17820,56 @@ exports.getPermissionModules = async (req, res) => {
 };
 
 
+const getOpenUserReassignmentCounts = async (userId, transaction) => {
+  const leads = await db.sales_leads.findAll({
+    where: {
+      assigned_sales_rep_id: userId,
+      is_active: 1,
+      lead_status: { [Op.notIn]: ['paid', 'closed_lost'] }
+    },
+    attributes: ['lead_id', 'booking_id'],
+    include: [{
+      model: db.stream_project_booking,
+      as: 'booking',
+      required: true,
+      where: { event_date: { [Op.gt]: Sequelize.literal('CURRENT_DATE') } },
+      attributes: ['stream_project_booking_id', 'payment_id']
+    }],
+    transaction
+  });
+
+  const bookingIds = [...new Set(leads.map((lead) => Number(lead.booking_id)).filter(Number.isInteger))];
+  const paymentRows = bookingIds.length ? await db.sequelize.query(
+    `SELECT booking_id, paid_amount, payment_status, quote_total, due_amount
+     FROM booking_payment_summary WHERE booking_id IN (:bookingIds)`,
+    { replacements: { bookingIds }, type: QueryTypes.SELECT, transaction }
+  ) : [];
+  const paymentMap = new Map(paymentRows.map((payment) => [Number(payment.booking_id), payment]));
+  const openLeadsCount = leads.filter((lead) => {
+    const payment = paymentMap.get(Number(lead.booking_id));
+    const paymentState = bookingPaymentSummaryService.normalizePaymentSummaryState(payment, {
+      quoteTotal: payment?.quote_total,
+      paidAmount: payment?.paid_amount,
+      paymentStatus: lead.booking?.payment_id ? 'paid' : 'unpaid'
+    });
+    return !paymentState.isPaid;
+  }).length;
+
+  const openQuotesCount = await db.sales_quotes.count({
+    where: {
+      assigned_sales_rep_id: userId,
+      status: { [Op.notIn]: ['rejected', 'expired', 'paid'] },
+      [Op.or]: [
+        { lead_id: null },
+        { lead_id: { [Op.notIn]: db.sequelize.literal("(SELECT lead_id FROM sales_leads WHERE LOWER(lead_source) = 'converted bookings' AND lead_id IS NOT NULL)") } }
+      ]
+    },
+    transaction
+  });
+
+  return { leads: openLeadsCount, quotes: openQuotesCount };
+};
+
 exports.getUserReassignments = async (req, res) => {
   try {
     const user_id = Number(req.params.user_id);
@@ -18173,6 +18223,17 @@ exports.deleteUser = async (req, res) => {
       return res.status(404).json({
         error: true,
         message: 'User not found or inactive'
+      });
+    }
+
+    const openReassignmentCounts = await getOpenUserReassignmentCounts(user_id, transaction);
+    if (openReassignmentCounts.leads + openReassignmentCounts.quotes > 0) {
+      await transaction.rollback();
+      return res.status(409).json({
+        error: true,
+        success: false,
+        message: 'Cannot delete this user while open sales records are assigned. Reassign them first.',
+        data: openReassignmentCounts
       });
     }
 
