@@ -3,6 +3,10 @@ const db = require('../models');
 const ELIGIBLE_PAYMENT_STATUSES = new Set(['paid', 'partially_paid']);
 const PAID_TRANSACTION_STATUSES = new Set(['paid', 'completed', 'success', 'succeeded']);
 const REFUND_TRANSACTION_STATUSES = new Set(['paid', 'refunded', 'completed', 'success', 'succeeded']);
+const CREATOR_ROLE_LABELS = {
+  1: 'Videographer', 2: 'Photographer', 3: 'Editor', 4: 'Producer', 5: 'Director',
+  9: 'Videographer', 10: 'Photographer', 11: 'Editor'
+};
 
 function badRequest(message) {
   const error = new Error(message);
@@ -87,6 +91,17 @@ function creatorName(creator = {}) {
   return [creator.first_name, creator.last_name].filter(Boolean).join(' ').trim() || creator.email || `CP #${creator.crew_member_id}`;
 }
 
+function creatorRoleNames(value) {
+  let roles = value;
+  if (typeof value === 'string') {
+    try { roles = JSON.parse(value); } catch (_) { roles = [value]; }
+  }
+  const labels = (Array.isArray(roles) ? roles : [roles])
+    .map((role) => CREATOR_ROLE_LABELS[Number(role)] || String(role || '').trim())
+    .filter(Boolean);
+  return [...new Set(labels)];
+}
+
 function clientName(client = {}, fallback) {
   return client.name || client.email || fallback || 'Guest client';
 }
@@ -113,6 +128,17 @@ function resolveDueDate(earning, booking) {
 function statusForClient(totalCollected, totalOutstanding) {
   if (totalOutstanding <= 0) return 'fully_paid';
   return totalCollected > 0 ? 'partially_paid' : 'pending';
+}
+
+// The balance is the source of truth for receivables. A historic breakdown can
+// retain an old payment_status even after its collected amount changes, so do
+// not let that label hide an amount the client still owes.
+function outstandingBalance(row) {
+  return Math.max(Number(row.total_amount || 0) - Number(row.collected_amount || 0), 0);
+}
+
+function isOutstandingReceivable(row) {
+  return String(row.payment_status || '').toLowerCase() !== 'refunded' && outstandingBalance(row) > 0;
 }
 
 function buildAnalyticsData(input, filters = resolveFilters(), now = new Date()) {
@@ -142,8 +168,7 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
     .filter((row) => isInRange(row.activity_date, filters));
   const eligibleRevenue = breakdownRows
     .filter((breakdown) => ELIGIBLE_PAYMENT_STATUSES.has(String(breakdown.payment_status || '').toLowerCase()));
-  const outstandingRows = breakdownRows
-    .filter((row) => ['unpaid', 'pending', 'partially_paid'].includes(String(row.payment_status || '').toLowerCase()));
+  const outstandingRows = breakdownRows.filter(isOutstandingReceivable);
 
   const eligibleBookingIds = new Set(eligibleRevenue.map((row) => row.booking_id));
   const refunds = (input.transactions || [])
@@ -154,17 +179,23 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
     .map((transaction) => ({ date: dateKey(transaction.transaction_date, filters.timezone), amount: Math.abs(Number(transaction.gross_amount || transaction.net_amount || 0)) }));
 
   const grossRevenue = money(eligibleRevenue.reduce((sum, row) => sum + Number(row.total_amount || 0), 0));
-  const pendingRevenue = money(outstandingRows.reduce((sum, row) => sum + Math.max(Number(row.outstanding_amount || 0), 0), 0));
+  const pendingRevenue = money(outstandingRows.reduce((sum, row) => sum + outstandingBalance(row), 0));
   const refundAmount = money(refunds.reduce((sum, row) => sum + row.amount, 0));
   const netRevenue = money(grossRevenue - refundAmount);
 
   const revenueSeriesRows = eligibleRevenue.map((row) => ({
     date: dateKey(row.activity_date, filters.timezone),
     gross: Number(row.total_amount || 0),
-    pending: Math.max(Number(row.outstanding_amount || 0), 0),
+    pending: outstandingBalance(row),
     cp_payout: 0,
     refunds: 0
   }));
+  outstandingRows
+    .filter((row) => !eligibleBookingIds.has(row.booking_id))
+    .forEach((row) => revenueSeriesRows.push({
+      date: dateKey(row.activity_date, filters.timezone), gross: 0,
+      pending: outstandingBalance(row), cp_payout: 0, refunds: 0
+    }));
   refunds.forEach((refund) => revenueSeriesRows.push({ date: refund.date, gross: 0, pending: 0, cp_payout: 0, refunds: refund.amount }));
 
   const cpRows = (input.earnings || [])
@@ -223,12 +254,17 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
   const overdueByCreator = new Map();
   cpRows.filter((row) => !row.is_paid && row.due_date && row.due_date < today).forEach((row) => {
     const id = Number(row.creator_id);
-    const current = overdueByCreator.get(id) || { id: String(id), name: creatorName(row.creator), amount: 0, days_overdue: 0 };
+    const current = overdueByCreator.get(id) || {
+      id: String(id), name: creatorName(row.creator), roles: creatorRoleNames(row.creator.primary_role),
+      amount: 0, days_overdue: 0
+    };
     current.amount += row.amount;
     current.days_overdue = Math.max(current.days_overdue, Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${row.due_date}T00:00:00Z`)) / 86400000));
     overdueByCreator.set(id, current);
   });
-  const topOverdue = Array.from(overdueByCreator.values()).map((row) => ({ ...row, amount: money(row.amount) })).sort((a, b) => b.amount - a.amount).slice(0, 5);
+  const topOverdue = Array.from(overdueByCreator.values())
+    .map((row) => ({ ...row, amount: money(row.amount) }))
+    .sort((a, b) => b.amount - a.amount).slice(0, 100);
   const timeline = [
     { id: 'this_week', label: 'This Week', segments: { upcoming: 0, dueSoon: 0, later: 0, overdue: 0 } },
     { id: 'next_week', label: 'Next Week', segments: { upcoming: 0, dueSoon: 0, later: 0, overdue: 0 } },
@@ -254,18 +290,19 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
       current.shoots.add(row.booking_id);
       current.spend += Number(row.total_amount || 0);
       current.collected += Number(row.collected_amount || 0);
-      current.outstanding += Math.max(Number(row.outstanding_amount || 0), 0);
+      current.outstanding += isOutstandingReceivable(row) ? outstandingBalance(row) : 0;
       clients.set(identity, current);
     });
     return Array.from(clients.values()).map((row) => ({
       ...row, shoots: row.shoots.size, spend: money(row.spend), collected: money(row.collected), outstanding: money(row.outstanding), status: statusForClient(row.collected, row.outstanding)
     }));
   };
-  // Payment overview represents every client with a finance record; rankings remain restricted to paid/partially-paid shoots.
+  // Rankings and payment overview both include every client with a finance record,
+  // so the client payment-state filter can return pending clients too.
   const clientRows = makeClientRows(breakdownRows);
-  const topClientRows = makeClientRows(eligibleRevenue);
-  const topClientsByShoots = [...topClientRows].sort((a, b) => b.shoots - a.shoots || b.spend - a.spend).slice(0, 10);
-  const topClientsBySpend = [...topClientRows].sort((a, b) => b.spend - a.spend).slice(0, 10);
+  const topClientRows = clientRows;
+  const topClientsByShoots = [...topClientRows].sort((a, b) => b.shoots - a.shoots || b.spend - a.spend).slice(0, 100);
+  const topClientsBySpend = [...topClientRows].sort((a, b) => b.spend - a.spend).slice(0, 100);
   const paymentOverview = ['fully_paid', 'partially_paid', 'pending'].map((id) => ({ id, label: id === 'fully_paid' ? 'Fully Paid' : id === 'partially_paid' ? 'Partially Paid' : 'Pending', clients: clientRows.filter((row) => row.status === id).length }));
   const collectedAmount = money(breakdownRows.reduce((sum, row) => sum + Number(row.collected_amount || 0), 0));
   const recoveredRows = (input.transactions || []).filter((transaction) => transaction.transaction_type === 'client_payment' && PAID_TRANSACTION_STATUSES.has(String(transaction.status || '').toLowerCase()) && eligibleBookingIds.has(Number(transaction.booking_id)) && isInRange(transaction.transaction_date, filters)).map((transaction) => ({ date: dateKey(transaction.transaction_date, filters.timezone), value: Number(transaction.gross_amount || 0) }));
@@ -318,10 +355,10 @@ async function getAnalytics(query = {}) {
   const userIds = [...new Set([...breakdowns.map((row) => Number(row.client_user_id)), ...transactions.map((row) => Number(row.client_user_id))].filter(Boolean))];
   const [bookings, creators, users] = await Promise.all([
     db.stream_project_booking.findAll({ where: { stream_project_booking_id: bookingIds.length ? bookingIds : [0] }, raw: true }),
-    db.crew_members.findAll({ where: { crew_member_id: creatorIds.length ? creatorIds : [0] }, attributes: ['crew_member_id', 'first_name', 'last_name', 'email'], raw: true }),
+    db.crew_members.findAll({ where: { crew_member_id: creatorIds.length ? creatorIds : [0] }, attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'], raw: true }),
     db.users.unscoped().findAll({ where: { id: userIds.length ? userIds : [0] }, attributes: ['id', 'name', 'email'], raw: true })
   ]);
   return buildAnalyticsData({ breakdowns, transactions, earnings, disputes, bookings, creators, users }, filters);
 }
 
-module.exports = { getAnalytics, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate } };
+module.exports = { getAnalytics, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate, outstandingBalance, isOutstandingReceivable, creatorRoleNames } };
