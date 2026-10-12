@@ -4309,7 +4309,8 @@ const sendOverduePipelineSalesRepEmail = async ({ to, data = {} } = {}) => {
       last_activity_date: data.last_activity_date || '',
       overdue_by: '3 days',
       quotes: normalizePipelineQuotes(data.quotes),
-      frontend_url: data.frontend_url || process.env.FRONTEND_URL || ''
+      frontend_url: data.frontend_url || process.env.FRONTEND_URL || '',
+      view_details_url: data.frontend_url || process.env.FRONTEND_URL || ''
     }
   });
 };
@@ -4324,7 +4325,8 @@ const sendOverduePipelineSalesAdminEmail = async ({ to, data = {} } = {}) => sen
     pipeline_value: data.pipeline_value || '0.00',
     overdue_by: '3 days',
     quotes: normalizePipelineQuotes(data.quotes),
-    frontend_url: data.frontend_url || process.env.FRONTEND_URL || ''
+    frontend_url: data.frontend_url || process.env.FRONTEND_URL || '',
+    view_details_url: data.frontend_url || process.env.FRONTEND_URL || ''
   }
 });
 

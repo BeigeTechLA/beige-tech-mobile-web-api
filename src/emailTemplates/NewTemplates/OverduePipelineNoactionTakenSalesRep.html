@@ -265,6 +265,7 @@
                   </tr>
                 </thead>
                 <tbody style="background-color: #F8F6F6;">
+                  {{#each quotes}}
                   <tr>
                     <td
                       style="padding: 14px 20px; font-size: 13px; color: #333333; text-align: center; border-right: 1px solid #EDEDED; border-bottom: 1px solid #EDEDED;">
@@ -275,26 +276,7 @@
                       {{client_name}}
                     </td>
                   </tr>
-                  <tr>
-                    <td
-                      style="padding: 14px 20px; font-size: 13px; color: #333333; text-align: center; border-right: 1px solid #EDEDED; border-bottom: 1px solid #EDEDED;">
-                      {{quote_id}}
-                    </td>
-                    <td
-                      style="padding: 14px 20px; font-size: 13px; color: #000000; font-weight: 600; text-align: center; border-bottom: 1px solid #EDEDED;">
-                      {{client_name}}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td
-                      style="padding: 14px 20px; font-size: 13px; color: #333333; text-align: center; border-right: 1px solid #EDEDED;">
-                      {{quote_id}}
-                    </td>
-                    <td
-                      style="padding: 14px 20px; font-size: 13px; color: #000000; font-weight: 600; text-align: center;">
-                      {{client_name}}
-                    </td>
-                  </tr>
+                  {{/each}}
                 </tbody>
               </table>
             </td>

@@ -1360,7 +1360,19 @@ const toPipelineEmailQuotes = (records) => records
 
 const buildPipelineEmailData = ({ records, recipientName, salesRepId = null }) => {
   const lastActivityAt = records.reduce((oldest, record) => {
-    const value = record.lastContactedAt || record.sentAt;
+    const lifecycleTimes = [
+      record.quote?.created_at,
+      record.quote?.sent_at,
+      record.quote?.viewed_at,
+      record.quote?.accepted_at,
+      record.quote?.updated_at,
+      record.lastPaymentAt
+    ]
+      .filter(Boolean)
+      .map((value) => new Date(value).getTime())
+      .filter((value) => !Number.isNaN(value));
+    const value = lifecycleTimes.length ? new Date(Math.max(...lifecycleTimes)) : null;
+    if (!value) return oldest;
     return !oldest || new Date(value) < new Date(oldest) ? value : oldest;
   }, null);
 
