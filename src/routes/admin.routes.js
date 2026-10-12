@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
+const inventory = require('../controllers/inventory.controller');
 const { authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const shiftManagementRoutes = require('./shifts.routes');
@@ -260,48 +261,39 @@ router.put('/update-equipment/:equipment_id', admin.updateEquipment);
 router.get(
   '/inventory',
   authMiddleware,
-  admin.getInventoryItems
+  inventory.listItems
 );
 
 router.post(
   '/inventory',
   authMiddleware,
-  admin.createInventoryItem
+  inventory.createItem
 );
 
-router.post(
-  '/inventory/:id/image',
-  authMiddleware,
-  admin.uploadInventoryItemImage
-);
-
-
-router.delete(
-  '/inventory/:id/image',
-  authMiddleware,
-  admin.deleteInventoryItemImage
-);
+router.post('/inventory/model-images', authMiddleware, inventory.uploadModelImages);
 
 router.get(
   '/inventory/:id',
   authMiddleware,
-  admin.getInventoryItemById
+  inventory.getItem
 );
 
 router.put(
   '/inventory/:id',
   authMiddleware,
-  admin.updateInventoryItem
+  inventory.updateItem
 );
 
 router.patch(
   '/inventory/:id/status',
   authMiddleware,
-  admin.updateInventoryItemStatus
+  inventory.setItemStatus
 );
 
-router.get('/inventory-requests', authMiddleware, admin.listAdminRequests);
-router.patch('/inventory-requests/:id/review', authMiddleware, admin.reviewRequest);
+router.get('/inventory-requests', authMiddleware, (req, res) => inventory.listRequests(req, res, 'admin'));
+router.patch('/inventory-requests/:id/review', authMiddleware, inventory.reviewRequest);
+router.post('/inventory/condition-images', authMiddleware, inventory.uploadConditionImages);
+router.post('/inventory-requests/:requestId/items/:itemId/issue', authMiddleware, inventory.issueRequestItem);
 
 router.post('/assign-equipment', admin.assignEquipment);
 router.get('/get-equipment-assignment', admin.getAllAssignments);

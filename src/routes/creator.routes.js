@@ -4,6 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 const creator = require('../controllers/creator.contoller');
+const inventory = require('../controllers/inventory.controller');
 const { checkCreatorVerification } = require('../middleware/creatorVerification');
 const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
@@ -78,11 +79,14 @@ router.post('/get-crew-stats', authenticate, crewDashboardView, creator.getCrewS
 router.get('/get-random-crew', creator.getRandomCrewMembers);
 router.post('/check-verification-status', authenticate, crewDashboardOrRequestShootsView, creator.checkVerificationStatus);
 router.get('/check-cp-status', authenticate, crewDashboardOrRequestShootsView, creator.checkCrewStatus);
-router.get('/inventory', authenticate, creator.listAvailableItems);
+router.get('/inventory', authenticate, inventory.listCreatorItems);
+router.get('/inventory/models/:modelId/availability', authenticate, inventory.getModelAvailability);
 router.get('/inventory/assigned-shoots', authenticate, creator.listAssignedShoots);
-router.post('/inventory/requests', authenticate, creator.createRequest);
-router.get('/inventory/requests', authenticate, creator.listMyRequests);
-router.get('/inventory/:id', authenticate, creator.getAvailableItem);
+router.post('/inventory/requests', authenticate, inventory.createRequest);
+router.get('/inventory/requests', authenticate, (req, res) => inventory.listRequests(req, res, 'creator'));
+router.post('/inventory/condition-images', authenticate, inventory.uploadConditionImages);
+router.post('/inventory/requests/:requestId/items/:itemId/return', authenticate, inventory.returnRequestItem);
+router.get('/inventory/:id', authenticate, inventory.getItem);
 
 
 module.exports = router;

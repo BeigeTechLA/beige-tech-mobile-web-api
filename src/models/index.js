@@ -16,6 +16,8 @@ const userSessionsFactory = require('./user_sessions');
 const userLoginHistoryFactory = require('./user_login_history');
 const internalPasswordExpirySettingsFactory = require('./internal_password_expiry_settings');
 const inventoryItemsFactory = require('./inventory_items');
+const inventoryModelsFactory = require('./inventory_models');
+const inventoryModelUnitsFactory = require('./inventory_model_units');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -39,6 +41,11 @@ models.user_login_history = userLoginHistoryFactory(sequelize, DataTypes);
 models.user_login_history.belongsTo(models.users, { foreignKey: 'user_id', as: 'sessionUser' });
 models.internal_password_expiry_settings = internalPasswordExpirySettingsFactory(sequelize, DataTypes);
 models.inventory_items = inventoryItemsFactory(sequelize, DataTypes);
+models.inventory_models = inventoryModelsFactory(sequelize, DataTypes);
+models.inventory_model_units = inventoryModelUnitsFactory(sequelize, DataTypes);
+models.inventory_items.hasMany(models.inventory_models, { foreignKey: 'inventory_item_id', as: 'models' });
+models.inventory_models.belongsTo(models.inventory_items, { foreignKey: 'inventory_item_id', as: 'item' });
+models.inventory_models.hasMany(models.inventory_model_units, { foreignKey: 'inventory_model_id', as: 'units' });
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
