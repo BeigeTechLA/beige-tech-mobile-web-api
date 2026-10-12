@@ -24,7 +24,7 @@ const FULLY_PAID_STATUSES = new Set(['paid', 'no_payment_due', 'completed', 'suc
 const QUOTE_STATUSES = ['accepted', 'draft', 'pending', 'rejected', 'sent', 'partially_paid', 'expired'];
 const PAYMENT_STATUSES = ['unpaid', 'partially_paid', 'paid'];
 const CUSTOMER_TYPES = ['new', 'returning'];
-const OVERDUE_HOURS = 48;
+const OVERDUE_HOURS = 72;
 
 function badRequest(message) {
   const error = new Error(message);
@@ -312,18 +312,14 @@ function isOpenPipeline(record) {
 }
 
 function getPipelineStatus(record) {
+  if (['draft', 'pending'].includes(record.quoteStatus)) return 'draft';
   if (record.paymentStatus === 'partially_paid' || record.quoteStatus === 'partially_paid') return 'partially_paid';
   if (record.quoteStatus === 'accepted') return 'accepted';
   return 'sent';
 }
 
 function isOverdue(record, nowValue = new Date()) {
-  if (!isOpenPipeline(record)) return false;
-  const sentTime = record.sentAt ? new Date(record.sentAt).getTime() : 0;
-  const contactedTime = record.lastContactedAt ? new Date(record.lastContactedAt).getTime() : 0;
-  const reference = Math.max(sentTime, contactedTime);
-  if (!reference) return false;
-  return reference <= new Date(nowValue).getTime() - OVERDUE_HOURS * 60 * 60 * 1000;
+  return isInactiveForHours(record, OVERDUE_HOURS, nowValue);
 }
 
 function isInactiveForHours(record, hours, nowValue = new Date()) {
@@ -346,12 +342,12 @@ function isInactiveForHours(record, hours, nowValue = new Date()) {
 }
 
 function emptyStatusBreakdown() {
-  return ['sent', 'accepted', 'partially_paid'].map((status) => ({ status, count: 0, value: 0 }));
+  return ['draft', 'sent', 'accepted', 'partially_paid'].map((status) => ({ status, count: 0, value: 0 }));
 }
 
-function summarizeCurrentState(records, nowValue = new Date()) {
+function summarizeCurrentState(records, nowValue = new Date(), inactivityRecords = records) {
   const pipelineRecords = records.filter(isOpenPipeline);
-  const overdueRecords = pipelineRecords.filter((record) => isOverdue(record, nowValue));
+  const overdueRecords = inactivityRecords.filter((record) => isOverdue(record, nowValue));
 
   const summarize = (items) => {
     const byStatus = emptyStatusBreakdown();
@@ -424,18 +420,29 @@ function buildPerformanceChart(records, nowValue = new Date()) {
   return buckets.map((bucket) => ({ date: bucket.date, ...summarizeCohort(bucket.records) }));
 }
 
-function buildRepPerformance(segmentedRecords, cohortRecords, nowValue = new Date()) {
+function buildRepPerformance(segmentedRecords, cohortRecords, nowValue = new Date(), range = null) {
   const repIds = Array.from(new Set(segmentedRecords.map((record) => record.repId).filter(Boolean)));
   return repIds.map((repId) => {
     const allForRep = segmentedRecords.filter((record) => record.repId === repId);
     const cohortForRep = cohortRecords.filter((record) => record.repId === repId);
+    const inactivityForRep = allForRep.filter((record) => {
+      const lifecycleAt = [
+        record.quote?.created_at,
+        record.quote?.sent_at,
+        record.quote?.viewed_at,
+        record.quote?.accepted_at,
+        record.quote?.updated_at,
+        record.lastPaymentAt
+      ].filter(Boolean).sort((left, right) => new Date(right) - new Date(left))[0];
+      return !range || isInRange(lifecycleAt, range);
+    });
     const rep = allForRep.find((record) => record.salesRep)?.salesRep || { id: repId, name: 'Unassigned', email: null };
     return {
       rep_id: repId,
       rep_name: rep.name || rep.email || `Rep ${repId}`,
       rep_email: rep.email || null,
       ...summarizeCohort(cohortForRep),
-      ...summarizeCurrentState(cohortForRep, nowValue)
+      ...summarizeCurrentState(cohortForRep, nowValue, inactivityForRep)
     };
   }).sort((left, right) => right.won_revenue - left.won_revenue || left.rep_name.localeCompare(right.rep_name));
 }
@@ -451,7 +458,7 @@ function getDefinitions() {
     quote_to_cash_conversion: 'Won revenue divided by quote value, multiplied by 100.',
     average_deal_size: 'Won revenue divided by deals won.',
     open_pipeline: 'Current outstanding value of sent, accepted, or partially paid quotes that are not paid, rejected, or expired.',
-    overdue_follow_ups: `Current active unpaid quotes whose last sales contact (or sent time when never contacted) is at least ${OVERDUE_HOURS} hours old.`
+    overdue_follow_ups: `Current unresolved quotes with no quote lifecycle activity for at least ${OVERDUE_HOURS / 24} days. This includes draft, sent, viewed, accepted, and partially paid quotes, but excludes paid, refunded, rejected, and expired quotes.`
   };
 }
 
@@ -614,7 +621,18 @@ function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
   const filters = normalizeFilterQuery(query);
   const segmentedRecords = applyFilters(records, filters);
   const cohortRecords = segmentedRecords.filter((record) => isInRange(record.sentAt, range));
-  const currentState = summarizeCurrentState(cohortRecords, nowValue);
+  const inactivityRecords = segmentedRecords.filter((record) => {
+    const lifecycleAt = [
+      record.quote?.created_at,
+      record.quote?.sent_at,
+      record.quote?.viewed_at,
+      record.quote?.accepted_at,
+      record.quote?.updated_at,
+      record.lastPaymentAt
+    ].filter(Boolean).sort((left, right) => new Date(right) - new Date(left))[0];
+    return isInRange(lifecycleAt, range);
+  });
+  const currentState = summarizeCurrentState(cohortRecords, nowValue, inactivityRecords);
 
   return {
     filters: {
@@ -633,7 +651,7 @@ function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
       ...currentState
     },
     performance_chart: buildPerformanceChart(cohortRecords, nowValue),
-    rep_performance: buildRepPerformance(segmentedRecords, cohortRecords, nowValue),
+    rep_performance: buildRepPerformance(segmentedRecords, cohortRecords, nowValue, range),
     definitions: getDefinitions()
   };
 }
@@ -804,7 +822,18 @@ async function listAnalyticsQuotes(query, user) {
   const range = resolveDateRange(query, nowValue);
   const filters = normalizeFilterQuery(query);
   let matching = applyFilters(records, filters)
-    .filter((record) => isInRange(record.sentAt, range));
+    .filter((record) => {
+      if (bucket !== 'overdue_follow_ups') return isInRange(record.sentAt, range);
+      const lifecycleAt = [
+        record.quote?.created_at,
+        record.quote?.sent_at,
+        record.quote?.viewed_at,
+        record.quote?.accepted_at,
+        record.quote?.updated_at,
+        record.lastPaymentAt
+      ].filter(Boolean).sort((left, right) => new Date(right) - new Date(left))[0];
+      return isInRange(lifecycleAt, range);
+    });
 
   if (bucket === 'deals_won') {
     matching = matching.filter((record) => record.fullPaid);
