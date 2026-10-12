@@ -101,6 +101,8 @@ const {
   CP_PAYMENT_DUE_7_DAYS_TEMPLATE_ID,
   CP_PAYMENT_OVERDUE_1_DAY_TEMPLATE_ID,
   CP_PAYMENT_OVERDUE_3_DAYS_TEMPLATE_ID,
+  OVERDUE_PIPELINE_SALES_REP_TEMPLATE_ID,
+  OVERDUE_PIPELINE_SALES_ADMIN_TEMPLATE_ID,
   CP_PAYMENT_COMPLETED_TEMPLATE_ID,
   MANUAL_PAYMENT_RECORD_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
@@ -4287,6 +4289,45 @@ const sendCPPaymentOverdue3DaysEmail = async ({ to, data = {} } = {}) => {
   });
 };
 
+const normalizePipelineQuotes = (quotes = []) => (Array.isArray(quotes) ? quotes : [])
+  .map((quote) => ({
+    quote_id: quote?.quote_id || quote?.quote_number || '',
+    client_name: quote?.client_name || 'Client'
+  }))
+  .filter((quote) => quote.quote_id);
+
+const sendOverduePipelineSalesRepEmail = async ({ to, data = {} } = {}) => {
+  const recipientName = data.recipient_name || 'Sales Team Member';
+  return sendEmail({
+    to,
+    subject: data.subject || 'Overdue Pipeline - No Action Taken for 3 Days',
+    templateId: OVERDUE_PIPELINE_SALES_REP_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: recipientName,
+      open_quote_count: Number(data.open_quote_count || 0),
+      pipeline_value: data.pipeline_value || '0.00',
+      last_activity_date: data.last_activity_date || '',
+      overdue_by: '3 days',
+      quotes: normalizePipelineQuotes(data.quotes),
+      frontend_url: data.frontend_url || process.env.FRONTEND_URL || ''
+    }
+  });
+};
+
+const sendOverduePipelineSalesAdminEmail = async ({ to, data = {} } = {}) => sendEmail({
+  to,
+  subject: data.subject || 'Overdue Sales Pipeline - No Action Taken for 3 Days',
+  templateId: OVERDUE_PIPELINE_SALES_ADMIN_TEMPLATE_ID,
+  dynamicTemplateData: {
+    recipient_name: data.recipient_name || 'Team',
+    open_quote_count: Number(data.open_quote_count || 0),
+    pipeline_value: data.pipeline_value || '0.00',
+    overdue_by: '3 days',
+    quotes: normalizePipelineQuotes(data.quotes),
+    frontend_url: data.frontend_url || process.env.FRONTEND_URL || ''
+  }
+});
+
 const sendCPPaymentCompletedEmail = async ({ to, data = {} } = {}) => {
   const projectName = data.project_name || `Booking #${data.booking_id || ''}`;
 
@@ -4542,6 +4583,8 @@ module.exports = {
   sendCPPaymentDue7DaysEmail,
   sendCPPaymentOverdue1DayEmail,
   sendCPPaymentOverdue3DaysEmail,
+  sendOverduePipelineSalesRepEmail,
+  sendOverduePipelineSalesAdminEmail,
   sendCPPaymentCompletedEmail,
   sendCreativePartnerProfileReminderEmail,
   sendPostProductionAssignmentEmail,

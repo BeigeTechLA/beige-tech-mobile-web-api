@@ -326,6 +326,25 @@ function isOverdue(record, nowValue = new Date()) {
   return reference <= new Date(nowValue).getTime() - OVERDUE_HOURS * 60 * 60 * 1000;
 }
 
+function isInactiveForHours(record, hours, nowValue = new Date()) {
+  const pendingStatuses = new Set(['draft', 'pending', 'sent', 'viewed', 'accepted', 'partially_paid']);
+  if (!pendingStatuses.has(record.quoteStatus) || record.fullPaid || ['paid', 'refunded'].includes(record.paymentStatus)) return false;
+  const lifecycleTimes = [
+    record.quote?.created_at,
+    record.quote?.sent_at,
+    record.quote?.viewed_at,
+    record.quote?.accepted_at,
+    record.quote?.updated_at,
+    record.lastPaymentAt
+  ]
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter((value) => !Number.isNaN(value));
+  const reference = lifecycleTimes.length ? Math.max(...lifecycleTimes) : 0;
+  if (!reference) return false;
+  return reference <= new Date(nowValue).getTime() - hours * 60 * 60 * 1000;
+}
+
 function emptyStatusBreakdown() {
   return ['sent', 'accepted', 'partially_paid'].map((status) => ({ status, count: 0, value: 0 }));
 }
@@ -462,6 +481,8 @@ async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
       'valid_until',
       'total',
       'sent_at',
+      'viewed_at',
+      'accepted_at',
       'created_at',
       'updated_at'
     ],
@@ -580,6 +601,7 @@ async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
       leadSourceKey: leadSource.toLowerCase(),
       customerType: sentAt && customerFirstSent && sentAt.getTime() > customerFirstSent.getTime() ? 'returning' : 'new',
       lastContactedAt,
+      lastPaymentAt: (paymentActivitiesByLead.get(leadId) || [])[0]?.created_at || null,
       ...payment,
       overdue: false,
       nowValue
@@ -621,6 +643,17 @@ async function getAnalytics(query, user) {
   const nowValue = new Date();
   const records = await loadAnalyticsRecords(user, nowValue);
   return buildAnalyticsData(records, query, nowValue);
+}
+
+async function getInactivePipelineRecords({ inactivityHours = 72, nowValue = new Date() } = {}) {
+  const hours = Number(inactivityHours);
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw badRequest('inactivityHours must be a positive number');
+  }
+
+  await expireQuotesPastValidUntil();
+  const records = await loadAnalyticsRecords({}, nowValue);
+  return records.filter((record) => isInactiveForHours(record, hours, nowValue));
 }
 
 function uniqueOptions(records, key, labelKey = key) {
@@ -808,6 +841,7 @@ module.exports = {
   getAnalyticsFilters,
   getRepAnalytics,
   listAnalyticsQuotes,
+  getInactivePipelineRecords,
   _private: {
     resolveDateRange,
     resolvePaymentState,
