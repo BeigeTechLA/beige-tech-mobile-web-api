@@ -18,6 +18,10 @@ const internalPasswordExpirySettingsFactory = require('./internal_password_expir
 const creatorAvailabilityRulesFactory = require('./creator_availability_rules');
 const creatorAvailabilityBlocksFactory = require('./creator_availability_blocks');
 const creatorCalendarConnectionsFactory = require('./creator_calendar_connections');
+const agreementTemplatesFactory = require('./agreement_templates');
+const agreementDocumentsFactory = require('./agreement_documents');
+const agreementResponsesFactory = require('./agreement_responses');
+const agreementEventsFactory = require('./agreement_events');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -43,6 +47,10 @@ models.internal_password_expiry_settings = internalPasswordExpirySettingsFactory
 models.creator_availability_rules = creatorAvailabilityRulesFactory(sequelize, DataTypes);
 models.creator_availability_blocks = creatorAvailabilityBlocksFactory(sequelize, DataTypes);
 models.creator_calendar_connections = creatorCalendarConnectionsFactory(sequelize, DataTypes);
+models.agreement_templates = agreementTemplatesFactory(sequelize, DataTypes);
+models.agreement_documents = agreementDocumentsFactory(sequelize, DataTypes);
+models.agreement_responses = agreementResponsesFactory(sequelize, DataTypes);
+models.agreement_events = agreementEventsFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {

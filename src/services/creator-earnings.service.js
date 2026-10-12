@@ -634,61 +634,10 @@ async function getCreatorEarningDetails(creatorEarningId, creatorId) {
 // ACCEPT / DECLINE
 
 async function respondToEarning(bookingId, creatorId, action) {
-    const assignedCrew = await db.assigned_crew.findOne({
-        where: {
-            project_id: bookingId,
-            crew_member_id: creatorId,
-            is_active: 1
-        }
-    });
-
-    if (!assignedCrew) {
-        const error = new Error('Assignment not found');
-        error.statusCode = 404;
-        throw error;
-    }
-
-    if (Number(assignedCrew.crew_accept) !== 0) {
-        const error = new Error('Already responded to this shoot');
-        error.statusCode = 409;
-        throw error;
-    }
-
-    const crewAcceptValue = action === 'accept' ? 1 : 2;
-    await assignedCrew.update({
-        crew_accept: crewAcceptValue,
-        responded_at: new Date()
-    });
-
-    const earning = await db.creator_earnings.findOne({
-        where: { booking_id: bookingId, creator_id: creatorId }
-    });
-
-    if (earning && action === 'accept') {
-        const existingEvent = await db.creator_earning_timeline_events.findOne({
-            where: {
-                creator_earning_id: earning.creator_earning_id,
-                event_type: 'shoot_accepted'
-            }
-        });
-
-        if (!existingEvent) {
-            await db.creator_earning_timeline_events.create({
-                creator_earning_id: earning.creator_earning_id,
-                booking_id: bookingId,
-                creator_id: creatorId,
-                event_type: 'shoot_accepted',
-                label: 'Shoot Accepted by you for this new Shoot',
-                is_completed: 1,
-                event_date: new Date(),
-                sort_order: 2
-            });
-        } else {
-            await existingEvent.update({ is_completed: 1, event_date: new Date() });
-        }
-    }
-
-    return { success: true, action, booking_id: bookingId };
+    const error = new Error('Shoot responses must be submitted through the shoot agreement. Review and accept or reject the current agreement first.');
+    error.statusCode = 409;
+    error.code = 'SHOOT_AGREEMENT_REQUIRED';
+    throw error;
 }
 
 
@@ -823,88 +772,14 @@ async function getCreatorEarningsList(creatorId, filters = {}) {
 // ACCEPT SHOOT
 
 async function acceptShoot(bookingId, creatorId) {
-    console.log('acceptShoot called:', { bookingId, creatorId });
-    const assignedCrew = await db.assigned_crew.findOne({
-        where: { project_id: bookingId, crew_member_id: creatorId, is_active: 1 }
-    });
-    console.log('assignedCrew found:', assignedCrew);
-
-    if (!assignedCrew) {
-        const error = new Error('Assignment not found');
-        error.statusCode = 404;
-        throw error;
-    }
-
-    if (Number(assignedCrew.crew_accept) !== 0) {
-        const error = new Error('Already responded to this shoot');
-        error.statusCode = 409;
-        throw error;
-    }
-
-    await assignedCrew.update({ crew_accept: 1, responded_at: new Date() });
-
-    const earning = await db.creator_earnings.findOne({
-        where: { booking_id: bookingId, creator_id: creatorId }
-    });
-
-    if (earning) {
-        const existing = await db.creator_earning_timeline_events.findOne({
-            where: { creator_earning_id: earning.creator_earning_id, event_type: 'shoot_accepted' }
-        });
-
-        if (existing) {
-            await existing.update({ is_completed: 1, event_date: new Date() });
-        } else {
-            await db.creator_earning_timeline_events.create({
-                creator_earning_id: earning.creator_earning_id,
-                booking_id: bookingId,
-                creator_id: creatorId,
-                event_type: 'shoot_accepted',
-                label: 'Shoot Accepted by you for this new Shoot',
-                sub_label: null,
-                is_completed: 1,
-                event_date: new Date(),
-                sort_order: 2
-            });
-        }
-    }
-
-    return {
-        success: true,
-        booking_id: bookingId,
-        creator_id: creatorId,
-        status: 'accepted'
-    };
+    return respondToEarning(bookingId, creatorId, 'accept');
 }
 
 
 // DECLINE SHOOT
 
 async function declineShoot(bookingId, creatorId) {
-    const assignedCrew = await db.assigned_crew.findOne({
-        where: { project_id: bookingId, crew_member_id: creatorId, is_active: 1 }
-    });
-
-    if (!assignedCrew) {
-        const error = new Error('Assignment not found');
-        error.statusCode = 404;
-        throw error;
-    }
-
-    if (Number(assignedCrew.crew_accept) !== 0) {
-        const error = new Error('Already responded to this shoot');
-        error.statusCode = 409;
-        throw error;
-    }
-
-    await assignedCrew.update({ crew_accept: 2, responded_at: new Date() });
-
-    return {
-        success: true,
-        booking_id: bookingId,
-        creator_id: creatorId,
-        status: 'declined'
-    };
+    return respondToEarning(bookingId, creatorId, 'decline');
 }
 
 

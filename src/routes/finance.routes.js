@@ -21,6 +21,7 @@ const adminFinanceCreditPointsEdit = requireAnyPermission(['admin_finances_beige
 const adminFinanceCpCompensationView = requireAnyPermission(['admin_finances_cp_compensation.view'], adminFinancePermissionOptions);
 const adminFinanceCpCompensationCreate = requireAnyPermission(['admin_finances_cp_compensation.create'], adminFinancePermissionOptions);
 const adminFinanceCpCompensationEdit = requireAnyPermission(['admin_finances_cp_compensation.edit'], adminFinancePermissionOptions);
+const adminFinanceAnalyticsView = requireAnyPermission(['admin_finances_analytics.view'], adminFinancePermissionOptions);
 
 const disputeUploadDir = path.join(__dirname, '../../public/uploads/media');
 fs.mkdirSync(disputeUploadDir, { recursive: true });
@@ -56,6 +57,7 @@ const cpReceiptUpload = multer({
 });
 
 router.get('/transactions/export', authenticate, adminFinancesView, financeController.exportTransactions);
+router.get('/admin/analytics', authenticate, adminFinanceAnalyticsView, financeController.getAdminAnalytics);
 router.get('/transactions', authenticate, adminFinanceTransactionsView, financeController.listTransactions);
 router.get('/shoots', authenticate, adminFinanceTransactionsView, financeController.listShootBreakdowns);
 router.get('/shoots/:bookingId', authenticate, adminFinanceTransactionsView, financeController.getShootFinance);

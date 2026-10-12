@@ -1,6 +1,20 @@
 const financeService = require('../services/finance.service');
+const financeAnalyticsService = require('../services/finance-analytics.service');
 const accountCreditService = require('../services/account-credit.service');
 const financeDisputeService = require('../services/finance-dispute.service');
+
+exports.getAdminAnalytics = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getAnalytics(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get finance analytics error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch finance analytics'
+    });
+  }
+};
 
 exports.syncBookingFinance = async (req, res) => {
   try {

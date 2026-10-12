@@ -741,6 +741,15 @@ exports.updateRequestStatus = async (req, res) => {
       });
     }
 
+    // Deliberately keep this legacy endpoint closed.  The agreement endpoint is
+    // the only transition allowed to change assigned_crew.crew_accept, so an
+    // assignment cannot be accepted before its terms have been recorded.
+    return res.status(409).json({
+      error: true,
+      code: 'SHOOT_AGREEMENT_REQUIRED',
+      message: 'Shoot requests must be accepted or rejected from the current shoot agreement.'
+    });
+
     if (decision === 2) {
       const updateResult = await assigned_crew.update(
         { 

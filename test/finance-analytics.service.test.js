@@ -1,0 +1,63 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { _private } = require('../src/services/finance-analytics.service');
+
+const filters = _private.resolveFilters({
+  start_date: '2026-10-01',
+  end_date: '2026-10-31',
+  timezone: 'UTC'
+});
+
+test('Finance Analytics includes paid and partially paid shoots, while retaining partial outstanding balance', () => {
+  const data = _private.buildAnalyticsData({
+    bookings: [
+      { stream_project_booking_id: 1, user_id: 10, payment_completed_at: '2026-10-01T10:00:00Z', event_date: '2026-10-01' },
+      { stream_project_booking_id: 2, user_id: 11, payment_completed_at: '2026-10-02T10:00:00Z', event_date: '2026-10-02' }
+    ],
+    users: [{ id: 10, name: 'Paid Client' }, { id: 11, name: 'Partial Client' }],
+    breakdowns: [
+      { booking_id: 1, client_user_id: 10, payment_status: 'paid', total_amount: 1000, collected_amount: 1000, outstanding_amount: 0, calculated_at: '2026-10-01T10:00:00Z' },
+      { booking_id: 2, client_user_id: 11, payment_status: 'partially_paid', total_amount: 800, collected_amount: 300, outstanding_amount: 500, calculated_at: '2026-10-02T10:00:00Z' },
+      { booking_id: 3, payment_status: 'pending', total_amount: 999, collected_amount: 0, outstanding_amount: 999, calculated_at: '2026-10-03T10:00:00Z' }
+    ],
+    transactions: [], earnings: [], disputes: [], creators: []
+  }, filters, new Date('2026-10-10T00:00:00Z'));
+
+  assert.equal(data.revenue.gross_revenue.amount, 1800);
+  assert.equal(data.revenue.pending_revenue.amount, 1499);
+  assert.equal(data.clients.average_spend_per_shoot.amount, 900);
+  assert.deepEqual(data.clients.payment_overview.map((item) => [item.id, item.clients]), [
+    ['fully_paid', 1], ['partially_paid', 1], ['pending', 1]
+  ]);
+});
+
+test('Finance Analytics subtracts paid refunds and groups each client only once', () => {
+  const data = _private.buildAnalyticsData({
+    bookings: [{ stream_project_booking_id: 1, user_id: 10, payment_completed_at: '2026-10-01T10:00:00Z', event_date: '2026-10-01' }],
+    users: [{ id: 10, name: 'One Client' }],
+    breakdowns: [{ booking_id: 1, client_user_id: 10, payment_status: 'paid', total_amount: 1000, collected_amount: 1000, outstanding_amount: 0, calculated_at: '2026-10-01T10:00:00Z' }],
+    transactions: [{ finance_transaction_id: 1, booking_id: 1, transaction_type: 'refund', status: 'paid', gross_amount: 125, transaction_date: '2026-10-03T10:00:00Z' }],
+    earnings: [], disputes: [], creators: []
+  }, filters, new Date('2026-10-10T00:00:00Z'));
+
+  assert.equal(data.revenue.refund_amount, 125);
+  assert.equal(data.revenue.net_revenue.amount, 875);
+  assert.equal(data.clients.payment_overview.find((item) => item.id === 'fully_paid').clients, 1);
+});
+
+test('Finance Analytics calculates CP margin from total CP payout divided by eligible shoot revenue', () => {
+  const data = _private.buildAnalyticsData({
+    bookings: [{ stream_project_booking_id: 1, user_id: 10, payment_completed_at: '2026-10-01T10:00:00Z', event_date: '2026-10-01' }],
+    users: [{ id: 10, name: 'Client' }],
+    creators: [{ crew_member_id: 20, first_name: 'Creative', last_name: 'Partner' }],
+    breakdowns: [{ booking_id: 1, client_user_id: 10, payment_status: 'paid', total_amount: 1000, collected_amount: 1000, outstanding_amount: 0, calculated_at: '2026-10-01T10:00:00Z' }],
+    transactions: [],
+    earnings: [{ creator_earning_id: 1, booking_id: 1, creator_id: 20, net_earning_amount: 300, status: 'earned', approval_status: 'approved', metadata_json: '{"due_date":"2026-10-15"}', created_at: '2026-10-01T10:00:00Z' }],
+    disputes: []
+  }, filters, new Date('2026-10-10T00:00:00Z'));
+
+  assert.equal(data.revenue.cp_payout.total_amount, 300);
+  assert.equal(data.creative_partners.averages.cp_payout_percent_of_revenue, 30);
+  assert.equal(data.creative_partners.averages.cps_per_shoot, 1);
+});
