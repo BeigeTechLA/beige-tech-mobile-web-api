@@ -4,6 +4,7 @@ const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const bookingPricingService = require('./booking-pricing.service');
 const emailService = require('../utils/emailService');
 const appNotificationService = require('./app-notification.service');
+const { getCanonicalCpEarningRows, payoutAmountsByEarningId, buildCpCompensationOverview } = require('../utils/cp-compensation-summary');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -333,6 +334,22 @@ function getSummaryEarningAttempts(earnings = []) {
   const latestEarnings = getLatestEarningAttemptsByCreator(earnings);
   const activeEarnings = latestEarnings.filter((earning) => earning.approval_status !== 'rejected');
   return activeEarnings.length ? activeEarnings : latestEarnings;
+}
+
+// Financial reporting must use one current compensation record per CP per
+// shoot. Keeping older attempts here double-counts a modification, rejection,
+// or resubmission as additional payout.
+async function getCpCompensationOverview(filters = {}) {
+  const [earnings, payoutRequests] = await Promise.all([
+    db.creator_earnings.findAll({ raw: true }),
+    db.creator_payout_requests.findAll({ raw: true })
+  ]);
+  const allowedPeriods = ['all_time', 'this_month', 'last_3_months', 'this_year'];
+  const period = allowedPeriods.includes(filters.period) ? filters.period : 'all_time';
+  return buildCpCompensationOverview(earnings, {
+    period,
+    paidAmountsByEarningId: payoutAmountsByEarningId(payoutRequests)
+  });
 }
 
 function resolveCompensationDueDate(earnings = [], booking = {}) {
@@ -2718,6 +2735,7 @@ module.exports = {
   upsertCreatorCompensation,
   upsertBulkCreatorCompensations,
   listCpCompensations,
+  getCpCompensationOverview,
   getCpCompensationDetails,
   approveCompensation,
   rejectCompensation,
@@ -2725,5 +2743,6 @@ module.exports = {
   addAdvancePayment,
   processCompensationPayment,
   updateBookingCompensationDueDate,
-  listPendingCompensationShoots
+  listPendingCompensationShoots,
+  _private: { getCanonicalCpEarningRows, payoutAmountsByEarningId, buildCpCompensationOverview }
 };

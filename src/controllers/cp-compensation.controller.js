@@ -125,6 +125,19 @@ exports.list = async (req, res) => {
   }
 };
 
+exports.overview = async (req, res) => {
+  try {
+    const data = await cpCompensationService.getCpCompensationOverview(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get CP compensation overview error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch CP compensation overview'
+    });
+  }
+};
+
 exports.listPendingShoots = async (req, res) => {
   try {
     const data = await cpCompensationService.listPendingCompensationShoots(req.query);

@@ -53,11 +53,84 @@ test('Finance Analytics calculates CP margin from total CP payout divided by eli
     creators: [{ crew_member_id: 20, first_name: 'Creative', last_name: 'Partner' }],
     breakdowns: [{ booking_id: 1, client_user_id: 10, payment_status: 'paid', total_amount: 1000, collected_amount: 1000, outstanding_amount: 0, calculated_at: '2026-10-01T10:00:00Z' }],
     transactions: [],
-    earnings: [{ creator_earning_id: 1, booking_id: 1, creator_id: 20, net_earning_amount: 300, status: 'earned', approval_status: 'approved', metadata_json: '{"due_date":"2026-10-15"}', created_at: '2026-10-01T10:00:00Z' }],
+    earnings: [{ creator_earning_id: 1, booking_id: 1, creator_id: 20, net_earning_amount: 300, status: 'paid', approval_status: 'approved', metadata_json: '{"due_date":"2026-10-15"}', created_at: '2026-10-01T10:00:00Z' }],
     disputes: []
   }, filters, new Date('2026-10-10T00:00:00Z'));
 
   assert.equal(data.revenue.cp_payout.total_amount, 300);
   assert.equal(data.creative_partners.averages.cp_payout_percent_of_revenue, 30);
   assert.equal(data.creative_partners.averages.cps_per_shoot, 1);
+});
+
+test('Finance Analytics excludes draft system earnings until compensation is submitted', () => {
+  const data = _private.buildAnalyticsData({
+    bookings: [{ stream_project_booking_id: 1, payment_completed_at: '2026-10-01T10:00:00Z', event_date: '2026-10-01' }],
+    creators: [{ crew_member_id: 20, first_name: 'Draft', last_name: 'Creator' }],
+    breakdowns: [{ booking_id: 1, payment_status: 'paid', total_amount: 1000, collected_amount: 1000, calculated_at: '2026-10-01T10:00:00Z' }],
+    transactions: [],
+    earnings: [{
+      creator_earning_id: 1,
+      booking_id: 1,
+      creator_id: 20,
+      net_earning_amount: 5000,
+      status: 'pending',
+      approval_status: 'draft',
+      compensation_source: 'system',
+      created_at: '2026-10-01T10:00:00Z'
+    }],
+    disputes: [],
+    users: []
+  }, filters, new Date('2026-10-10T00:00:00Z'));
+
+  assert.equal(data.revenue.cp_payout.total_amount, 0);
+  assert.deepEqual(data.creative_partners.top_by_payout, []);
+  assert.deepEqual(data.creative_partners.top_by_shoots, []);
+});
+
+test('Finance Analytics excludes unpaid compensation from Top CP payout rankings', () => {
+  const data = _private.buildAnalyticsData({
+    bookings: [{ stream_project_booking_id: 1, payment_completed_at: '2026-10-01T10:00:00Z', event_date: '2026-10-01' }],
+    creators: [{ crew_member_id: 20, first_name: 'Unpaid', last_name: 'Creator' }],
+    breakdowns: [{ booking_id: 1, payment_status: 'paid', total_amount: 1000, collected_amount: 1000, calculated_at: '2026-10-01T10:00:00Z' }],
+    transactions: [],
+    earnings: [{
+      creator_earning_id: 1,
+      booking_id: 1,
+      creator_id: 20,
+      net_earning_amount: 300,
+      status: 'earned',
+      approval_status: 'approved',
+      created_at: '2026-10-01T10:00:00Z'
+    }],
+    disputes: [],
+    users: []
+  }, filters, new Date('2026-10-10T00:00:00Z'));
+
+  assert.equal(data.revenue.cp_payout.payable_amount, 300);
+  assert.deepEqual(data.creative_partners.top_by_payout, []);
+  assert.deepEqual(data.creative_partners.top_by_shoots, []);
+});
+
+test('Finance Analytics includes a paid CP payout without a client finance breakdown', () => {
+  const data = _private.buildAnalyticsData({
+    bookings: [{ stream_project_booking_id: 99, event_date: '2026-10-01' }],
+    creators: [{ crew_member_id: 20, first_name: 'Paid', last_name: 'Creator' }],
+    breakdowns: [],
+    transactions: [],
+    earnings: [{
+      creator_earning_id: 1,
+      booking_id: 99,
+      creator_id: 20,
+      net_earning_amount: 250,
+      status: 'paid',
+      approval_status: 'approved',
+      updated_at: '2026-10-01T10:00:00Z'
+    }],
+    disputes: [],
+    users: []
+  }, filters, new Date('2026-10-10T00:00:00Z'));
+
+  assert.deepEqual(data.creative_partners.top_by_payout.map(({ name, shoots, payout }) => ({ name, shoots, payout })), [
+    { name: 'Paid Creator', shoots: 1, payout: 250 }
+  ]);
 });

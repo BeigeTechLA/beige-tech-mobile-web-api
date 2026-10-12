@@ -1,8 +1,12 @@
 const db = require('../models');
+const { getCanonicalCpEarningRows, payoutAmountsByEarningId } = require('../utils/cp-compensation-summary');
 
 const ELIGIBLE_PAYMENT_STATUSES = new Set(['paid', 'partially_paid']);
 const PAID_TRANSACTION_STATUSES = new Set(['paid', 'completed', 'success', 'succeeded']);
 const REFUND_TRANSACTION_STATUSES = new Set(['paid', 'refunded', 'completed', 'success', 'succeeded']);
+// Draft earnings are generated while a shoot is being prepared. They are not
+// compensation commitments and must never affect finance analytics.
+const ACTIVE_CP_APPROVAL_STATUSES = new Set(['pending_approval', 'approved']);
 const CREATOR_ROLE_LABELS = {
   1: 'Videographer', 2: 'Photographer', 3: 'Editor', 4: 'Producer', 5: 'Director',
   9: 'Videographer', 10: 'Photographer', 11: 'Editor'
@@ -198,14 +202,25 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
     }));
   refunds.forEach((refund) => revenueSeriesRows.push({ date: refund.date, gross: 0, pending: 0, cp_payout: 0, refunds: refund.amount }));
 
-  const cpRows = (input.earnings || [])
-    .filter((earning) => eligibleBookingIds.has(Number(earning.booking_id)))
-    .filter((earning) => String(earning.status || '').toLowerCase() !== 'cancelled' && String(earning.approval_status || '').toLowerCase() !== 'rejected')
+  const cpRows = getCanonicalCpEarningRows(input.earnings || [])
+    // CP Compensation is its own financial source of truth. A creator payout
+    // can be completed before a finance_project_breakdowns row exists, so do
+    // not drop valid CP records based on the client's payment data.
+    .filter((earning) => (
+      String(earning.status || '').toLowerCase() !== 'cancelled'
+      && ACTIVE_CP_APPROVAL_STATUSES.has(String(earning.approval_status || '').toLowerCase())
+    ))
     .map((earning) => {
       const booking = bookings.get(Number(earning.booking_id)) || {};
       const payoutTransaction = transactionById.get(Number(earning.finance_transaction_id));
       const dueDate = resolveDueDate(earning, booking);
-      const isPaid = String(earning.status || '').toLowerCase() === 'paid';
+      const amount = money(earning.net_earning_amount);
+      const recordedPaid = money((input.paidAmountsByEarningId || new Map()).get(Number(earning.creator_earning_id)) || 0);
+      const paidAmount = String(earning.status || '').toLowerCase() === 'paid'
+        ? (recordedPaid > 0 ? Math.min(recordedPaid, amount) : amount)
+        : Math.min(recordedPaid, amount);
+      const payableAmount = money(Math.max(amount - paidAmount, 0));
+      const isPaid = paidAmount >= amount;
       const activityDate = isPaid
         ? (payoutTransaction?.transaction_date || earning.updated_at || earning.approved_at || earning.created_at)
         : (dueDate ? `${dueDate}T00:00:00.000Z` : earning.updated_at || earning.created_at);
@@ -216,7 +231,9 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
         due_date: dueDate,
         activity_date: activityDate,
         is_paid: isPaid,
-        amount: money(earning.net_earning_amount)
+        amount,
+        paid_amount: paidAmount,
+        payable_amount: payableAmount
       };
     })
     .filter((earning) => isInRange(earning.activity_date, filters));
@@ -225,16 +242,20 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
     date: dateKey(row.activity_date, filters.timezone), gross: 0, pending: 0, cp_payout: row.amount, refunds: 0
   }));
 
-  const paidCpPayout = money(cpRows.filter((row) => row.is_paid).reduce((sum, row) => sum + row.amount, 0));
-  const payableCpPayout = money(cpRows.filter((row) => !row.is_paid).reduce((sum, row) => sum + row.amount, 0));
+  const paidCpPayout = money(cpRows.reduce((sum, row) => sum + row.paid_amount, 0));
+  const payableCpPayout = money(cpRows.reduce((sum, row) => sum + row.payable_amount, 0));
   const cpPayout = money(paidCpPayout + payableCpPayout);
 
+  // A ranking titled “Top CPs By Payout” represents money already paid to a
+  // creator. Pending or approved-but-unpaid compensation remains payable and
+  // is shown in the CP payout summary/timeline, never in this ranking.
+  const paidCpRows = cpRows.filter((row) => row.paid_amount > 0);
   const revenueByBooking = new Map(eligibleRevenue.map((row) => [row.booking_id, Number(row.total_amount || 0)]));
   const cpByCreator = new Map();
-  cpRows.forEach((row) => {
+  paidCpRows.forEach((row) => {
     const id = Number(row.creator_id);
     const current = cpByCreator.get(id) || { id: String(id), name: creatorName(row.creator), payout: 0, shoots: new Set(), shoot_revenue: 0 };
-    current.payout += row.amount;
+    current.payout += row.paid_amount;
     if (!current.shoots.has(Number(row.booking_id))) current.shoot_revenue += revenueByBooking.get(Number(row.booking_id)) || 0;
     current.shoots.add(Number(row.booking_id));
     cpByCreator.set(id, current);
@@ -246,19 +267,19 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
     .map((row) => ({ id: row.id, name: row.name, shoots: row.shoots.size }))
     .sort((a, b) => b.shoots - a.shoots).slice(0, 10);
 
-  const cpBookingIds = new Set(cpRows.map((row) => Number(row.booking_id)));
-  const averageCpPayout = cpRows.length ? money(cpPayout / cpRows.length) : 0;
-  const averageCpMargin = percent(cpPayout, grossRevenue);
-  const averageCpsPerShoot = cpBookingIds.size ? Number((cpRows.length / cpBookingIds.size).toFixed(2)) : 0;
+  const cpBookingIds = new Set(paidCpRows.map((row) => Number(row.booking_id)));
+  const averageCpPayout = paidCpRows.length ? money(paidCpPayout / paidCpRows.length) : 0;
+  const averageCpMargin = percent(paidCpPayout, grossRevenue);
+  const averageCpsPerShoot = cpBookingIds.size ? Number((paidCpRows.length / cpBookingIds.size).toFixed(2)) : 0;
   const today = dateKey(now, filters.timezone);
   const overdueByCreator = new Map();
-  cpRows.filter((row) => !row.is_paid && row.due_date && row.due_date < today).forEach((row) => {
+  cpRows.filter((row) => row.payable_amount > 0 && row.due_date && row.due_date < today).forEach((row) => {
     const id = Number(row.creator_id);
     const current = overdueByCreator.get(id) || {
       id: String(id), name: creatorName(row.creator), roles: creatorRoleNames(row.creator.primary_role),
       amount: 0, days_overdue: 0
     };
-    current.amount += row.amount;
+    current.amount += row.payable_amount;
     current.days_overdue = Math.max(current.days_overdue, Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${row.due_date}T00:00:00Z`)) / 86400000));
     overdueByCreator.set(id, current);
   });
@@ -344,11 +365,12 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
 
 async function getAnalytics(query = {}) {
   const filters = resolveFilters(query);
-  const [breakdowns, transactions, earnings, disputes] = await Promise.all([
+  const [breakdowns, transactions, earnings, disputes, payoutRequests] = await Promise.all([
     db.finance_project_breakdowns.findAll({ raw: true }),
     db.finance_transactions.findAll({ raw: true }),
     db.creator_earnings.findAll({ raw: true }),
-    db.finance_disputes.findAll({ raw: true })
+    db.finance_disputes.findAll({ raw: true }),
+    db.creator_payout_requests.findAll({ raw: true })
   ]);
   const bookingIds = [...new Set([...breakdowns.map((row) => Number(row.booking_id)), ...earnings.map((row) => Number(row.booking_id))].filter(Boolean))];
   const creatorIds = [...new Set(earnings.map((row) => Number(row.creator_id)).filter(Boolean))];
@@ -358,7 +380,10 @@ async function getAnalytics(query = {}) {
     db.crew_members.findAll({ where: { crew_member_id: creatorIds.length ? creatorIds : [0] }, attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'], raw: true }),
     db.users.unscoped().findAll({ where: { id: userIds.length ? userIds : [0] }, attributes: ['id', 'name', 'email'], raw: true })
   ]);
-  return buildAnalyticsData({ breakdowns, transactions, earnings, disputes, bookings, creators, users }, filters);
+  return buildAnalyticsData({
+    breakdowns, transactions, earnings, disputes, bookings, creators, users,
+    paidAmountsByEarningId: payoutAmountsByEarningId(payoutRequests)
+  }, filters);
 }
 
 module.exports = { getAnalytics, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate, outstandingBalance, isOutstandingReceivable, creatorRoleNames } };
