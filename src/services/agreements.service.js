@@ -5,6 +5,18 @@ const { Op } = db.Sequelize;
 const GENERAL = 'general';
 const SHOOT = 'shoot';
 const PENDING = 'pending_acceptance';
+// Canonical Creative Partner role IDs. These match creator search, compensation,
+// shoot details, and lead screens; do not derive display labels from crew_roles.
+const CREATOR_ROLE_LABELS = {
+  1: 'Videographer',
+  2: 'Photographer',
+  3: 'Editor',
+  4: 'Producer',
+  5: 'Director',
+  9: 'Videographer',
+  10: 'Photographer',
+  11: 'Editor'
+};
 
 const error = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const plain = (value) => value && (typeof value.get === 'function' ? value.get({ plain: true }) : value);
@@ -18,6 +30,23 @@ const hashContent = (contentHtml, contentJson) => crypto.createHash('sha256')
   .update(`${contentHtml || ''}\n${stringify(contentJson) || ''}`)
   .digest('hex');
 
+function roleIds(value) {
+  if (value == null || value === '') return [];
+  if (typeof value === 'number') return [value];
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return (Array.isArray(parsed) ? parsed : [parsed]).map(Number).filter(Number.isFinite);
+  } catch (_) {
+    return String(value).split(',').map((id) => Number(id.trim())).filter(Number.isFinite);
+  }
+}
+
+function creatorRoleNames(primaryRole) {
+  const ids = roleIds(primaryRole);
+  if (!ids.length) return null;
+  return [...new Set(ids.map((id) => CREATOR_ROLE_LABELS[id]).filter(Boolean))].join(', ') || null;
+}
+
 function documentPayload(document) {
   const row = plain(document);
   if (!row) return null;
@@ -26,6 +55,33 @@ function documentPayload(document) {
     content_json: parse(row.content_json),
     snapshot: parse(row.snapshot_json, {}),
     snapshot_json: undefined
+  };
+}
+
+async function documentPayloadWithCreativePartner(document) {
+  const payload = documentPayload(document);
+  if (!payload || !payload.creator_id) return payload;
+
+  const creator = await db.crew_members.findByPk(payload.creator_id, {
+    attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role']
+  });
+  if (!creator) return payload;
+
+  const partner = plain(creator);
+  const currentSnapshot = payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : {};
+  const resolvedRole = creatorRoleNames(partner.primary_role);
+  return {
+    ...payload,
+    snapshot: {
+      ...currentSnapshot,
+      creative_partner: {
+        ...(currentSnapshot.creative_partner || {}),
+        id: partner.crew_member_id,
+        name: [partner.first_name, partner.last_name].filter(Boolean).join(' '),
+        email: partner.email || null,
+        role: resolvedRole || currentSnapshot.creative_partner?.role || null
+      }
+    }
   };
 }
 
@@ -45,23 +101,77 @@ async function templateById(id) {
   return template;
 }
 
+function nextGeneralTemplateVersion(rows) {
+  let highestMajor = 0;
+  let highestMinor = -1;
+
+  for (const row of rows) {
+    const version = String(row.version || '').trim();
+    const match = version.match(/^(?:v(?:ersion)?\s*)?(\d+)(?:\.(\d+))?/i);
+    if (!match) continue;
+    const major = Number(match[1]);
+    const minor = Number(match[2] || 0);
+    if (major > highestMajor || (major === highestMajor && minor > highestMinor)) {
+      highestMajor = major;
+      highestMinor = minor;
+    }
+  }
+
+  return highestMinor < 0 ? '1.0' : `${highestMajor}.${highestMinor + 1}`;
+}
+
 async function createGeneralTemplate(payload, actor) {
   const title = String(payload.title || '').trim();
   const contentHtml = String(payload.content_html || '').trim();
-  const version = String(payload.version || '').trim();
-  if (!title || !contentHtml || !version) throw error('title, version and content_html are required');
+  if (!title || !contentHtml) throw error('title and content_html are required');
 
   const contentJson = payload.content_json || null;
-  return db.agreement_templates.create({
-    agreement_type: GENERAL, title, description: payload.description || null, content_html: contentHtml,
-    content_json: stringify(contentJson), version, content_hash: hashContent(contentHtml, contentJson),
-    is_mandatory: payload.is_mandatory === false ? 0 : 1, created_by_user_id: actor.userId
+  return db.sequelize.transaction(async (transaction) => {
+    const sourceTemplateId = Number(payload.source_template_id || 0);
+    const activeTemplate = await db.agreement_templates.findOne({
+      where: { agreement_type: GENERAL, status: { [Op.in]: ['draft', 'published'] } },
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (activeTemplate && !sourceTemplateId) {
+      throw error('A general agreement already exists. Edit it to publish a new version.', 409);
+    }
+    if (sourceTemplateId) {
+      const source = await db.agreement_templates.findByPk(sourceTemplateId, { transaction, lock: transaction.LOCK.UPDATE });
+      if (!source || source.agreement_type !== GENERAL) throw error('Source general agreement not found', 404);
+    }
+    const existingTemplates = await db.agreement_templates.findAll({
+      where: { agreement_type: GENERAL },
+      attributes: ['version'],
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    const version = nextGeneralTemplateVersion(existingTemplates.map(plain));
+    return db.agreement_templates.create({
+      agreement_type: GENERAL, title, description: payload.description || null, content_html: contentHtml,
+      content_json: stringify(contentJson), version, content_hash: hashContent(contentHtml, contentJson),
+      is_mandatory: payload.is_mandatory === false ? 0 : 1, effective_at: payload.effective_at || null, created_by_user_id: actor.userId
+    }, { transaction });
   });
 }
 
 async function listGeneralTemplates() {
   const rows = await db.agreement_templates.findAll({ where: { agreement_type: GENERAL }, order: [['created_at', 'DESC']] });
-  return rows.map(plain);
+  return rows.map((template) => {
+    const row = plain(template);
+    return { ...row, content_json: parse(row.content_json) };
+  });
+}
+
+async function deleteGeneralTemplate(id) {
+  return db.sequelize.transaction(async (transaction) => {
+    const template = await db.agreement_templates.findByPk(Number(id), { transaction, lock: transaction.LOCK.UPDATE });
+    if (!template || template.agreement_type !== GENERAL) throw error('General agreement not found', 404);
+    const documentCount = await db.agreement_documents.count({ where: { agreement_template_id: template.agreement_template_id }, transaction });
+    if (documentCount > 0) throw error('This general agreement has been presented to Creative Partners and cannot be deleted. Create a new version instead.', 409);
+    await template.destroy({ transaction });
+    return { agreement_template_id: Number(id), deleted: true };
+  });
 }
 
 async function updateGeneralTemplate(id, payload, actor) {
@@ -90,7 +200,7 @@ async function publishGeneralTemplate(id, actor) {
     await db.agreement_templates.update({ status: 'retired', updated_at: new Date() }, {
       where: { agreement_type: GENERAL, status: 'published' }, transaction
     });
-    await template.update({ status: 'published', effective_at: new Date(), published_at: new Date(), published_by_user_id: actor.userId }, { transaction });
+    await template.update({ status: 'published', effective_at: template.effective_at || new Date(), published_at: new Date(), published_by_user_id: actor.userId }, { transaction });
     return template;
   });
 }
@@ -110,11 +220,25 @@ async function ensureGeneralDocument(creatorId, transaction) {
     transaction, lock: transaction.LOCK.UPDATE
   });
   if (!document) {
+    const creator = await db.crew_members.findByPk(creatorId, { transaction });
+    if (!creator) throw error('Creative Partner not found', 404);
+    const partner = plain(creator);
+    const partnerRole = creatorRoleNames(partner.primary_role);
     document = await db.agreement_documents.create({
       agreement_type: GENERAL, agreement_template_id: template.agreement_template_id, creator_id: creatorId,
       version_no: 1, display_version: template.version, status: PENDING, is_current: 1,
       title: template.title, content_html: template.content_html, content_json: template.content_json,
-      content_hash: template.content_hash, snapshot_json: stringify({ template_version: template.version, mandatory: Boolean(template.is_mandatory) })
+      content_hash: template.content_hash,
+      snapshot_json: stringify({
+        template_version: template.version,
+        mandatory: Boolean(template.is_mandatory),
+        creative_partner: {
+          id: partner.crew_member_id,
+          name: [partner.first_name, partner.last_name].filter(Boolean).join(' '),
+          email: partner.email || null,
+          role: partnerRole || null
+        }
+      })
     }, { transaction });
     await event(document.agreement_document_id, 'general_agreement_presented', { creatorId }, { template_id: template.agreement_template_id }, transaction);
   }
@@ -149,10 +273,11 @@ async function getAssignmentContext(bookingId, assignmentId, transaction) {
   return { assignment, booking, creator, earning };
 }
 
-function shootSnapshot({ assignment, booking, creator, earning }, payload = {}) {
+async function shootSnapshot({ assignment, booking, creator, earning }, payload = {}, transaction) {
+  const partnerRole = creatorRoleNames(creator.primary_role);
   return {
     assignment_id: assignment.id, booking_id: booking.stream_project_booking_id, creator_id: creator.crew_member_id,
-    creative_partner: { name: [creator.first_name, creator.last_name].filter(Boolean).join(' '), email: creator.email, role: creator.primary_role },
+    creative_partner: { name: [creator.first_name, creator.last_name].filter(Boolean).join(' '), email: creator.email, role: partnerRole },
     shoot: {
       name: booking.project_name, type: booking.shoot_type || booking.event_type || null, date: booking.event_date,
       location: booking.event_location, start_time: booking.start_time, end_time: booking.end_time,
@@ -169,7 +294,7 @@ async function createShootAgreement(bookingId, assignmentId, payload, actor) {
   return db.sequelize.transaction(async (transaction) => {
     const context = await getAssignmentContext(bookingId, assignmentId, transaction);
     if (Number(context.assignment.crew_accept) !== 0) throw error('Only a pending assignment can receive a new shoot agreement', 409);
-    const snapshot = shootSnapshot(context, payload);
+    const snapshot = await shootSnapshot(context, payload, transaction);
     const contentHtml = String(payload.content_html || '').trim();
     if (!contentHtml) throw error('content_html is required');
     const contentJson = payload.content_json || null;
@@ -314,7 +439,7 @@ async function listDocuments(filters = {}, creatorId = null) {
   if (filters.booking_id) where.booking_id = Number(filters.booking_id);
   if (creatorId) where.creator_id = Number(creatorId);
   const rows = await db.agreement_documents.findAll({ where, order: [['created_at', 'DESC']], limit: Math.min(Number(filters.limit) || 50, 100) });
-  return rows.map(documentPayload);
+  return Promise.all(rows.map(documentPayloadWithCreativePartner));
 }
 
 async function getDocumentDetail(id, creatorId = null) {
@@ -322,8 +447,8 @@ async function getDocumentDetail(id, creatorId = null) {
   if (creatorId && Number(document.creator_id) !== Number(creatorId)) throw error('You cannot view this agreement', 403);
   const responses = await db.agreement_responses.findAll({ where: { agreement_document_id: document.agreement_document_id }, order: [['responded_at', 'ASC']] });
   const events = await db.agreement_events.findAll({ where: { agreement_document_id: document.agreement_document_id }, order: [['occurred_at', 'ASC']] });
-  return { agreement: documentPayload(document), responses: responses.map(plain), events: events.map(plain) };
+  return { agreement: await documentPayloadWithCreativePartner(document), responses: responses.map(plain), events: events.map(plain) };
 }
 
-module.exports = { createGeneralTemplate, listGeneralTemplates, templateById, updateGeneralTemplate, publishGeneralTemplate, getCurrentGeneralAgreement,
+module.exports = { createGeneralTemplate, listGeneralTemplates, templateById, updateGeneralTemplate, deleteGeneralTemplate, publishGeneralTemplate, getCurrentGeneralAgreement,
   createShootAgreement, updateShootDraft, sendShootAgreement, reviseShootAgreement, respondToAgreement, cancelAgreement, listDocuments, getDocumentDetail };

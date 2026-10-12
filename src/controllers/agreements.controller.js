@@ -23,8 +23,9 @@ function fail(res, error, fallback) {
 
 exports.createGeneralTemplate = async (req, res) => { try { return send(res, 201, await agreements.createGeneralTemplate(req.body, actor(req)), 'General agreement draft created'); } catch (e) { return fail(res, e, 'Failed to create general agreement'); } };
 exports.listGeneralTemplates = async (_req, res) => { try { return send(res, 200, await agreements.listGeneralTemplates()); } catch (e) { return fail(res, e, 'Failed to list general agreements'); } };
-exports.getGeneralTemplate = async (req, res) => { try { return send(res, 200, await agreements.templateById(req.params.templateId)); } catch (e) { return fail(res, e, 'Failed to fetch general agreement'); } };
+exports.getGeneralTemplate = async (req, res) => { try { const template = await agreements.templateById(req.params.templateId); const row = template.get({ plain: true }); return send(res, 200, { ...row, content_json: row.content_json ? JSON.parse(row.content_json) : null }); } catch (e) { return fail(res, e, 'Failed to fetch general agreement'); } };
 exports.updateGeneralTemplate = async (req, res) => { try { return send(res, 200, await agreements.updateGeneralTemplate(req.params.templateId, req.body, actor(req)), 'General agreement draft updated'); } catch (e) { return fail(res, e, 'Failed to update general agreement'); } };
+exports.deleteGeneralTemplate = async (req, res) => { try { return send(res, 200, await agreements.deleteGeneralTemplate(req.params.templateId), 'General agreement deleted'); } catch (e) { return fail(res, e, 'Failed to delete general agreement'); } };
 exports.publishGeneralTemplate = async (req, res) => { try { return send(res, 200, await agreements.publishGeneralTemplate(req.params.templateId, actor(req)), 'General agreement published'); } catch (e) { return fail(res, e, 'Failed to publish general agreement'); } };
 
 exports.createShootAgreement = async (req, res) => { try { return send(res, 201, await agreements.createShootAgreement(req.params.bookingId, req.params.assignmentId, req.body, actor(req)), 'Shoot agreement draft created'); } catch (e) { return fail(res, e, 'Failed to create shoot agreement'); } };

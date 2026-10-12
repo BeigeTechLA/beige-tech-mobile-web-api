@@ -14,6 +14,7 @@ router.post('/admin/general', authenticate, adminCreate, controller.createGenera
 router.get('/admin/general', authenticate, adminView, controller.listGeneralTemplates);
 router.get('/admin/general/:templateId', authenticate, adminView, controller.getGeneralTemplate);
 router.patch('/admin/general/:templateId', authenticate, adminEdit, controller.updateGeneralTemplate);
+router.delete('/admin/general/:templateId', authenticate, adminCancel, controller.deleteGeneralTemplate);
 router.post('/admin/general/:templateId/publish', authenticate, adminSend, controller.publishGeneralTemplate);
 
 router.get('/admin', authenticate, adminView, controller.listAdminDocuments);
