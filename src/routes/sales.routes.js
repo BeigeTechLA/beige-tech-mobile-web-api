@@ -252,6 +252,7 @@ router.put('/leads/:id/status', authenticate, adminSalesRepresentativeEdit, sale
 router.put('/client-leads/:id/status', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadStatus);
 router.post('/leads/manual-payment/upload-proof', authenticate, quoteOrSalesPaymentEdit, ...salesLeadsController.uploadManualPaymentProof);
 router.post('/leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordManualPayment);
+router.put('/leads/:id/manual-payment/:paymentId', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.editManualPaymentAmount);
 router.post('/client-leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordClientManualPayment);
 router.post('/availability', authenticate, salesRepAvailabilityView, salesAvailabilityController.getSalesRepAvailability);
 router.post('/add-availability', authenticate, salesRepAvailabilityCreate, salesAvailabilityController.setSalesRepAvailability);
