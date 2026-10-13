@@ -35,6 +35,12 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.JSON,
       allowNull: true
     },
+    // Categories muted from the notification centre. This is intentionally
+    // separate from `topics`, which controls delivery of push notifications.
+    muted_categories: {
+      type: DataTypes.JSON,
+      allowNull: true
+    },
     raw_preferences: {
       type: DataTypes.JSON,
       allowNull: true

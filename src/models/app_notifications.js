@@ -87,6 +87,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: true
     },
+    archived_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,
@@ -114,6 +118,15 @@ module.exports = function(sequelize, DataTypes) {
         fields: [
           { name: 'user_id' },
           { name: 'is_read' },
+          { name: 'created_at' }
+        ]
+      },
+      {
+        name: 'idx_app_notifications_user_active_created',
+        using: 'BTREE',
+        fields: [
+          { name: 'user_id' },
+          { name: 'is_active' },
           { name: 'created_at' }
         ]
       },

@@ -10,8 +10,10 @@ router.get('/', appNotificationController.listNotifications);
 router.get('/counts', appNotificationController.getCounts);
 router.get('/:id', appNotificationController.getNotification);
 router.patch('/read-all', appNotificationController.markAllRead);
+router.patch('/read-by-reference', appNotificationController.markReadByReference);
 router.patch('/:id/read', appNotificationController.markRead);
 router.patch('/:id/unread', appNotificationController.markUnread);
+router.patch('/:id/restore', appNotificationController.restoreNotification);
 router.delete('/:id', appNotificationController.deleteNotification);
 
 module.exports = router;

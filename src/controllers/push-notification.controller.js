@@ -1,5 +1,6 @@
 const constants = require('../utils/constants');
 const pushNotificationService = require('../services/push-notification.service');
+const appNotificationService = require('../services/app-notification.service');
 
 const getRequestUserId = (req) => req.userId || req.user?.id;
 const getRequestUserType = (req) => req.userType || null;
@@ -108,22 +109,67 @@ exports.getNotificationPreferences = async (req, res) => {
 
 exports.sendTestPushToMe = async (req, res) => {
   try {
-    const result = await pushNotificationService.sendPushToUser({
-      userId: getRequestUserId(req),
-      title: req.body.title || 'Test notification',
-      body: req.body.body || 'Push notification test successful.',
-      data: req.body.data || {
-        topic: 'system',
-        category: 'system',
-        type: 'test',
-      },
+    const userId = getRequestUserId(req);
+    const title = 'Push notification test';
+    const message = 'This is a test of your web push and notification inbox.';
+    const notification = await appNotificationService.createAndPushNotification({
+      userId,
+      title,
+      message,
+      topic: 'system',
+      category: 'system',
+      type: 'push_module_test',
+      actionLabel: 'View notification',
+      appUserType: getRequestUserType(req),
+      deliverySurfaces: ['web_app'],
+      sendPush: false,
     });
+
+    if (!notification) {
+      return res.status(constants.OK.code).json({
+        error: false,
+        code: constants.OK.code,
+        message: 'Test notification was suppressed by inbox preferences.',
+        data: { inbox_saved: false, push_success: false, reason: 'INBOX_CATEGORY_MUTED' },
+      });
+    }
+
+    let pushResult = null;
+    let pushError = null;
+    try {
+      pushResult = await pushNotificationService.sendPushToUser({
+        userId,
+        title,
+        body: message,
+        data: {
+          topic: 'system',
+          category: 'system',
+          type: 'push_module_test',
+          notification_id: String(notification.notification_id),
+        },
+      });
+    } catch (err) {
+      pushError = err.message || 'Push delivery request failed.';
+    }
+
+    const delivery = pushResult?.data?.success !== undefined || pushResult?.data?.debug
+      ? pushResult.data
+      : pushResult || {};
+    const debug = delivery.debug || {};
 
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
-      message: 'Push notification processed.',
-      data: result,
+      message: 'Test notification saved; push delivery evaluated.',
+      data: {
+        notification_id: notification.notification_id,
+        inbox_saved: true,
+        push_success: Boolean(delivery.success),
+        active_token_count: debug.active_token_count ?? null,
+        success_count: debug.success_count ?? null,
+        failure_count: debug.failure_count ?? null,
+        reason: debug.reason || debug.failures?.[0]?.firebase_error_code || pushError || null,
+      },
     });
   } catch (err) {
     console.error('sendTestPushToMe Error:', err);

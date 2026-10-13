@@ -8,5 +8,6 @@ router.use(authenticate);
 router.get('/', notificationPreferenceController.getPreferences);
 router.get('/email', notificationPreferenceController.getEmailPreferences);
 router.patch('/email', notificationPreferenceController.updateEmailPreferences);
+router.patch('/inbox', notificationPreferenceController.updateInboxPreferences);
 
 module.exports = router;
