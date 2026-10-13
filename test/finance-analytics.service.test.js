@@ -32,6 +32,25 @@ test('Finance Analytics includes paid and partially paid shoots, while retaining
   ]);
 });
 
+test('Finance Analytics excludes pending shoots from Top Clients rankings', () => {
+  const data = _private.buildAnalyticsData({
+    bookings: [
+      { stream_project_booking_id: 1, user_id: 10, payment_completed_at: '2026-10-01T10:00:00Z' },
+      { stream_project_booking_id: 2, user_id: 10, payment_completed_at: '2026-10-02T10:00:00Z' }
+    ],
+    users: [{ id: 10, name: 'Client' }],
+    breakdowns: [
+      { booking_id: 1, client_user_id: 10, payment_status: 'paid', total_amount: 1000, collected_amount: 1000, calculated_at: '2026-10-01T10:00:00Z' },
+      { booking_id: 2, client_user_id: 10, payment_status: 'pending', total_amount: 5000, collected_amount: 0, calculated_at: '2026-10-02T10:00:00Z' }
+    ],
+    transactions: [], earnings: [], disputes: [], creators: []
+  }, filters, new Date('2026-10-10T00:00:00Z'));
+
+  assert.deepEqual(data.clients.top_by_shoots, [{
+    id: 'user:10', name: 'Client', shoots: 1, spend: 1000, collected: 1000, outstanding: 0, status: 'fully_paid'
+  }]);
+});
+
 test('Finance Analytics subtracts paid refunds and groups each client only once', () => {
   const data = _private.buildAnalyticsData({
     bookings: [{ stream_project_booking_id: 1, user_id: 10, payment_completed_at: '2026-10-01T10:00:00Z', event_date: '2026-10-01' }],

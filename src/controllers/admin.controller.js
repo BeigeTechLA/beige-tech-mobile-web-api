@@ -14794,6 +14794,7 @@ exports.getClientsShoots = async (req, res) => {
     const [
       bookedLeadRows,
       bookingPaymentSummaryRows,
+      manualPaymentRows,
       allEventMasterTypes
     ] = bookingIds.length
       ? await Promise.all([
@@ -14818,9 +14819,21 @@ exports.getClientsShoots = async (req, res) => {
               type: QueryTypes.SELECT
             }
           ),
+          db.sequelize.query(
+            `
+            SELECT booking_id, COALESCE(SUM(amount), 0) AS paid_amount
+            FROM booking_manual_payments
+            WHERE booking_id IN (:bookingIds)
+            GROUP BY booking_id
+            `,
+            {
+              replacements: { bookingIds },
+              type: QueryTypes.SELECT
+            }
+          ),
           event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
         ])
-      : [[], [], await event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })];
+      : [[], [], [], await event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })];
 
     const bookedBookingIdSet = new Set(
       bookedLeadRows
@@ -14831,6 +14844,11 @@ exports.getClientsShoots = async (req, res) => {
     const bookingPaymentSummaryByBookingId = new Map(
       bookingPaymentSummaryRows
         .map((row) => [Number(row.booking_id), row])
+        .filter(([bookingId]) => Number.isFinite(bookingId))
+    );
+    const manualPaidAmountByBookingId = new Map(
+      manualPaymentRows
+        .map((row) => [Number(row.booking_id), parseAmountCandidate(row.paid_amount) || 0])
         .filter(([bookingId]) => Number.isFinite(bookingId))
     );
 
@@ -14885,11 +14903,12 @@ exports.getClientsShoots = async (req, res) => {
       }),
       payment_transactions.findOne({
         where: { payment_id: project.payment_id },
-        attributes: ['total_amount']
+        attributes: ['total_amount', 'status']
       })
     ]);
 
     const bookingPaymentSummary = bookingPaymentSummaryByBookingId.get(Number(project.stream_project_booking_id)) || null;
+    const manualPaidAmount = manualPaidAmountByBookingId.get(Number(project.stream_project_booking_id)) || 0;
     const summaryPaidAmount = bookingPaymentSummary
       ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
       : null;
@@ -14912,7 +14931,7 @@ exports.getClientsShoots = async (req, res) => {
     });
     const totalPaidAmount = summaryPaidAmount !== null
       ? summaryPaidAmount
-      : (project.payment_id ? displayAmount : 0);
+      : (manualPaidAmount > 0 ? manualPaidAmount : (project.payment_id ? displayAmount : 0));
     const creditUsedAmount = summaryCreditUsedAmount || 0;
     const resolvedTotalValueAmount = summaryQuoteTotal !== null
       ? summaryQuoteTotal
@@ -14938,6 +14957,7 @@ exports.getClientsShoots = async (req, res) => {
         due_amount: pendingAmount,
         credit_used_amount: creditUsedAmount,
         payment_status: paymentStatus,
+        payment_transaction_status: paymentData?.status || null,
         event_type_labels: formatProjectEventTypeLabels(project.event_type, allEventMasterTypes, lineItems),
         event_location: (() => {
           const loc = project.event_location;
@@ -14966,8 +14986,9 @@ exports.getClientsShoots = async (req, res) => {
 
     projectDetails.forEach(item => {
       const proj = item.project;
-      const isManualPaid = bookedBookingIdSet.has(Number(proj.stream_project_booking_id));
-      const isStripePaid = Boolean(proj.payment_id);
+      const isManualPaid = Number(manualPaidAmountByBookingId.get(Number(proj.stream_project_booking_id)) || 0) > 0;
+      const paymentStatus = String(proj.payment_transaction_status || '').toLowerCase();
+      const isStripePaid = ['paid', 'completed', 'success', 'succeeded'].includes(paymentStatus);
       const hasCollectedPayment = Number(proj.paid_amount || proj.total_paid_amount || 0) > 0 ||
         Number(proj.credit_used_amount || 0) > 0 ||
         String(proj.payment_status || '').toLowerCase() === 'no_payment_due';

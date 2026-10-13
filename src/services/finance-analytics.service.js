@@ -318,10 +318,21 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
       ...row, shoots: row.shoots.size, spend: money(row.spend), collected: money(row.collected), outstanding: money(row.outstanding), status: statusForClient(row.collected, row.outstanding)
     }));
   };
-  // Rankings and payment overview both include every client with a finance record,
-  // so the client payment-state filter can return pending clients too.
+  // The client ranking is a paid-shoot ranking.  Pending finance rows remain in
+  // the payment overview, but must never inflate the shoot or spend leaderboard.
   const clientRows = makeClientRows(breakdownRows);
-  const topClientRows = clientRows;
+  // A finance breakdown is a derived snapshot and older paid shoots may not
+  // have one yet.  Client rankings must instead use the confirmed payment
+  // evidence supplied by getAnalytics, so the count matches Client Profiles.
+  const paidClientSourceRows = (input.clientPaymentBookings && input.clientPaymentBookings.length > 0)
+    ? input.clientPaymentBookings
+    : eligibleRevenue;
+  const paidClientRows = paidClientSourceRows.map((row) => ({
+    ...row,
+    booking: bookings.get(Number(row.booking_id)) || row.booking || {},
+    activity_date: row.activity_date || row.payment_completed_at || row.updated_at
+  })).filter((row) => isInRange(row.activity_date, filters));
+  const topClientRows = makeClientRows(paidClientRows);
   const topClientsByShoots = [...topClientRows].sort((a, b) => b.shoots - a.shoots || b.spend - a.spend).slice(0, 100);
   const topClientsBySpend = [...topClientRows].sort((a, b) => b.spend - a.spend).slice(0, 100);
   const paymentOverview = ['fully_paid', 'partially_paid', 'pending'].map((id) => ({ id, label: id === 'fully_paid' ? 'Fully Paid' : id === 'partially_paid' ? 'Partially Paid' : 'Pending', clients: clientRows.filter((row) => row.status === id).length }));
@@ -365,23 +376,72 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
 
 async function getAnalytics(query = {}) {
   const filters = resolveFilters(query);
-  const [breakdowns, transactions, earnings, disputes, payoutRequests] = await Promise.all([
+  const [breakdowns, transactions, earnings, disputes, payoutRequests, clientPaymentBookings] = await Promise.all([
     db.finance_project_breakdowns.findAll({ raw: true }),
     db.finance_transactions.findAll({ raw: true }),
     db.creator_earnings.findAll({ raw: true }),
     db.finance_disputes.findAll({ raw: true }),
-    db.creator_payout_requests.findAll({ raw: true })
+    db.creator_payout_requests.findAll({ raw: true }),
+    db.sequelize.query(
+      `
+        SELECT
+          b.stream_project_booking_id AS booking_id,
+          b.user_id AS client_user_id,
+          b.guest_email,
+          b.payment_completed_at,
+          COALESCE(ps.quote_total, b.budget, pt.total_amount, mp.paid_amount, 0) AS total_amount,
+          COALESCE(ps.paid_amount, pt.total_amount, mp.paid_amount, 0) AS collected_amount,
+          COALESCE(ps.due_amount, 0) AS outstanding_amount,
+          CASE
+            WHEN ps.payment_status IN ('paid', 'partially_paid') THEN ps.payment_status
+            WHEN COALESCE(ps.credit_used_amount, 0) > 0 AND COALESCE(ps.due_amount, 0) <= 0 THEN 'paid'
+            WHEN pt.status IN ('paid', 'completed', 'success', 'succeeded') THEN 'paid'
+            WHEN COALESCE(mp.paid_amount, 0) > 0 THEN 'partially_paid'
+            ELSE 'pending'
+          END AS payment_status,
+          COALESCE(pt.created_at, mp.paid_at, ps.manual_payment_updated_at, b.payment_completed_at, b.created_at) AS activity_date
+        FROM stream_project_booking b
+        LEFT JOIN booking_payment_summary ps ON ps.booking_id = b.stream_project_booking_id
+        LEFT JOIN payment_transactions pt ON pt.payment_id = b.payment_id
+        LEFT JOIN (
+          SELECT booking_id, SUM(amount) AS paid_amount, MAX(updated_at) AS paid_at
+          FROM booking_manual_payments
+          GROUP BY booking_id
+        ) mp ON mp.booking_id = b.stream_project_booking_id
+        WHERE COALESCE(b.is_active, 1) = 1
+          AND (
+            ps.payment_status IN ('paid', 'partially_paid', 'no_payment_due')
+            OR pt.status IN ('paid', 'completed', 'success', 'succeeded')
+            OR COALESCE(mp.paid_amount, 0) > 0
+            OR EXISTS (
+              SELECT 1 FROM sales_leads sl
+              WHERE sl.booking_id = b.stream_project_booking_id
+                AND sl.lead_status = 'booked'
+                AND sl.is_active = 1
+            )
+          )
+      `,
+      { type: db.Sequelize.QueryTypes.SELECT }
+    )
   ]);
-  const bookingIds = [...new Set([...breakdowns.map((row) => Number(row.booking_id)), ...earnings.map((row) => Number(row.booking_id))].filter(Boolean))];
+  const bookingIds = [...new Set([
+    ...breakdowns.map((row) => Number(row.booking_id)),
+    ...earnings.map((row) => Number(row.booking_id)),
+    ...clientPaymentBookings.map((row) => Number(row.booking_id))
+  ].filter(Boolean))];
   const creatorIds = [...new Set(earnings.map((row) => Number(row.creator_id)).filter(Boolean))];
-  const userIds = [...new Set([...breakdowns.map((row) => Number(row.client_user_id)), ...transactions.map((row) => Number(row.client_user_id))].filter(Boolean))];
+  const userIds = [...new Set([
+    ...breakdowns.map((row) => Number(row.client_user_id)),
+    ...transactions.map((row) => Number(row.client_user_id)),
+    ...clientPaymentBookings.map((row) => Number(row.client_user_id))
+  ].filter(Boolean))];
   const [bookings, creators, users] = await Promise.all([
     db.stream_project_booking.findAll({ where: { stream_project_booking_id: bookingIds.length ? bookingIds : [0] }, raw: true }),
     db.crew_members.findAll({ where: { crew_member_id: creatorIds.length ? creatorIds : [0] }, attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'], raw: true }),
     db.users.unscoped().findAll({ where: { id: userIds.length ? userIds : [0] }, attributes: ['id', 'name', 'email'], raw: true })
   ]);
   return buildAnalyticsData({
-    breakdowns, transactions, earnings, disputes, bookings, creators, users,
+    breakdowns, transactions, earnings, disputes, bookings, creators, users, clientPaymentBookings,
     paidAmountsByEarningId: payoutAmountsByEarningId(payoutRequests)
   }, filters);
 }
