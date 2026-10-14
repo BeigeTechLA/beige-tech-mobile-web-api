@@ -12231,7 +12231,145 @@ exports.getPostProductionTeamOptions = async (req, res) => {
     });
   }
 };
+const POST_PRODUCTION_EDITOR_ROLE_NAMES = ['Editor','editor','EDITOR'];     // internal (users table)
+const EXTERNAL_EDITOR_CREW_ROLE_IDS = ['3', '11'];        // external (crew_roles.role_id)
 
+const parseCrewRoleIds = (value) => {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return (Array.isArray(parsed) ? parsed : [parsed]).map(String);
+  } catch (_) {
+    return String(value).split(',').map((v) => v.trim()).filter(Boolean);
+  }
+};
+
+exports.getPostProductionEditorOptions = async (req, res) => {
+  try {
+    const projectId = Number(req.query?.project_id);
+
+    // ---------- Already assigned emails (for this shoot) ----------
+    let assignedEmails = new Set();
+    if (Number.isInteger(projectId) && projectId > 0) {
+      const assignedMembers = await assigned_post_production_member.findAll({
+        where: { project_id: projectId, is_active: 1 },
+        attributes: [],
+        include: [{
+          model: post_production_members,
+          as: 'post_production_member',
+          required: true,
+          attributes: ['email']
+        }],
+        raw: true
+      });
+
+      assignedEmails = new Set(
+        assignedMembers
+          .map((m) => String(m['post_production_member.email'] || '').trim().toLowerCase())
+          .filter(Boolean)
+      );
+    }
+
+    const isAvailable = (item) =>
+      !assignedEmails.has(String(item.email || '').trim().toLowerCase());
+    const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
+
+    // ---------- 1. Internal editors (users table) ----------
+    const activeRoles = await db.user_type.findAll({
+      where: {
+        user_role: { [Op.in]: POST_PRODUCTION_EDITOR_ROLE_NAMES },
+        is_active: 1
+      },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true
+    });
+
+    const roleNameById = new Map(
+      activeRoles.map((role) => [Number(role.user_type_id), role.user_role])
+    );
+    const roleIds = Array.from(roleNameById.keys());
+
+    const internalUsers = roleIds.length
+      ? await db.users.scope('all').findAll({
+          where: { user_type: { [Op.in]: roleIds }, is_active: 1 },
+          attributes: ['id', 'name', 'email', 'user_type', 'is_active'],
+          raw: true
+        })
+      : [];
+
+    const internalEditors = internalUsers
+      .map((user) => ({
+        user_id: user.id,
+        name: user.name,
+        email: user.email,
+        role_name: roleNameById.get(Number(user.user_type)) || null,
+        editor_type: 'internal',
+        is_active: user.is_active
+      }))
+      .filter(isAvailable)
+      .sort(byName);
+
+    // ---------- 2. External editors (crew_members, role 3 or 11) ----------
+    const crewCandidates = await crew_members.findAll({
+      where: {
+        is_active: 1,
+        is_crew_verified: 1,
+        user_id: { [Op.ne]: null },
+        [Op.or]: EXTERNAL_EDITOR_CREW_ROLE_IDS.map((id) => ({
+          primary_role: { [Op.like]: `%${id}%` }
+        }))
+      },
+      attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'primary_role'],
+      raw: true
+    });
+
+    const crewRoleRows = await crew_roles.findAll({
+      where: {
+        role_id: { [Op.in]: EXTERNAL_EDITOR_CREW_ROLE_IDS.map(Number) },
+        is_active: 1
+      },
+      attributes: ['role_id', 'role_name'],
+      raw: true
+    });
+    const crewRoleNameById = new Map(
+      crewRoleRows.map((r) => [String(r.role_id), r.role_name])
+    );
+
+    const externalEditors = crewCandidates
+      .filter((crew) =>
+        parseCrewRoleIds(crew.primary_role).some((id) => EXTERNAL_EDITOR_CREW_ROLE_IDS.includes(id))
+      )
+      .map((crew) => ({  
+        user_id: crew.user_id,              
+        crew_member_id: crew.crew_member_id,
+        name: [crew.first_name, crew.last_name].filter(Boolean).join(' '),
+        email: crew.email,
+        role_name: parseCrewRoleIds(crew.primary_role)
+          .filter((id) => EXTERNAL_EDITOR_CREW_ROLE_IDS.includes(id))
+          .map((id) => crewRoleNameById.get(id))
+          .filter(Boolean)
+          .join(', '),
+        editor_type: 'external',
+        is_active: 1
+      }))
+      .filter(isAvailable)
+      .sort(byName);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        internal_editors: internalEditors,
+        external_editors: externalEditors
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching post-production editor options:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch post-production editor options'
+    });
+  }
+};
 // Controller to fetch all post production members
 exports.getPostProductionMembers = async (req, res) => {
   try {
@@ -12446,7 +12584,184 @@ exports.assignPostProductionMember = async (req, res) => {
     });
   }
 };
+// Assign an internal (Editor role) or external (CP with crew role 3/11) editor to a shoot.
+// `user_id` is the id returned by GET /post-production-editor-options.
+exports.assignPostProductionEditor = async (req, res) => {
+  try {
+    const { project_id, user_id } = req.body;
 
+    if (!project_id || !user_id) {
+      return res.status(400).json({
+        error: true,
+        message: 'project_id and user_id are required',
+      });
+    }
+
+    const selectedUser = await users.findOne({
+      where: { id: user_id, is_active: 1 },
+      attributes: ['id', 'name', 'email', 'role', 'user_type'],
+      include: [{
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['user_role'],
+        required: false
+      }]
+    });
+
+    if (!selectedUser) {
+      return res.status(404).json({
+        error: true,
+        message: 'User not found or inactive',
+      });
+    }
+
+    // Decide whether this user is an internal or external editor
+    let editorType = null;
+    let editorRoleName = null;
+
+    if (POST_PRODUCTION_EDITOR_ROLE_NAMES.includes(selectedUser.userType?.user_role)) {
+      editorType = 'internal';
+      editorRoleName = selectedUser.userType.user_role;
+    } else {
+      const crewRows = await crew_members.findAll({
+        where: { user_id: selectedUser.id, is_active: 1, is_crew_verified: 1 },
+        attributes: ['primary_role', 'first_name', 'last_name'],
+        raw: true
+      });
+
+      const matchedCrew = crewRows.find((crew) =>
+        parseCrewRoleIds(crew.primary_role).some((id) => EXTERNAL_EDITOR_CREW_ROLE_IDS.includes(id))
+      );
+
+      if (matchedCrew) {
+        editorType = 'external';
+        editorRoleName = 'Editor';
+      }
+    }
+
+    if (!editorType) {
+      return res.status(403).json({
+        error: true,
+        message: 'Selected user is not an allowed internal or external editor',
+      });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id, is_active: 1 },
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        error: true,
+        message: 'Project not found or inactive',
+      });
+    }
+
+    const fullName = String(selectedUser.name || '').trim();
+    const [firstName, ...restParts] = fullName.split(/\s+/).filter(Boolean);
+    const lastName = restParts.join(' ');
+
+    // Reuse the post_production_members row by email, else create one
+    let postProductionMember = await post_production_members.findOne({
+      where: { email: selectedUser.email, is_active: 1 },
+    });
+
+    if (!postProductionMember) {
+      postProductionMember = await post_production_members.create({
+        first_name: firstName || fullName || 'Unknown',
+        last_name: lastName || '',
+        email: selectedUser.email,
+        phone_number: null,
+        is_active: 1,
+      });
+    }
+
+    // Prevent duplicate active assignment
+    const existingAssignment = await assigned_post_production_member.findOne({
+      where: {
+        project_id,
+        post_production_member_id: postProductionMember.post_production_member_id,
+        is_active: 1,
+      }
+    });
+
+    if (existingAssignment) {
+      return res.status(200).json({
+        error: false,
+        message: 'Editor already assigned',
+        data: existingAssignment,
+      });
+    }
+
+    const assignedEditor = await assigned_post_production_member.create({
+      project_id,
+      post_production_member_id: postProductionMember.post_production_member_id,
+      assigned_date: new Date(),
+      status: 'assigned',
+      is_active: 1,
+    });
+
+    const actor = await getRequestActor(req);
+    await writeShootHistory({
+      projectId: Number(project_id),
+      action: 'post_production_member_assigned',
+      actor,
+      reason: `Post production ${editorType} editor assigned`,
+      metadata: {
+        post_production_member_id: postProductionMember.post_production_member_id,
+        post_production_member_name:
+          fullName || `${postProductionMember.first_name || ''} ${postProductionMember.last_name || ''}`.trim(),
+        post_production_member_email: postProductionMember.email || null,
+        editor_type: editorType,
+        user_id: selectedUser.id
+      }
+    });
+
+    // Non-blocking assignment email
+    try {
+      const emailClientName = await resolveAdminBookingClientName(project);
+      const emailShootAmount = await resolveAdminBookingShootAmount(project);
+
+      const mailResult = await sendPostProductionAssignmentEmail({
+        to_email: postProductionMember.email,
+        member_name: fullName || `${postProductionMember.first_name || ''} ${postProductionMember.last_name || ''}`.trim(),
+        first_name: postProductionMember.first_name || firstName || '',
+        booking_id: project.stream_project_booking_id,
+        project_id: project.stream_project_booking_id,
+        client: emailClientName,
+        shoot_type: project.shoot_type || project.event_type || project.content_type,
+        date: project.event_date,
+        start_time: project.start_time,
+        end_time: project.end_time,
+        shoot_amount: emailShootAmount,
+        location: project.event_location,
+      });
+
+      if (!mailResult?.success) {
+        console.error('Post-production editor assignment email failed:', mailResult?.error);
+      }
+    } catch (mailErr) {
+      console.error('Post-production editor assignment email error:', mailErr?.response?.body || mailErr.message);
+    }
+
+    return res.status(201).json({
+      error: false,
+      message: 'Editor assigned successfully',
+      data: {
+        ...(assignedEditor.toJSON ? assignedEditor.toJSON() : assignedEditor),
+        user_id: selectedUser.id,
+        editor_type: editorType,
+        role_name: editorRoleName
+      },
+    });
+  } catch (error) {
+    console.error('Error assigning post production editor:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
+  }
+};
 exports.removePostProductionMember = async (req, res) => {
   try {
     const assigned_by_user_id = req.user?.userId;

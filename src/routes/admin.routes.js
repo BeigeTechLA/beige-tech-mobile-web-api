@@ -293,6 +293,8 @@ router.post('/dashboard-detail', authMiddleware, dashboardView, admin.getDashboa
 router.post('/verify-crew-member', authMiddleware, adminCreativePartnersEdit, admin.verifyCrewMember);
 router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
 router.get('/post-production-team-options', authMiddleware, shootsView, admin.getPostProductionTeamOptions);
+router.get('/post-production-editor-options', authMiddleware, shootsView, admin.getPostProductionEditorOptions);
+router.post('/assign-post-production-editor', authMiddleware, shootsEdit, admin.assignPostProductionEditor);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
 router.post('/remove-post-production-member', authMiddleware, shootsEdit, admin.removePostProductionMember);
