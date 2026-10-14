@@ -4,6 +4,7 @@ const creatorEarningsService = require('./creator-earnings.service');
 const cpCompensationService = require('./cp-compensation.service');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const emailService = require('../utils/emailService');
+const businessNotifications = require('./business-notification.service');
 
 const DISPUTE_STATUSES = ['open', 'in_review', 'resolved', 'rejected', 'escalated'];
 const DISPUTE_CATEGORIES = ['quality', 'payment_delay', 'wrong_deliverables', 'refund', 'payout_issues', 'other'];
@@ -130,6 +131,10 @@ async function safeSendDisputeEmail(label, sendPromise) {
 
 async function notifyDisputeCreated(disputeId) {
   const dispute = await getAdminDisputeDetails(disputeId);
+  if (dispute.raised_by?.type !== 'admin') {
+    await businessNotifications.notifyDisputeOwner(dispute, 'dispute_raised',
+      `A ${dispute.raised_by?.type || 'user'} raised dispute ${dispute.dispute_code || disputeId}.`);
+  }
   const participant = getDisputeParticipant(dispute);
   const data = buildDisputeEmailData(dispute);
   const tasks = [
@@ -158,6 +163,8 @@ async function notifyDisputeCreated(disputeId) {
 async function notifyDisputeUpdated(disputeId, overrides = {}) {
   const dispute = await getAdminDisputeDetails(disputeId);
   const participant = getDisputeParticipant(dispute);
+  await businessNotifications.notifyDisputeParticipant(dispute, 'dispute_updated',
+    overrides.update_message || `Dispute ${dispute.dispute_code || disputeId} has been updated.`);
   if (!participant.email) return;
 
   await safeSendDisputeEmail('participant:dispute_updated', emailService.sendFinanceDisputeUpdatedEmail({
@@ -171,10 +178,11 @@ async function notifyDisputeUpdated(disputeId, overrides = {}) {
 }
 
 async function notifyAdminDisputeUpdated(disputeId, overrides = {}) {
+  const dispute = await getAdminDisputeDetails(disputeId);
+  await businessNotifications.notifyDisputeOwner(dispute, 'dispute_updated',
+    overrides.update_message || `Dispute ${dispute.dispute_code || disputeId} has a new update.`);
   const recipients = getFinanceDisputeAdminRecipients();
   if (!recipients.length) return;
-
-  const dispute = await getAdminDisputeDetails(disputeId);
   await safeSendDisputeEmail('admin:dispute_updated', emailService.sendFinanceDisputeUpdatedEmail({
     to: recipients,
     data: {
@@ -189,13 +197,40 @@ async function notifyAdminDisputeUpdated(disputeId, overrides = {}) {
 
 async function notifyDisputeClosed(disputeId, closeStatus, overrides = {}) {
   const dispute = await getAdminDisputeDetails(disputeId);
-  const participant = getDisputeParticipant(dispute);
+  const isRefund = (closeStatus === 'resolved' && ['refund', 'partial_refund'].includes(overrides.resolution_type)) ||
+    (closeStatus === 'rejected' && dispute.category === 'refund');
+  const refundCompleted = isRefund && closeStatus === 'resolved' && Boolean(overrides.refund_completed);
+  const participant = isRefund ? {
+    email: dispute.client?.email || dispute.project?.guest_email || null,
+    name: dispute.client?.name || 'there', type: 'client'
+  } : getDisputeParticipant(dispute);
+  const notificationType = isRefund
+    ? (closeStatus === 'rejected' ? 'refund_rejected' : refundCompleted ? 'refund_completed' : 'refund_approved')
+    : (closeStatus === 'rejected' ? 'dispute_rejected' : 'dispute_resolved');
+  const pushMessage = isRefund
+    ? `Your refund request for dispute ${dispute.dispute_code || disputeId} was ${closeStatus === 'rejected' ? 'rejected' : refundCompleted ? 'marked completed by our finance team' : 'approved'}.`
+    : `Dispute ${dispute.dispute_code || disputeId} was ${closeStatus}.`;
+  if (isRefund) {
+    await businessNotifications.notify({
+      userId: dispute.client?.id || (dispute.raised_by?.type === 'client' ? dispute.raised_by?.id : null),
+      title: closeStatus === 'rejected' ? 'Refund request rejected' : refundCompleted ? 'Refund marked completed' : 'Refund request approved',
+      message: pushMessage, topic: 'shoots', category: 'disputes', type: notificationType,
+      referenceType: 'finance_dispute', referenceId: String(dispute.dispute_id),
+      payload: { dispute_id: String(dispute.dispute_id), booking_id: String(dispute.booking_id || '') }
+    });
+  } else {
+    await businessNotifications.notifyDisputeParticipant(dispute, notificationType, pushMessage);
+  }
   if (!participant.email) return;
 
   const data = {
     ...buildDisputeEmailData(dispute),
     recipient_name: participant.name,
-    ...overrides
+    ...overrides,
+    ...(isRefund ? {
+      view_details_url: buildFrontendUrl(`/affiliate/finances/transactions?dispute_id=${encodeURIComponent(disputeId)}`),
+      dispute_link: buildFrontendUrl(`/affiliate/finances/transactions?dispute_id=${encodeURIComponent(disputeId)}`)
+    } : {})
   };
 
   if (closeStatus === 'rejected') {
@@ -1412,7 +1447,9 @@ async function addDisputeComment(disputeId, payload = {}, options = {}) {
     }, transaction);
 
     if (!externalTransaction) await transaction.commit();
-    if (!externalTransaction && !options.suppressParticipantNotification) {
+    const participantType = getDisputeParticipant(formatDisputeRow(dispute)).type;
+    if (!externalTransaction && !options.suppressParticipantNotification &&
+      ['all', participantType].includes(comment.visibility)) {
       await notifyDisputeUpdated(dispute.finance_dispute_id, {
         update_message: `A new comment has been added to your finance dispute for Booking ${getDisplayBookingId(formatDisputeRow(dispute))}.`,
         update_detail: 'Please review the latest dispute activity in your dashboard.'
@@ -1642,6 +1679,13 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       creatorResolutionPayment = await processCreatorResolutionPayment(dispute, payload, options, transaction);
     }
 
+    // This reflects a manual finance confirmation, not a provider webhook.
+    const recordedRefundCompletion = closeStatus === 'resolved' && ['refund', 'partial_refund'].includes(resolutionType) &&
+      toMoney(payload.refund_amount || payload.amount) > 0 &&
+      Boolean(String(payload.transaction_id || '').trim()) && String(payload.transaction_id).trim() !== '-' &&
+      Boolean(String(payload.payment_method || '').trim());
+    const refundCompletedAt = recordedRefundCompletion ? new Date() : null;
+
     await dispute.update({
       status: closeStatus,
       resolution_type: resolutionType,
@@ -1657,6 +1701,8 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
         resolution_amount: payload.amount === undefined ? undefined : payload.amount,
         payment_method: payload.payment_method || undefined,
         transaction_id: payload.transaction_id || undefined,
+        refund_completed_at: refundCompletedAt?.toISOString() || undefined,
+        refund_completion_source: recordedRefundCompletion ? 'manual_finance_confirmation' : undefined,
         recipient: payload.recipient || undefined,
         rejection_reason: payload.rejection_reason || undefined,
         account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || undefined,
@@ -1664,7 +1710,7 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       })
     }, { transaction });
 
-    await createAuditLog(dispute.finance_dispute_id, closeStatus === 'rejected' ? 'rejected' : (resolutionType.includes('refund') ? 'refunded' : 'resolved'), {
+    await createAuditLog(dispute.finance_dispute_id, closeStatus === 'rejected' ? 'rejected' : (recordedRefundCompletion ? 'refunded' : 'resolved'), {
       from_status: previousStatus,
       to_status: closeStatus,
       amount: payload.refund_amount || payload.credit_amount || dispute.disputed_amount,
@@ -1676,6 +1722,8 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
         resolution_amount: payload.amount || null,
         payment_method: payload.payment_method || null,
         transaction_id: payload.transaction_id || null,
+        refund_completed_at: refundCompletedAt?.toISOString() || null,
+        refund_completion_source: recordedRefundCompletion ? 'manual_finance_confirmation' : null,
         recipient: payload.recipient || null,
         rejection_reason: payload.rejection_reason || null,
         account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || null,
@@ -1688,6 +1736,8 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
     if (!externalTransaction) await transaction.commit();
     if (!externalTransaction) {
       await notifyDisputeClosed(dispute.finance_dispute_id, closeStatus, {
+        resolution_type: resolutionType,
+        refund_completed: recordedRefundCompletion,
         resolution_summary: payload.resolution_notes || payload.notes || 'Resolved by the Beige finance team',
         rejection_reason: payload.rejection_reason || payload.resolution_notes || payload.notes || 'Reviewed by the Beige finance team'
       });

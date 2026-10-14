@@ -15,7 +15,8 @@ const ALLOWED_TOPICS = new Set(Object.keys(DEFAULT_TOPICS));
 // preference sets separate means a user can mute a noisy inbox category
 // without accidentally changing device-level delivery preferences.
 const ALLOWED_INBOX_CATEGORIES = new Set([
-  'messages', 'meetings', 'files', 'shoots', 'payments', 'projects', 'proposals', 'system'
+  'messages', 'meetings', 'files', 'shoots', 'payments', 'projects', 'proposals', 'system',
+  'leads', 'agreements', 'disputes', 'payouts', 'reviews'
 ]);
 const PROJECT_INBOX_CATEGORIES = new Set(['projects', 'project', 'shoots', 'meetings', 'proposals']);
 

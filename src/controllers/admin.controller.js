@@ -15,6 +15,7 @@ const {
   sendCreativePartnerProfileReminderEmail
 } = require('../utils/emailService');
 const pushNotificationService = require('../services/push-notification.service');
+const businessNotifications = require('../services/business-notification.service');
 const { Parser } = require('json2csv');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
@@ -3452,6 +3453,16 @@ exports.updateProjectDateLocation = async (req, res) => {
     }
 
     await transaction.commit();
+
+    if (historyChanges.length > 0 && Number(project.is_cancelled) !== 1 && Number(project.is_draft) !== 1) {
+      await businessNotifications.notifyShootAudience(project.stream_project_booking_id, {
+        title: 'Shoot details changed',
+        message: `The date, time, or location for shoot ${project.stream_project_booking_id} changed. Please review the latest details.`,
+        topic: 'shoots', category: 'shoots', type: 'shoot_schedule_location_changed',
+        referenceType: 'booking', referenceId: String(project.stream_project_booking_id),
+        payload: { booking_id: String(project.stream_project_booking_id) }, priority: 'high'
+      }, { excludeUserId: updatedByUserId });
+    }
 
     return res.status(200).json({
       error: false,
@@ -15771,6 +15782,34 @@ exports.removeAssignedCrew = async (req, res) => {
 
         await assignment.update({ is_active: 0 });
 
+        if (Number(assignment.crew_accept) === 1) {
+            const booking = await stream_project_booking.findByPk(lead.booking_id, { attributes: ['user_id'] });
+            await Promise.all([
+              businessNotifications.notifyCreator(crew_member_id, {
+                title: 'Shoot assignment changed',
+                message: `You are no longer assigned to shoot ${lead.booking_id}. Please review your shoot requests.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed',
+                referenceType: 'booking', referenceId: String(lead.booking_id),
+                payload: { booking_id: String(lead.booking_id) }, priority: 'high'
+              }),
+              businessNotifications.notify({
+                userId: booking?.user_id,
+                title: 'Shoot team changed',
+                message: `The assigned creator for shoot ${lead.booking_id} changed. Please review the latest team.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_team_changed',
+                referenceType: 'booking', referenceId: String(lead.booking_id),
+                payload: { booking_id: String(lead.booking_id) }, priority: 'high'
+              }),
+              businessNotifications.notifyBookingOwner(lead.booking_id, {
+                title: 'Confirmed creator removed',
+                message: `A confirmed creator was removed from shoot ${lead.booking_id}. Arrange a replacement if needed.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed_owner',
+                referenceType: 'booking', referenceId: String(lead.booking_id),
+                payload: { booking_id: String(lead.booking_id) }, priority: 'high'
+              })
+            ]);
+        }
+
         const crewName = assignment.crew_member
             ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
             : `ID: ${crew_member_id}`;
@@ -17035,6 +17074,34 @@ exports.removeProjectAssignedCrew = async (req, res) => {
 
         // 2. Set the assignment to inactive (Soft Delete)
         await assignment.update({ is_active: 0 });
+
+        if (Number(assignment.crew_accept) === 1) {
+            const booking = await stream_project_booking.findByPk(project_id, { attributes: ['user_id'] });
+            await Promise.all([
+              businessNotifications.notifyCreator(crew_member_id, {
+                title: 'Shoot assignment changed',
+                message: `You are no longer assigned to shoot ${project_id}. Please review your shoot requests.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed',
+                referenceType: 'booking', referenceId: String(project_id),
+                payload: { booking_id: String(project_id) }, priority: 'high'
+              }),
+              businessNotifications.notify({
+                userId: booking?.user_id,
+                title: 'Shoot team changed',
+                message: `The assigned creator for shoot ${project_id} changed. Please review the latest team.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_team_changed',
+                referenceType: 'booking', referenceId: String(project_id),
+                payload: { booking_id: String(project_id) }, priority: 'high'
+              }),
+              businessNotifications.notifyBookingOwner(project_id, {
+                title: 'Confirmed creator removed',
+                message: `A confirmed creator was removed from shoot ${project_id}. Arrange a replacement if needed.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed_owner',
+                referenceType: 'booking', referenceId: String(project_id),
+                payload: { booking_id: String(project_id) }, priority: 'high'
+              })
+            ]);
+        }
 
         const crewName = assignment.crew_member
             ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`

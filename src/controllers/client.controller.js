@@ -8,6 +8,7 @@ const { S3UploadFiles } = require('../utils/common.js');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const businessNotifications = require('../services/business-notification.service');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -1266,7 +1267,16 @@ exports.submitProjectForm = async (req, res) => {
 
         const lead = await sales_leads.findOne({
             where: { booking_id: project_id },
-            attributes: ['lead_id']
+            attributes: ['lead_id', 'assigned_sales_rep_id']
+        });
+
+        await businessNotifications.notify({
+            userId: lead?.assigned_sales_rep_id,
+            title: 'Client submitted shoot details',
+            message: `The shoot-details form for booking ${project_id} is ready to review.`,
+            topic: 'shoots', category: 'shoots', type: 'shoot_details_submitted',
+            referenceType: 'booking', referenceId: String(project_id),
+            payload: { booking_id: String(project_id), submission_id: String(submission.id) }
         });
 
         if (lead) {
@@ -1479,7 +1489,16 @@ exports.submitProjectFormGuest = async (req, res) => {
 
         const lead = await sales_leads.findOne({
             where: { booking_id: project_id },
-            attributes: ['lead_id']
+            attributes: ['lead_id', 'assigned_sales_rep_id']
+        });
+
+        await businessNotifications.notify({
+            userId: lead?.assigned_sales_rep_id,
+            title: 'Client submitted shoot details',
+            message: `The shoot-details form for booking ${project_id} is ready to review.`,
+            topic: 'shoots', category: 'shoots', type: 'shoot_details_submitted',
+            referenceType: 'booking', referenceId: String(project_id),
+            payload: { booking_id: String(project_id), submission_id: String(submission.id) }
         });
 
         if (lead) {

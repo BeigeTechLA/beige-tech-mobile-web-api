@@ -4,7 +4,7 @@ const constants = require('../utils/constants');
 const pushNotificationService = require('./push-notification.service');
 
 const VALID_STATUSES = new Set(['all', 'read', 'unread', 'archived']);
-const PROJECT_CATEGORIES = ['projects', 'project', 'shoots', 'meetings', 'proposals'];
+const PROJECT_CATEGORIES = ['projects', 'project', 'shoots', 'meetings', 'proposals', 'agreements', 'leads'];
 const DEFAULT_DELIVERY_SURFACES = ['mobile_app', 'web_app'];
 
 const httpError = (httpCode, message) => {

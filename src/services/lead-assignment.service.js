@@ -8,6 +8,7 @@ const {
 } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../db');
+const businessNotifications = require('./business-notification.service');
 
 function normalizeDate(value) {
   if (!value) return null;
@@ -365,6 +366,10 @@ async function manuallyAssignLead(leadId, salesRepId, performedByUserId) {
     },
     performed_by_user_id: performedByUserId
   });
+
+  if (Number(previousRepId || 0) !== Number(salesRepId) && lead.lead_type === 'self_serve') {
+    await businessNotifications.notifyLeadAssigned(lead, salesRepId);
+  }
   
   console.log(`Lead ${leadId} manually assigned to sales rep ${salesRep.name} (ID: ${salesRepId})`);
 }

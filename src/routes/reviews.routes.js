@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const reviewsController = require('../controllers/reviews.controller');
+const { authenticate } = require('../middleware/auth.middleware');
 console.log('✅ reviews.routes.js loaded');
 
 /**
@@ -21,9 +22,9 @@ router.get('/by-creator/:creatorId', reviewsController.getByCreator);
  * @route   POST /api/reviews/by-creator/:creatorId
  * @desc    Create a review for a creator
  * @param   creatorId - crew_member_id of the creator
- * @body    { user_id?, rating, review_text?, shoot_date? }
- * @access  Public (consider adding auth in future)
+ * @body    { rating, review_text?, shoot_date? }
+ * @access  Authenticated client
  */
-router.post('/by-creator/:creatorId', reviewsController.createReview);
+router.post('/by-creator/:creatorId', authenticate, reviewsController.createReview);
 
 module.exports = router;

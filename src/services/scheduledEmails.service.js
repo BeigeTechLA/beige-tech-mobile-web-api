@@ -4,6 +4,7 @@ const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
 const quoteAnalyticsService = require('./quote-analytics.service');
 const { DIGEST_INTERVAL_HOURS, runChatMessageEmailDigestJob } = require('./chat-message-email-digest.service');
+const { runOverdueAgreementNotifications, runOverdueLeadNotifications, runUpcomingNotifications, runOverdueRevisionNotifications, runDeliveryFollowUpNotifications } = require('./overdue-notification.service');
 
 const JOB_INTERVAL_MINUTES = parseInt(process.env.SHOOT_REMINDER_JOB_INTERVAL_MINUTES || '30', 10);
 const QUOTE_INACTIVITY_DAYS = Math.max(1, parseInt(process.env.QUOTE_INACTIVITY_DAYS || '3', 10) || 3);
@@ -1490,6 +1491,21 @@ const startScheduledEmailJobs = () => {
   runQuotePipelineInactivityAlertsJob().catch((err) => {
     console.error('[Email Job] Initial overdue pipeline alert run failed:', err.message);
   });
+  runOverdueAgreementNotifications().catch((err) => {
+    console.error('[Notification Job] Initial agreement overdue run failed:', err.message);
+  });
+  runOverdueLeadNotifications().catch((err) => {
+    console.error('[Notification Job] Initial lead overdue run failed:', err.message);
+  });
+  runUpcomingNotifications().catch((err) => {
+    console.error('[Notification Job] Initial upcoming quote/shoot run failed:', err.message);
+  });
+  runOverdueRevisionNotifications().catch((err) => {
+    console.error('[Notification Job] Initial revision overdue run failed:', err.message);
+  });
+  runDeliveryFollowUpNotifications().catch((err) => {
+    console.error('[Notification Job] Initial delivery follow-up run failed:', err.message);
+  });
   expireQuotesPastValidUntil().then((result) => {
     if (result.expired_count) {
       console.log(`[Quote Expiration Job] Expired ${result.expired_count} quote(s)`);
@@ -1531,6 +1547,21 @@ const startScheduledEmailJobs = () => {
     });
     runQuotePipelineInactivityAlertsJob().catch((err) => {
       console.error('[Email Job] Interval overdue pipeline alert run failed:', err.message);
+    });
+    runOverdueAgreementNotifications().catch((err) => {
+      console.error('[Notification Job] Interval agreement overdue run failed:', err.message);
+    });
+    runOverdueLeadNotifications().catch((err) => {
+      console.error('[Notification Job] Interval lead overdue run failed:', err.message);
+    });
+    runUpcomingNotifications().catch((err) => {
+      console.error('[Notification Job] Interval upcoming quote/shoot run failed:', err.message);
+    });
+    runOverdueRevisionNotifications().catch((err) => {
+      console.error('[Notification Job] Interval revision overdue run failed:', err.message);
+    });
+    runDeliveryFollowUpNotifications().catch((err) => {
+      console.error('[Notification Job] Interval delivery follow-up run failed:', err.message);
     });
     expireQuotesPastValidUntil().then((result) => {
       if (result.expired_count) {

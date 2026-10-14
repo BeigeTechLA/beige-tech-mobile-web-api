@@ -7,6 +7,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const db = require('../models');
+const businessNotifications = require('./business-notification.service');
 const constants = require('../utils/constants');
 const {
   sendCustomQuoteProposalEmail,
@@ -6980,6 +6981,17 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
     const currentVersion = await getLatestQuoteVersionRecord(salesQuoteId, transaction);
     await attachQuoteVersionToActivity(transaction, statusActivity, currentVersion);
     await transaction.commit();
+    if (status === 'rejected' && previousQuoteAuditSnapshot.status !== 'rejected' && isClientRole(user?.role)) {
+      await businessNotifications.notify({
+        userId: quote.assigned_sales_rep_id || quote.created_by_user_id,
+        title: 'Client declined quote',
+        message: `The client declined quote ${quote.quote_number || salesQuoteId}.`,
+        topic: 'shoots', category: 'proposals', type: 'client_quote_declined',
+        referenceType: 'sales_quote', referenceId: String(salesQuoteId),
+        payload: { sales_quote_id: String(salesQuoteId) },
+        priority: 'high', dedupeWindowSeconds: 60
+      });
+    }
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
     await transaction.rollback();
@@ -7004,6 +7016,8 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
     if (String(quote.status || '').toLowerCase() === 'expired') {
       throw new Error('Quote cannot be sent because it is expired');
     }
+
+    const wasSentBefore = Boolean(quote.sent_at);
 
     const quoteDetails = await getQuoteById(salesQuoteId, user);
     if (!quoteDetails) {
@@ -7078,6 +7092,13 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
     );
 
     await transaction.commit();
+    await businessNotifications.notifyQuoteClient(quote, {
+      title: wasSentBefore ? 'Revised quote ready' : 'Quote ready for your review',
+      message: `Quote ${quote.quote_number || salesQuoteId} ${wasSentBefore ? 'has been revised and sent to you.' : 'has been sent to you.'}`,
+      topic: 'shoots', category: 'proposals', type: wasSentBefore ? 'quote_revised' : 'quote_sent',
+      referenceType: 'sales_quote', referenceId: String(salesQuoteId),
+      payload: { sales_quote_id: String(salesQuoteId) }, dedupeWindowSeconds: 60
+    });
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
     await transaction.rollback();
@@ -7101,6 +7122,54 @@ async function acceptQuoteProposal(token) {
     sendClientEmail: true,
     sendSalesEmail: true
   });
+}
+
+async function respondToQuoteProposal(token, action, reason = '') {
+  if (!['decline', 'request_change'].includes(action)) throw new Error('Invalid quote response');
+  const decoded = verifyQuoteAcceptToken(token);
+  const salesQuoteId = Number(decoded.sales_quote_id);
+  const responseReason = String(reason || '').trim();
+  if (action === 'request_change' && !responseReason) throw new Error('Change request details are required');
+  if (responseReason.length > 2000) throw new Error('Response details are too long');
+
+  const transaction = await db.sequelize.transaction();
+  let quote;
+  let alreadyResponded = false;
+  try {
+    quote = await db.sales_quotes.findByPk(salesQuoteId, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!quote || (decoded.quote_number && quote.quote_number !== decoded.quote_number) ||
+      (decoded.client_email && quote.client_email && String(decoded.client_email).toLowerCase() !== String(quote.client_email).toLowerCase())) {
+      throw new Error('Invalid quote response token');
+    }
+    if (action === 'decline' && quote.status === 'rejected') {
+      alreadyResponded = true;
+    } else if (!['sent', 'viewed'].includes(quote.status)) {
+      throw new Error(`Quote cannot be responded to because it is ${quote.status}`);
+    }
+    if (!alreadyResponded) {
+      if (action === 'decline') await quote.update({ status: 'rejected', rejected_at: new Date(), updated_at: new Date() }, { transaction });
+      await recordActivity(transaction, salesQuoteId, action === 'decline' ? 'rejected' : 'updated', null,
+        action === 'decline' ? 'Quote declined by client' : 'Quote change requested by client',
+        { source: 'client_quote_response', action, reason: responseReason });
+    }
+    await transaction.commit();
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    throw error;
+  }
+
+  if (!alreadyResponded) await businessNotifications.notify({
+    userId: quote.assigned_sales_rep_id || quote.created_by_user_id,
+    title: action === 'decline' ? 'Client declined quote' : 'Client requested quote changes',
+    message: action === 'decline'
+      ? `The client declined quote ${quote.quote_number || salesQuoteId}.`
+      : `The client requested changes to quote ${quote.quote_number || salesQuoteId}.`,
+    topic: 'shoots', category: 'proposals', type: action === 'decline' ? 'client_quote_declined' : 'client_quote_change_requested',
+    referenceType: 'sales_quote', referenceId: String(salesQuoteId),
+    payload: { sales_quote_id: String(salesQuoteId), response_reason: responseReason },
+    priority: 'high'
+  });
+  return { sales_quote_id: salesQuoteId, action, already_responded: alreadyResponded };
 }
 
 async function acceptQuoteById(salesQuoteId, options = {}) {
@@ -7246,6 +7315,16 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
           ? await sendQuoteAcceptedSalesNotificationEmail(emailPayload)
           : { success: false, skipped: true }
       };
+      if (['email_accept_link', 'signature_sign'].includes(activitySource)) {
+        await businessNotifications.notify({
+          userId: quote.assigned_sales_rep_id || quote.created_by_user_id,
+          title: 'Client accepted quote',
+          message: `The client accepted quote ${quote.quote_number || salesQuoteId}.`,
+          topic: 'shoots', category: 'proposals', type: 'client_quote_accepted',
+          referenceType: 'sales_quote', referenceId: String(salesQuoteId),
+          payload: { sales_quote_id: String(salesQuoteId), booking_id: String(bookingConversion?.booking_id || '') }
+        });
+      }
     }
 
     return {
@@ -7329,6 +7408,7 @@ module.exports = {
   sendQuoteProposal,
   getQuoteAcceptancePreview,
   acceptQuoteProposal,
+  respondToQuoteProposal,
   acceptQuoteOnSignature,
   ensureQuoteBookingForPayment,
   downloadQuotePdf

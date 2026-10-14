@@ -16,6 +16,7 @@ const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const pushNotificationService = require('../services/push-notification.service');
 const shiftManagementService = require('../services/shift-management.service');
+const businessNotifications = require('../services/business-notification.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
@@ -27,6 +28,43 @@ const sequelize = require('../db');
 const db = require('../models');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
+exports.updateLeadResponseDeadline = async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ success: false, message: 'Valid lead ID required' });
+    const rawDueAt = req.body?.response_due_at;
+    if (rawDueAt !== null && (typeof rawDueAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(rawDueAt))) {
+      return res.status(400).json({ success: false, message: 'response_due_at must include a time zone, or be null' });
+    }
+    const parsedDueAt = rawDueAt === null ? null : new Date(rawDueAt);
+    if (parsedDueAt && Number.isNaN(parsedDueAt.getTime())) return res.status(400).json({ success: false, message: 'Invalid response_due_at' });
+    const lead = await sales_leads.findOne({ where: { lead_id: leadId, is_active: 1 } });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+    await lead.update({ response_due_at: parsedDueAt, updated_at: new Date() });
+    return res.json({ success: true, data: { lead_id: leadId, response_due_at: lead.response_due_at } });
+  } catch (error) {
+    console.error('Update lead response deadline error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to update response deadline' });
+  }
+};
+
+exports.markLeadResponded = async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ success: false, message: 'Valid lead ID required' });
+    const lead = await sales_leads.findOne({ where: { lead_id: leadId, is_active: 1 } });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+    if (Number(lead.assigned_sales_rep_id || 0) !== Number(req.userId)) {
+      return res.status(403).json({ success: false, message: 'Only the assigned owner can mark this lead responded' });
+    }
+    if (!lead.owner_responded_at) await lead.update({ owner_responded_at: new Date(), last_activity_at: new Date() });
+    return res.json({ success: true, data: { lead_id: leadId, owner_responded_at: lead.owner_responded_at } });
+  } catch (error) {
+    console.error('Mark lead responded error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to mark lead responded' });
+  }
+};
 
 const normalizeString = (value) => {
   if (value == null) return null;
@@ -1969,6 +2007,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 }
             }
 
+            if (assignedRep?.id) await businessNotifications.notifyLeadAssigned(lead, assignedRep.id);
+
           // emailService.sendSalesLeadNotification({
           //   guestEmail: normalizedGuestEmail,
           //   shootType: shoot_type,
@@ -2108,6 +2148,8 @@ exports.trackBookingStart = async (req, res) => {
       status: 'Booking In Progress',
       source: 'web_form'
     });
+
+    if (assignedRep?.id) await businessNotifications.notifyLeadAssigned(lead, assignedRep.id);
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -3905,7 +3947,7 @@ exports.changeLeadSalesRep = async (req, res) => {
 
     const lead = await sales_leads.findOne({
       where: { lead_id: id, is_active: 1 },
-      attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'guest_email']
+      attributes: ['lead_id', 'booking_id', 'lead_type', 'assigned_sales_rep_id', 'client_name', 'guest_email']
     });
 
     if (!lead) {
@@ -3945,6 +3987,8 @@ exports.changeLeadSalesRep = async (req, res) => {
       },
       performed_by_user_id: req.userId
     });
+
+    if (lead.lead_type === 'self_serve') await businessNotifications.notifyLeadAssigned(lead, salesRep.id);
 
     return res.json({
       success: true,
@@ -4089,6 +4133,9 @@ exports.updateLeadStatus = async (req, res) => {
 
     await lead.update({
       lead_status: status,
+      ...(Number(lead.assigned_sales_rep_id || 0) === Number(performedBy) && status !== oldStatus
+        ? { owner_responded_at: lead.owner_responded_at || new Date() }
+        : {}),
       last_activity_at: new Date()
     });
 

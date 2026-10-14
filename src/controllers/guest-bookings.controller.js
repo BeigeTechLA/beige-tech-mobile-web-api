@@ -978,6 +978,18 @@ exports.updateGuestBooking = async (req, res) => {
       });
     }
 
+    // This public endpoint is used to complete a pre-payment guest draft.
+    // Changes to a paid/confirmed shoot must use an authenticated workflow;
+    // otherwise anyone who knows a booking ID could alter it and trigger push.
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({ bookingId: id });
+    if (booking.payment_id || booking.payment_completed_at || paymentState.isPaid ||
+      Number(paymentState.paidAmount || 0) > 0 || Number(paymentState.creditUsedAmount || 0) > 0) {
+      return res.status(constants.FORBIDDEN.code).json({
+        success: false,
+        message: 'Confirmed bookings cannot be edited through the guest draft endpoint.'
+      });
+    }
+
     const normalizedGuestEmail = guest_email ? String(guest_email).trim().toLowerCase() : null;
     const lookupEmail = normalizedGuestEmail || booking.guest_email || null;
     const resolvedUserId = await resolveUserId(null, lookupEmail);

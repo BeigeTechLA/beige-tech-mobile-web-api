@@ -249,6 +249,8 @@ router.delete('/client-leads/:id', authenticate, adminSalesRepresentativeDelete,
  * @access  Sales Rep / Admin
  */
 router.put('/leads/:id/status', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadStatus);
+router.put('/leads/:id/response-deadline', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadResponseDeadline);
+router.put('/leads/:id/mark-responded', authenticate, adminSalesRepresentativeEdit, salesLeadsController.markLeadResponded);
 router.put('/client-leads/:id/status', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadStatus);
 router.post('/leads/manual-payment/upload-proof', authenticate, quoteOrSalesPaymentEdit, ...salesLeadsController.uploadManualPaymentProof);
 router.post('/leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordManualPayment);
@@ -495,6 +497,7 @@ router.get(
 );
 router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.post('/quotes/accept', salesQuotesController.acceptQuoteProposal);
+router.post('/quotes/respond', salesQuotesController.respondToQuoteProposal);
 router.get('/quotes/reject/:quoteId', authenticate, salesQuotesController.rejectQuoteProposal);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
 router.get('/quotes/public/by-key/:quoteKey/latest-link', salesQuotesController.getLatestPublicQuotePreviewLink);

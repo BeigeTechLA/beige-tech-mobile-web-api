@@ -14,6 +14,7 @@ const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const appNotificationService = require('../services/app-notification.service');
+const businessNotifications = require('../services/business-notification.service');
 const pushNotificationService = require('../services/push-notification.service');
 const { getPaymentProvider, commasProvider } = require('../services/payment-providers');
 
@@ -1041,6 +1042,16 @@ async function markAdditionalQuoteInvoiceAsPaid({
 }
 
 async function processStripePaidWebhookEvent(event, req = {}) {
+  if (event.type === 'payment_intent.payment_failed' || event.type === 'invoice.payment_failed') {
+    const failedPayment = event.data?.object || {};
+    const bookingId = Number(failedPayment.metadata?.booking_id || 0);
+    if (bookingId) await businessNotifications.notifyPaymentOwner({
+      bookingId,
+      paymentId: failedPayment.id || event.id,
+      status: 'failed'
+    });
+    return { received: true };
+  }
   if (event.type !== 'invoice.paid' && event.type !== 'payment_intent.succeeded') {
     return { received: true };
   }
@@ -1604,6 +1615,12 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       paymentMethod: webhookPaymentMethod,
       transactionId: paymentIntentId
     }).catch(err => console.error('Booking Confirmation Email Error:', err));
+    businessNotifications.notifyPaymentOwner({
+      bookingId: booking_id,
+      paymentId: paymentIntentId || event.id,
+      status: isFullyPaidAfterWebhook ? 'succeeded' : 'partial',
+      amount: amountPaid
+    });
     if (isFullyPaidAfterWebhook && !isMobileAppPaymentMetadata(invoiceMetadata)) {
       sendBookingConfirmedPush({
         booking,
@@ -1649,6 +1666,17 @@ function buildCommasSuccessUrl(bookingId) {
 
 // Commas and Stripe have different webhook envelopes; booking fulfillment is shared.
 async function processCommasPaidWebhookEvent(event, req = {}) {
+  if (event?.type === 'payment.failed') {
+    const failedData = event.data || {};
+    const metadata = failedData.api_metadata?.data || failedData.metadata || {};
+    const bookingId = Number(metadata.booking_id || 0);
+    if (bookingId) await businessNotifications.notifyPaymentOwner({
+      bookingId,
+      paymentId: `commas:${failedData.payment_id || event.id}`,
+      status: 'failed'
+    });
+    return { received: true };
+  }
   if (event?.type !== 'payment.succeeded') return { received: true };
 
   const data = event.data || {};
@@ -3609,6 +3637,13 @@ exports.confirmPaymentMulti = async (req, res) => {
     if (!isFullyPaidAfterReconcile) {
       await transaction.commit();
 
+      businessNotifications.notifyPaymentOwner({
+        bookingId: booking_id,
+        paymentId: paymentIntentId || payment.payment_id,
+        status: 'partial',
+        amount: totalAmount
+      });
+
       notifySalesPaymentReceivedForBooking({
         booking,
         bookingId: booking_id,
@@ -3714,6 +3749,12 @@ exports.confirmPaymentMulti = async (req, res) => {
       paymentMethod,
       transactionId: paymentIntentId
     }).catch(err => console.error('Booking Confirmation Email Error:', err));
+    businessNotifications.notifyPaymentOwner({
+      bookingId: booking_id,
+      paymentId: paymentIntentId || booking_id,
+      status: isFullyPaidAfterReconcile ? 'succeeded' : 'partial',
+      amount: totalAmount
+    });
     sendBookingConfirmedPush({
       booking,
       bookingId: booking_id

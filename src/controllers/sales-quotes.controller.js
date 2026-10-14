@@ -919,6 +919,20 @@ exports.rejectQuoteProposal = async (req, res) => {
   }
 };
 
+exports.respondToQuoteProposal = async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const action = String(req.body?.action || '').trim();
+    if (!token || !['decline', 'request_change'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'A valid token and response action are required' });
+    }
+    const data = await quoteService.respondToQuoteProposal(token, action, req.body?.reason);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return sendError(res, error, error.message || 'Failed to save quote response', constants.BAD_REQUEST.code);
+  }
+};
+
 exports.acceptQuoteProposal = async (req, res) => {
   const wantsHtml = Boolean(req.accepts('html'));
   try {

@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const db = require('../models');
+const businessNotifications = require('./business-notification.service');
 const { Op } = db.Sequelize;
 
 const GENERAL = 'general';
@@ -331,12 +332,17 @@ async function updateShootDraft(id, payload, actor) {
 }
 
 async function notifyCreator(document, title, message, actor) {
-  const creator = await db.crew_members.findByPk(document.creator_id, { attributes: ['user_id'] });
-  if (!creator?.user_id || !db.app_notifications) return;
-  await db.app_notifications.create({ user_id: creator.user_id, sender_user_id: actor.userId || null, title, message,
-    topic: 'agreements', category: 'agreements', type: 'agreement_action_required', reference_id: String(document.agreement_document_id),
-    reference_type: 'agreement_document', payload: { agreement_document_id: document.agreement_document_id, agreement_type: document.agreement_type },
-    action_label: 'Review agreement', priority: 'high', app_user_type: 'creative_partner' });
+  try {
+    const creator = await db.crew_members.findByPk(document.creator_id, { attributes: ['user_id'] });
+    return businessNotifications.notify({ userId: creator?.user_id, appUserType: '2', senderUserId: actor.userId || null,
+      title, message, topic: 'shoots', category: 'agreements', type: 'agreement_action_required',
+      referenceId: String(document.agreement_document_id), referenceType: 'agreement_document',
+      payload: { agreement_document_id: String(document.agreement_document_id), booking_id: String(document.booking_id || '') },
+      actionLabel: 'Review agreement', priority: 'high' });
+  } catch (notificationError) {
+    console.error('[AgreementNotification] Creator lookup failed:', notificationError);
+    return null;
+  }
 }
 
 async function sendShootAgreement(id, actor) {
@@ -377,7 +383,7 @@ async function reviseShootAgreement(id, payload, actor) {
 
 async function respondToAgreement(id, creatorId, action, payload = {}, request = {}, expectedAgreementType = null) {
   if (!['accepted', 'rejected'].includes(action)) throw error('Invalid agreement action');
-  return db.sequelize.transaction(async (transaction) => {
+  const respondedDocument = await db.sequelize.transaction(async (transaction) => {
     const document = await getDocument(id, { transaction, lock: transaction.LOCK.UPDATE });
     if (Number(document.creator_id) !== Number(creatorId)) throw error('You cannot respond to this agreement', 403);
     if (expectedAgreementType && document.agreement_type !== expectedAgreementType) throw error('Agreement type does not match this response endpoint', 409);
@@ -419,6 +425,33 @@ async function respondToAgreement(id, creatorId, action, payload = {}, request =
     await event(document.agreement_document_id, `agreement_${action}`, { creatorId }, { content_hash: document.content_hash }, transaction);
     return document;
   });
+  if (respondedDocument.agreement_type === SHOOT) {
+    const ownerId = await businessNotifications.bookingOwner(respondedDocument.booking_id)
+      .catch((lookupError) => { console.error('[AgreementNotification] Owner lookup failed:', lookupError); return null; });
+    await businessNotifications.notify({
+      userId: ownerId || respondedDocument.sent_by_user_id || respondedDocument.created_by_user_id,
+      title: action === 'accepted' ? 'Creator accepted shoot agreement' : 'Creator rejected shoot agreement',
+      message: action === 'accepted'
+        ? `The creator accepted the agreement for booking ${respondedDocument.booking_id}.`
+        : `The creator rejected the agreement for booking ${respondedDocument.booking_id}. Review the shoot team.`,
+      topic: 'shoots', category: 'agreements', type: `shoot_agreement_${action}`,
+      referenceType: 'booking', referenceId: String(respondedDocument.booking_id),
+      payload: { booking_id: String(respondedDocument.booking_id), agreement_document_id: String(respondedDocument.agreement_document_id) },
+      priority: action === 'rejected' ? 'high' : 'normal'
+    });
+    if (action === 'accepted') {
+      const booking = await db.stream_project_booking.findByPk(respondedDocument.booking_id, { attributes: ['user_id'] });
+      await businessNotifications.notify({
+        userId: booking?.user_id,
+        title: 'Creator confirmed for your shoot',
+        message: `A creator confirmed their assignment for shoot ${respondedDocument.booking_id}. Review your shoot team.`,
+        topic: 'shoots', category: 'shoots', type: 'shoot_creator_confirmed',
+        referenceType: 'booking', referenceId: String(respondedDocument.booking_id),
+        payload: { booking_id: String(respondedDocument.booking_id) }
+      });
+    }
+  }
+  return respondedDocument;
 }
 
 async function cancelAgreement(id, actor) {

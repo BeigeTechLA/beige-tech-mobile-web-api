@@ -1,6 +1,7 @@
 const { crew_member_reviews, crew_members, users } = require('../models');
 const { Op } = require('sequelize');
 const constants = require('../utils/constants');
+const businessNotifications = require('../services/business-notification.service');
 
 /**
  * Get reviews by creator
@@ -66,12 +67,15 @@ exports.getByCreator = async (req, res) => {
 /**
  * Create a review for a creator
  * POST /api/reviews/by-creator/:creatorId
- * Body: { user_id?, rating, review_text?, shoot_date? }
+ * Body: { rating, review_text?, shoot_date? }; reviewer comes from JWT.
  */
 exports.createReview = async (req, res) => {
   try {
     const { creatorId } = req.params;
-    const { user_id, rating, review_text, shoot_date } = req.body;
+    const { rating, review_text, shoot_date } = req.body;
+    if (Number(req.userType) !== 3 || !req.userId) {
+      return res.status(constants.FORBIDDEN.code).json({ success: false, message: 'Only authenticated clients can leave creator reviews' });
+    }
 
     if (!rating || rating < 1 || rating > 5) {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -93,10 +97,18 @@ exports.createReview = async (req, res) => {
 
     const newReview = await crew_member_reviews.create({
       crew_member_id: parseInt(creatorId),
-      user_id: user_id || null,
+      user_id: req.userId,
       rating: parseInt(rating),
       review_text: review_text || null,
       shoot_date: shoot_date || null
+    });
+
+    await businessNotifications.notifyCreator(creator.crew_member_id, {
+      title: 'New client review',
+      message: `A client left you a ${Number(rating)}-star review${review_text ? `: ${String(review_text).slice(0, 300)}` : '.'}`,
+      topic: 'shoots', category: 'reviews', type: 'creator_review_received',
+      referenceType: 'creator_review', referenceId: String(newReview.review_id),
+      payload: { creator_id: String(creator.crew_member_id), review_id: String(newReview.review_id) }
     });
 
     res.status(201).json({
