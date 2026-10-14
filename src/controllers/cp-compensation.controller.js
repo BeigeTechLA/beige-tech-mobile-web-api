@@ -129,6 +129,16 @@ exports.calendar = async (req, res) => {
   try {
     const startDate = String(req.query.start_date || '');
     const endDate = String(req.query.end_date || '');
+    // optional UI label: Pending | Approval Pending | Approved | Partially Paid | Rejected
+    const STATUS_LABEL_TO_RAW = {
+      'pending': ['draft', 'pending', ''],
+      'approval pending': ['pending_approval'],
+      'approved': ['approved'],
+      'partially paid': ['partially_paid'],
+      'rejected': ['rejected']
+    };
+    const requestedStatus = String(req.query.status || '').trim().toLowerCase();
+    const allowedRawStatuses = requestedStatus ? STATUS_LABEL_TO_RAW[requestedStatus] || null : null;
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRe.test(startDate) || !dateRe.test(endDate) || startDate > endDate) {
       return res.status(400).json({
@@ -147,6 +157,11 @@ exports.calendar = async (req, res) => {
     const rows = (data?.rows || []).filter((row) => {
       const effectiveStatus = row.earning_status === 'paid' ? 'paid' : row.status;
       if (effectiveStatus === 'paid') return false; // fully paid has no due date
+
+      if (requestedStatus) {
+        if (!allowedRawStatuses) return false; // unknown status value
+        if (!allowedRawStatuses.includes(String(effectiveStatus || '').toLowerCase())) return false;
+      }
 
       let due = String(row.due_date || '').slice(0, 10);
       if (!due) {
