@@ -4505,10 +4505,13 @@ exports.listWorkspaces = async (req, res) => {
       );
     }
 
+    let workspaceSearchMetadata = new Map();
+    let hasWorkspaceSearchMetadata = false;
     if (search) {
-      const workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
+      workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
         filteredWorkspaces.map((workspace) => workspace?.externalId)
       );
+      hasWorkspaceSearchMetadata = true;
 
       filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
         const folderName = String(workspace.folderName || '').toLowerCase();
@@ -4529,6 +4532,24 @@ exports.listWorkspaces = async (req, res) => {
         );
       });
     }
+
+    // Keep the source shoot information alongside a workspace display label.
+    // A display label is intentionally editable in File Manager, whereas the
+    // project name is the canonical, current name shown in Shoots.
+    if (!hasWorkspaceSearchMetadata) {
+      workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
+        filteredWorkspaces.map((workspace) => workspace?.externalId)
+      );
+    }
+    filteredWorkspaces = filteredWorkspaces.map((workspace) => {
+      const metadata = workspaceSearchMetadata.get(String(workspace?.externalId || '').trim());
+      if (!metadata?.projectName) return workspace;
+
+      return {
+        ...workspace,
+        projectName: metadata.projectName,
+      };
+    });
     filteredWorkspaces = [...filteredWorkspaces].sort((a, b) => {
       const diff = getWorkspaceUpdatedTimestamp(b) - getWorkspaceUpdatedTimestamp(a);
       if (diff !== 0) return diff;
