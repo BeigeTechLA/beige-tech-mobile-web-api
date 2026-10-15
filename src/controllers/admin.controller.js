@@ -17832,7 +17832,6 @@ const getOpenUserReassignmentCounts = async (userId, transaction) => {
       model: db.stream_project_booking,
       as: 'booking',
       required: true,
-      where: { event_date: { [Op.gt]: Sequelize.literal('CURRENT_DATE') } },
       attributes: ['stream_project_booking_id', 'payment_id']
     }],
     transaction
@@ -17899,7 +17898,7 @@ exports.getUserReassignments = async (req, res) => {
       ];
     }
 
-    // Keep active leads that have a future event and are not paid or closed lost.
+    // Keep active leads that are not paid or closed lost.
     const leads = await db.sales_leads.findAll({
       where: leadWhere,
 
@@ -17919,10 +17918,6 @@ exports.getUserReassignments = async (req, res) => {
           model: db.stream_project_booking,
           as: 'booking',
           required: true,
-          where: {
-            event_date: { [Op.gt]: Sequelize.literal('CURRENT_DATE') }
-          },
-
           attributes: [
             'stream_project_booking_id',
             'event_date',
@@ -18179,6 +18174,50 @@ exports.getUserReassignmentHistory = async (req, res) => {
        LIMIT 100`,
       { replacements: { userId }, type: QueryTypes.SELECT }
     );
+    const leadIds = history
+      .filter((row) => row.record_type === 'lead' && /^L-\d+$/.test(String(row.record_id || '')))
+      .map((row) => Number(String(row.record_id).slice(2)));
+    const quoteRefs = history
+      .filter((row) => row.record_type === 'quote' && String(row.record_id || '').startsWith('Q-'))
+      .map((row) => String(row.record_id).slice(2));
+    const numericQuoteIds = quoteRefs.filter((value) => /^\d+$/.test(value)).map(Number);
+    const [leads, quoteRows] = await Promise.all([
+      leadIds.length
+        ? db.sales_leads.findAll({
+            where: { lead_id: { [Op.in]: leadIds } },
+            attributes: ['lead_id', 'booking_id'],
+            raw: true
+          })
+        : [],
+      quoteRefs.length
+        ? db.sales_quotes.findAll({
+            where: {
+              [Op.or]: [
+                { quote_number: { [Op.in]: quoteRefs } },
+                ...(numericQuoteIds.length ? [{ sales_quote_id: { [Op.in]: numericQuoteIds } }] : [])
+              ]
+            },
+            attributes: ['sales_quote_id', 'quote_number'],
+            raw: true
+          })
+        : []
+    ]);
+    const bookingIdByLeadId = new Map(leads.map((lead) => [String(lead.lead_id), lead.booking_id]));
+    const quoteByRef = new Map();
+    quoteRows.forEach((quote) => {
+      if (quote.quote_number != null) quoteByRef.set(String(quote.quote_number), quote.sales_quote_id);
+      quoteByRef.set(String(quote.sales_quote_id), quote.sales_quote_id);
+    });
+    history.forEach((row) => {
+      const rawId = String(row.record_id || '');
+      if (row.record_type === 'lead' && /^L-\d+$/.test(rawId)) {
+        row.display_record_id = bookingIdByLeadId.get(rawId.slice(2)) ?? null;
+      } else if (row.record_type === 'quote' && rawId.startsWith('Q-')) {
+        row.display_record_id = quoteByRef.get(rawId.slice(2)) ?? null;
+      } else {
+        row.display_record_id = null;
+      }
+    });
     return res.status(200).json({ success: true, count: history.length, data: history });
   } catch (error) {
     console.error('Get User Reassignment History Error:', error);
