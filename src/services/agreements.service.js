@@ -302,8 +302,10 @@ async function createShootAgreement(bookingId, assignmentId, payload, actor) {
         is_current: 1,
         status: { [Op.in]: [PENDING, 'accepted'] }
       },
-      transaction,
-      lock: transaction.LOCK.UPDATE
+      // The assignment row above serializes requests for this recipient.
+      // A locking read here can gap-lock an empty agreement range and deadlock
+      // concurrent drafts for other recipients when they insert their rows.
+      transaction
     });
     if (existingSentAgreement) {
       throw error('A current shoot agreement has already been sent for this Creative Partner', 409);
