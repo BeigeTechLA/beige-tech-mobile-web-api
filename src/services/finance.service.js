@@ -3,6 +3,7 @@ const pricingService = require('./pricing.service');
 
 const DEFAULT_PLATFORM_FEE_PERCENT = Number(process.env.BEIGE_MARGIN_PERCENT || 25);
 const AUTO_CREATE_CREATOR_EARNINGS_ON_BOOK_A_SHOOT = false;
+const FINANCE_VISIBLE_CP_APPROVAL_STATUSES = ['pending_approval', 'approved'];
 const ROLE_TO_ITEM_MAP = {
   videographer: 11,
   photographer: 10,
@@ -2102,6 +2103,7 @@ async function getClientPaymentDetails(bookingId, userContext = {}) {
         model: db.creator_earnings,
         as: 'creator_earnings',
         required: false,
+        where: { approval_status: { [db.Sequelize.Op.in]: FINANCE_VISIBLE_CP_APPROVAL_STATUSES } },
         include: [{ model: db.crew_members, as: 'creator', required: false }]
       }
     ]
@@ -2365,6 +2367,7 @@ async function listShootBreakdowns(filters = {}) {
         model: db.creator_earnings,
         as: 'creator_earnings',
         required: false,
+        where: { approval_status: { [db.Sequelize.Op.in]: FINANCE_VISIBLE_CP_APPROVAL_STATUSES } },
         attributes: ['creator_earning_id', 'creator_id', 'net_earning_amount', 'status']
       }
     ]
@@ -2522,6 +2525,7 @@ async function getShootFinance(bookingId) {
         model: db.creator_earnings,
         as: 'creator_earnings',
         required: false,
+        where: { approval_status: { [db.Sequelize.Op.in]: FINANCE_VISIBLE_CP_APPROVAL_STATUSES } },
         include: [
           {
             model: db.crew_members,
@@ -2543,6 +2547,7 @@ async function getShootFinance(bookingId) {
           model: db.creator_earnings,
           as: 'creator_earnings',
           required: false,
+          where: { approval_status: { [db.Sequelize.Op.in]: FINANCE_VISIBLE_CP_APPROVAL_STATUSES } },
           include: [{ model: db.crew_members, as: 'creator', required: false }]
         }
       ]
@@ -2575,7 +2580,7 @@ async function getCreatorWallet(creatorId) {
   });
 
   const pendingEarnings = await db.creator_earnings.findAll({
-    where: { creator_id: creatorId, status: { [db.Sequelize.Op.in]: ['pending', 'earned', 'held'] } },
+    where: { creator_id: creatorId, approval_status: { [db.Sequelize.Op.in]: FINANCE_VISIBLE_CP_APPROVAL_STATUSES }, status: { [db.Sequelize.Op.in]: ['pending', 'earned', 'held'] } },
     limit: 20,
     order: [['created_at', 'DESC'], ['creator_earning_id', 'DESC']],
     include: [{ model: db.stream_project_booking, as: 'booking', required: false }]
@@ -3016,7 +3021,7 @@ async function releaseCreatorEarnings(payload = {}, options = {}) {
       throw error;
     }
 
-    const where = { status: 'pending' };
+    const where = { status: 'pending', approval_status: { [Op.in]: FINANCE_VISIBLE_CP_APPROVAL_STATUSES } };
     if (payload.creator_earning_ids) where.creator_earning_id = { [Op.in]: payload.creator_earning_ids };
     if (payload.creator_id) where.creator_id = payload.creator_id;
     if (payload.booking_id) where.booking_id = payload.booking_id;

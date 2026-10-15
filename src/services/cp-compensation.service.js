@@ -10,8 +10,9 @@ const stripe = config.stripe?.secretKey
   : null;
 
 const VALID_COMPENSATION_METHODS = new Set(['equal_split', 'role_based', 'manual']);
+const FINANCE_VISIBLE_APPROVAL_STATUSES = ['pending_approval', 'approved'];
 const ACTIVE_APPROVAL_STATUSES = ['pending_approval', 'approved', 'rejected'];
-const OPEN_APPROVAL_STATUSES = ['pending_approval', 'approved'];
+const SUBMITTED_COMPENSATION_APPROVAL_STATUSES = ['draft', 'pending_approval', 'approved', 'rejected'];
 const VALID_PAYMENT_METHODS = new Set(['stripe', 'manual']);
 
 function toMoney(value) {
@@ -345,13 +346,13 @@ function resolveCompensationDueDate(earnings = [], booking = {}) {
 
 function getApprovalWhere(filters = {}) {
   const Op = db.Sequelize.Op;
-  if (filters.approval_status && ACTIVE_APPROVAL_STATUSES.includes(filters.approval_status)) {
+  if (filters.approval_status && FINANCE_VISIBLE_APPROVAL_STATUSES.includes(filters.approval_status)) {
     return filters.approval_status;
   }
-  if (filters.status && ACTIVE_APPROVAL_STATUSES.includes(filters.status)) {
+  if (filters.status && FINANCE_VISIBLE_APPROVAL_STATUSES.includes(filters.status)) {
     return filters.status;
   }
-  return { [Op.in]: ACTIVE_APPROVAL_STATUSES };
+  return { [Op.in]: FINANCE_VISIBLE_APPROVAL_STATUSES };
 }
 
 function buildCompensationItems(items = []) {
@@ -936,7 +937,9 @@ async function listPendingCompensationShoots(filters = {}) {
         model: db.creator_earnings,
         as: 'creator_earnings',
         required: false,
-        where: { approval_status: { [Op.in]: OPEN_APPROVAL_STATUSES } },
+        // A submitted draft is awaiting CP acceptance, not missing Finance
+        // compensation. Rejected records are also retained for audit only.
+        where: { approval_status: { [Op.in]: SUBMITTED_COMPENSATION_APPROVAL_STATUSES } },
         attributes: ['creator_earning_id', 'creator_id', 'approval_status']
       },
       {
@@ -1246,7 +1249,7 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
   if (!bookingId || !creatorId) {
     throw buildError('booking_id and creator_id are required');
   }
-  if (!['pending_approval', 'approved'].includes(approvalStatus)) {
+  if (!['draft', 'pending_approval', 'approved'].includes(approvalStatus)) {
     throw buildError('Invalid approval status');
   }
   if (!['sales_admin', 'admin'].includes(compensationSource)) {
@@ -1276,8 +1279,19 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
           rejected_at: null,
           rejection_reason: null
         }
-      : {
+      : approvalStatus === 'pending_approval' ? {
           approval_status: 'pending_approval',
+          submitted_by_user_id: userId,
+          submitted_at: now,
+          approved_by_user_id: null,
+          approved_at: null,
+          rejected_by_user_id: null,
+          rejected_at: null,
+          rejection_reason: null
+        } : {
+          // Draft compensation is intentionally excluded from Finance until the
+          // corresponding CP accepts the assignment.
+          approval_status: 'draft',
           submitted_by_user_id: userId,
           submitted_at: now,
           approved_by_user_id: null,
@@ -1307,7 +1321,9 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
     const shouldProcessAdminAdvancePayment = compensationSource === 'admin' && rawAdvancePayload && (
       rawAdvancePayload.proof_url || rawAdvancePayload.proof_file_path
     );
-    const advancePayload = rawAdvancePayload && compensationSource === 'sales_admin'
+    const advancePayload = approvalStatus === 'draft'
+      ? null
+      : rawAdvancePayload && compensationSource === 'sales_admin'
       ? { ...payload.advance, status: 'pending' }
       : rawAdvancePayload;
     let advance = shouldProcessAdminAdvancePayment
@@ -1426,7 +1442,9 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
 
     let emailResults = [];
     let newShootRequestEmailResults = [];
-    const newShootRequestCreatorIds = payload.new_shoot_request_creator_ids ?? payload.newShootRequestCreatorIds;
+    const newShootRequestCreatorIds = payload.new_shoot_request_creator_ids
+      ?? payload.newShootRequestCreatorIds
+      ?? creators.map((creator) => creator.creator_id);
     const newShootRequestPushResults = !externalTransaction
       ? await sendNewShootRequestPushNotifications({
         bookingId,
@@ -1442,7 +1460,7 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
       });
       newShootRequestEmailResults = await sendNewShootRequestEmailsAfterCompensation({
         bookingId,
-        creatorIds: payload.new_shoot_request_creator_ids ?? payload.newShootRequestCreatorIds,
+        creatorIds: newShootRequestCreatorIds,
         creators
       });
     }
@@ -1463,6 +1481,31 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
     throw error;
+  }
+}
+
+async function promoteAcceptedAssignmentCompensation({ bookingId, creatorId, userId = null, transaction }) {
+  if (!transaction) throw buildError('A transaction is required to promote assignment compensation', 500);
+  const pending = await db.creator_earnings.findOne({
+    where: { booking_id: Number(bookingId), creator_id: Number(creatorId) },
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+    order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
+  });
+  if (!pending) return null;
+  if (pending.approval_status !== 'draft') return pending.creator_earning_id;
+
+  const now = new Date();
+  await pending.update({ approval_status: 'pending_approval', submitted_by_user_id: pending.submitted_by_user_id || userId, submitted_at: pending.submitted_at || now, updated_at: now }, { transaction });
+  await upsertTimelineEvent(pending, { event_type: 'awaiting_finance_approval', label: 'Awaiting Finance Approval', sub_label: 'CP accepted assignment; submitted for finance approval', is_completed: 0, sort_order: 5 }, transaction);
+  return pending.creator_earning_id;
+}
+
+async function recordAssignmentCompensationRejection({ bookingId, creatorId, transaction }) {
+  if (!transaction) throw buildError('A transaction is required to reject assignment compensation', 500);
+  const earning = await db.creator_earnings.findOne({ where: { booking_id: Number(bookingId), creator_id: Number(creatorId) }, order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']], transaction, lock: transaction.LOCK.UPDATE });
+  if (earning?.approval_status === 'draft') {
+    await earning.update({ approval_status: 'rejected', status: 'cancelled', rejected_at: new Date(), rejection_reason: 'CP rejected assignment', updated_at: new Date() }, { transaction });
   }
 }
 
@@ -1899,7 +1942,7 @@ async function getCpCompensationDetails(bookingId) {
         model: db.creator_earnings,
         as: 'creator_earnings',
         required: false,
-        where: { approval_status: { [Op.in]: ACTIVE_APPROVAL_STATUSES } },
+        where: { approval_status: { [Op.in]: FINANCE_VISIBLE_APPROVAL_STATUSES } },
         include: [
       {
         model: db.crew_members,
@@ -2668,7 +2711,7 @@ async function updateBookingCompensationDueDate(bookingId, payload = {}, options
   const earnings = await db.creator_earnings.findAll({
     where: {
       booking_id: normalizedBookingId,
-      approval_status: { [db.Sequelize.Op.in]: ACTIVE_APPROVAL_STATUSES }
+      approval_status: { [db.Sequelize.Op.in]: FINANCE_VISIBLE_APPROVAL_STATUSES }
     }
   });
 
@@ -2701,11 +2744,7 @@ async function updateBookingCompensationDueDate(bookingId, payload = {}, options
 }
 
 async function submitSalesAdminCompensation(payload = {}, options = {}) {
-  return upsertBulkCreatorCompensations(payload, {
-    ...options,
-    approvalStatus: 'pending_approval',
-    compensationSource: 'sales_admin'
-  });
+  return upsertBulkCreatorCompensations(payload, { ...options, approvalStatus: 'draft', compensationSource: 'sales_admin' });
 }
 
 async function addAdminCompensation(payload = {}, options = {}) {
@@ -2721,6 +2760,8 @@ module.exports = {
   addAdminCompensation,
   upsertCreatorCompensation,
   upsertBulkCreatorCompensations,
+  promoteAcceptedAssignmentCompensation,
+  recordAssignmentCompensationRejection,
   listCpCompensations,
   getCpCompensationDetails,
   approveCompensation,

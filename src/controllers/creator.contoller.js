@@ -38,6 +38,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 
 const moment = require('moment');
 const creatorCalendarService = require('../services/creator-calendar.service');
+const cpCompensationService = require('../services/cp-compensation.service');
 
 const DEFAULT_CREATOR_TIMEZONE = 'Asia/Kolkata';
 
@@ -742,15 +743,31 @@ exports.updateRequestStatus = async (req, res) => {
     }
 
     if (decision === 2) {
-      const updateResult = await assigned_crew.update(
-        { 
-          crew_accept: 2, 
-          responded_at: new Date()
-        },
-        { where: { crew_member_id, project_id, crew_accept: 0 } }
-      );
+      const transaction = await db.sequelize.transaction();
+      let updateResult;
+      try {
+        updateResult = await assigned_crew.update(
+          { crew_accept: 2, responded_at: new Date() },
+          { where: { crew_member_id, project_id, crew_accept: 0 }, transaction }
+        );
+        if (updateResult[0]) {
+          await cpCompensationService.recordAssignmentCompensationRejection({
+            bookingId: project_id,
+            creatorId: crew_member_id,
+            transaction
+          });
+        }
+        await transaction.commit();
+      } catch (error) {
+        if (!transaction.finished) await transaction.rollback();
+        throw error;
+      }
 
       if (updateResult[0] === 0) {
+        const assignment = await assigned_crew.findOne({ where: { crew_member_id, project_id } });
+        if (Number(assignment?.crew_accept) === 2) {
+          return res.status(200).json({ error: false, message: "Request already declined." });
+        }
         return res.status(404).json({ error: true, message: "No pending request found." });
       }
 
@@ -842,15 +859,32 @@ exports.updateRequestStatus = async (req, res) => {
       //   });
       // }
 
-      const updateResult = await assigned_crew.update(
-        { 
-          crew_accept: 1,
-          responded_at: new Date() 
-        },
-        { where: { crew_member_id, project_id, crew_accept: 0 } }
-      );
+      const transaction = await db.sequelize.transaction();
+      let updateResult;
+      try {
+        updateResult = await assigned_crew.update(
+          { crew_accept: 1, responded_at: new Date() },
+          { where: { crew_member_id, project_id, crew_accept: 0 }, transaction }
+        );
+        if (updateResult[0]) {
+          await cpCompensationService.promoteAcceptedAssignmentCompensation({
+            bookingId: project_id,
+            creatorId: crew_member_id,
+            userId: req.userId || req.user?.userId || req.user?.id || null,
+            transaction
+          });
+        }
+        await transaction.commit();
+      } catch (error) {
+        if (!transaction.finished) await transaction.rollback();
+        throw error;
+      }
 
       if (updateResult[0] === 0) {
+        const assignment = await assigned_crew.findOne({ where: { crew_member_id, project_id } });
+        if (Number(assignment?.crew_accept) === 1) {
+          return res.status(200).json({ error: false, message: "Request already accepted." });
+        }
         return res.status(404).json({ error: true, message: "No pending request found or already accepted." });
       }
 

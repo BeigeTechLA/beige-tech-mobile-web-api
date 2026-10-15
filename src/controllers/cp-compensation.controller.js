@@ -76,7 +76,7 @@ exports.submitFromSalesAdmin = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: 'CP compensation submitted for approval',
+      message: 'CP compensation saved pending CP acceptance',
       data
     });
   } catch (error) {

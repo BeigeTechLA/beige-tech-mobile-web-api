@@ -2874,7 +2874,8 @@ exports.getProjectDetails = async (req, res) => {
         const totalCompensation = compensationByCreatorId.get(Number(ac.crew_member_id)) ?? null;
         return {
             ...ac,
-            acceptance_status: ac.crew_accept === 1 ? 'accepted' : ac.crew_accept === 2 ? 'rejected' : 'pending',
+            crew_accept: Number(ac.crew_accept || 0),
+            acceptance_status: Number(ac.crew_accept) === 1 ? 'accepted' : Number(ac.crew_accept) === 2 ? 'rejected' : 'pending',
             total_compensation: totalCompensation,
             crew_member: { 
                 ...ac.crew_member, 
