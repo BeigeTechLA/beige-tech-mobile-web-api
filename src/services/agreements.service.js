@@ -295,6 +295,19 @@ async function createShootAgreement(bookingId, assignmentId, payload, actor) {
   return db.sequelize.transaction(async (transaction) => {
     const context = await getAssignmentContext(bookingId, assignmentId, transaction);
     if (Number(context.assignment.crew_accept) !== 0) throw error('Only a pending assignment can receive a new shoot agreement', 409);
+    const existingSentAgreement = await db.agreement_documents.findOne({
+      where: {
+        agreement_type: SHOOT,
+        assignment_id: context.assignment.id,
+        is_current: 1,
+        status: { [Op.in]: [PENDING, 'accepted'] }
+      },
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (existingSentAgreement) {
+      throw error('A current shoot agreement has already been sent for this Creative Partner', 409);
+    }
     const snapshot = await shootSnapshot(context, payload, transaction);
     const contentHtml = String(payload.content_html || '').trim();
     if (!contentHtml) throw error('content_html is required');
@@ -353,7 +366,10 @@ async function sendShootAgreement(id, actor) {
     if (!assignment) throw error('The active crew assignment no longer exists', 409);
     await db.agreement_documents.update({ is_current: 0 }, { where: { assignment_id: row.assignment_id, agreement_document_id: { [Op.ne]: row.agreement_document_id }, is_current: 1 }, transaction });
     await row.update({ status: PENDING, is_current: 1, sent_at: new Date(), sent_by_user_id: actor.userId }, { transaction });
-    await assignment.update({ status: 'awaiting_agreement', crew_accept: 0, responded_at: null }, { transaction });
+    // The agreement document is the source of truth for the awaiting-response
+    // state. Keep the legacy assignment status unchanged because older
+    // environments restrict that column to a fixed set of values.
+    await assignment.update({ crew_accept: 0, responded_at: null }, { transaction });
     await event(row.agreement_document_id, 'shoot_agreement_sent', actor, { assignment_id: row.assignment_id }, transaction);
     return row;
   });
@@ -468,6 +484,7 @@ async function cancelAgreement(id, actor) {
 async function listDocuments(filters = {}, creatorId = null) {
   const where = {};
   if (filters.type) where.agreement_type = filters.type;
+  if (Number(filters.booking_id)) where.booking_id = Number(filters.booking_id);
   if (filters.status) where.status = filters.status;
   if (filters.booking_id) where.booking_id = Number(filters.booking_id);
   if (creatorId) where.creator_id = Number(creatorId);
