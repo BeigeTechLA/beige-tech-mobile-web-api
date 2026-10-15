@@ -47,6 +47,7 @@ const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const { openSalesLeadSql } = require('../utils/salesLeadStatusFilters');
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
@@ -19534,38 +19535,21 @@ exports.getPermissionModules = async (req, res) => {
 
 
 const getOpenUserReassignmentCounts = async (userId, transaction) => {
-  const leads = await db.sales_leads.findAll({
+  const openLeadsCount = await db.sales_leads.count({
     where: {
       assigned_sales_rep_id: userId,
       is_active: 1,
-      lead_status: { [Op.notIn]: ['paid', 'closed_lost'] }
+      [Op.and]: Sequelize.literal(`(${openSalesLeadSql})`)
     },
-    attributes: ['lead_id', 'booking_id'],
     include: [{
       model: db.stream_project_booking,
       as: 'booking',
       required: true,
-      attributes: ['stream_project_booking_id', 'payment_id']
+      attributes: []
     }],
+    distinct: true,
     transaction
   });
-
-  const bookingIds = [...new Set(leads.map((lead) => Number(lead.booking_id)).filter(Number.isInteger))];
-  const paymentRows = bookingIds.length ? await db.sequelize.query(
-    `SELECT booking_id, paid_amount, payment_status, quote_total, due_amount
-     FROM booking_payment_summary WHERE booking_id IN (:bookingIds)`,
-    { replacements: { bookingIds }, type: QueryTypes.SELECT, transaction }
-  ) : [];
-  const paymentMap = new Map(paymentRows.map((payment) => [Number(payment.booking_id), payment]));
-  const openLeadsCount = leads.filter((lead) => {
-    const payment = paymentMap.get(Number(lead.booking_id));
-    const paymentState = bookingPaymentSummaryService.normalizePaymentSummaryState(payment, {
-      quoteTotal: payment?.quote_total,
-      paidAmount: payment?.paid_amount,
-      paymentStatus: lead.booking?.payment_id ? 'paid' : 'unpaid'
-    });
-    return !paymentState.isPaid;
-  }).length;
 
   const openQuotesCount = await db.sales_quotes.count({
     where: {
@@ -19602,7 +19586,7 @@ exports.getUserReassignments = async (req, res) => {
     const leadWhere = {
       assigned_sales_rep_id: user_id,
       is_active: 1,
-      lead_status: { [Op.notIn]: ['paid', 'closed_lost'] }
+      [Op.and]: Sequelize.literal(`(${openSalesLeadSql})`)
     };
     if (search) {
       leadWhere[Op.or] = [
@@ -19611,7 +19595,8 @@ exports.getUserReassignments = async (req, res) => {
       ];
     }
 
-    // Keep active leads that are not paid or closed lost.
+    // Use the same open status rule as the sales representative filters and
+    // the delete guard, including manual full payments and cancelled leads.
     const leads = await db.sales_leads.findAll({
       where: leadWhere,
 

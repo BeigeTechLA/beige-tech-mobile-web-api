@@ -23,6 +23,8 @@ const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { S3UploadFiles } = require('../utils/common.js');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
+const { resolveSalesLeadBookingStatus } = require('../utils/salesLeadBookingStatus');
+const { paidSalesLeadSql, closedLostSalesLeadSql } = require('../utils/salesLeadStatusFilters');
 
 const sequelize = require('../db');
 const db = require('../models');
@@ -2721,6 +2723,51 @@ exports.getLeads = async (req, res) => {
       (production_filter && String(production_filter).toLowerCase() !== 'all')
     );
 
+    // Resolve these statuses before loading the expensive lead associations.
+    // Otherwise a ten-row page enriches every lead in the database first.
+    const databaseStatusSql = activeStatusFilter === 'Paid'
+      ? paidSalesLeadSql
+      : activeStatusFilter === 'Closed - Lost'
+        ? closedLostSalesLeadSql
+        : null;
+    const useDatabaseStatusFilter = databaseStatusSql &&
+      !shootStatusRequested &&
+      !start_date && !end_date &&
+      (!intent || intent === 'All') &&
+      (!cp_assignment || String(cp_assignment).toLowerCase() === 'all') &&
+      (!production_filter || String(production_filter).toLowerCase() === 'all');
+
+    if (useDatabaseStatusFilter) {
+      const statusWhere = {
+        ...whereClause,
+        [Op.and]: Sequelize.literal(`(${databaseStatusSql})`)
+      };
+      const [total, leads] = await Promise.all([
+        sales_leads.count({ where: statusWhere }),
+        sales_leads.findAll({
+          where: statusWhere,
+          include: getSalesLeadListIncludes(),
+          order: [['created_at', 'DESC']],
+          limit: pageLimit,
+          offset,
+          distinct: true
+        })
+      ]);
+      const processedLeads = await mapWithConcurrency(
+        leads,
+        GET_LEADS_PROCESS_CONCURRENCY,
+        (lead) => processSalesLeadForList(lead, logContext)
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          leads: processedLeads,
+          pagination: { total, page: pageNumber, totalPages: Math.ceil(total / pageLimit) }
+        }
+      });
+    }
+
     if (!hasDerivedListFilters) {
       const databasePageStartedAt = Date.now();
       const [total, leads] = await Promise.all([
@@ -2936,7 +2983,7 @@ const normalizeBoardStatusLabel = (rawStatus) => {
 
 const normalizeLeadStatusFilterLabel = (rawStatus) => {
   const value = String(rawStatus || '')
-    .replace(/Ã¢â‚¬â€œ|â€”|â€“/g, '-')
+    .replace(/â€“|Ã¢â‚¬â€œ|â€”|â€“|[–—]/g, '-')
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -4432,33 +4479,15 @@ async function processSalesLeadForList(lead, context = {}) {
         booking: lead?.booking
       });
 
-    let computedBookingStatus =
-      leadAssignmentService.getLeadBookingStatus(
-        lead,
-        lead?.booking
-      );
     const paymentSummary = customQuoteFinancials?.payment_summary || null;
-    const summaryStatus = String(paymentSummary?.payment_status || '').trim().toLowerCase();
-    const summaryPaidAmount = parseFloat(paymentSummary?.paid_amount || 0);
-    const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
-
-    if (manualProgress.hasFullPayment) {
-      computedBookingStatus = 'Paid';
-    } else if (manualProgress.isPartiallyPaid) {
-      computedBookingStatus = 'Partially Paid';
-    } else if (
-      summaryStatus === 'paid' ||
-      (summaryPaidAmount > 0 && summaryDueAmount <= 0.009)
-    ) {
-      computedBookingStatus = 'Paid';
-    } else if (
-      (['partially_paid', 'partial_paid', 'approval_pending'].includes(summaryStatus) && summaryDueAmount > 0.009) ||
-      (summaryPaidAmount > 0 && summaryDueAmount > 0)
-    ) {
-      computedBookingStatus = 'Partially Paid';
-    } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
-      computedBookingStatus = 'Partially Paid';
-    }
+    const computedBookingStatus = resolveSalesLeadBookingStatus({
+      baseStatus: leadAssignmentService.getLeadBookingStatus(lead, lead?.booking),
+      leadStatus: lead?.lead_status,
+      bookingCancelled: lead?.booking?.is_cancelled,
+      manualProgress,
+      paymentSummary,
+      outstandingAdditionalPayment: hasOutstandingAdditionalPayment(customQuoteFinancials)
+    });
 
     const pLinks = leadJson.payment_links || [];
     let activePaymentLink = null;
