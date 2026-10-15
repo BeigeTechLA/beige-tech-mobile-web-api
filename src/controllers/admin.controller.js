@@ -15552,7 +15552,7 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
         const booking = lead.booking;
         const cpAssignmentLocked = await getCpAssignmentLock(booking.stream_project_booking_id);
-        if (cpAssignmentLocked) {
+        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
             return res.status(409).json({
                 success: false,
                 message: "All assigned CPs have accepted and their compensation has been approved. You cannot assign more CPs."
@@ -16824,7 +16824,7 @@ exports.assignProjectCrewBulk = async (req, res) => {
         }
 
         const cpAssignmentLocked = await getCpAssignmentLock(project_id);
-        if (cpAssignmentLocked) {
+        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
             return res.status(409).json({
                 success: false,
                 message: "All assigned CPs have accepted and their compensation has been approved. You cannot assign more CPs."
