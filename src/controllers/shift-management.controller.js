@@ -64,7 +64,7 @@ function normalizeQuoteStatusFilter(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, '_');
 }
 
-function mapLeadRow(row) {
+function mapLeadRow(row, paymentSummary = null) {
   const lead = row.toJSON ? row.toJSON() : row;
   const booking = lead.booking || null;
   const creativePartnerMap = new Map();
@@ -79,6 +79,16 @@ function mapLeadRow(row) {
     });
   });
   const creativePartners = Array.from(creativePartnerMap.values());
+  let bookingStatus = leadAssignmentService.getLeadBookingStatus(lead, booking);
+  if (paymentSummary) {
+    const paidAmount = Number(paymentSummary.paid_amount || 0) + Number(paymentSummary.credit_used_amount || 0);
+    const dueAmount = Number(paymentSummary.due_amount || 0);
+    if (paidAmount > 0 && dueAmount > 0.009) {
+      bookingStatus = 'Partially Paid';
+    } else if (paidAmount > 0 && dueAmount <= 0.009) {
+      bookingStatus = 'Paid';
+    }
+  }
 
   return {
     lead_id: lead.lead_id,
@@ -88,7 +98,7 @@ function mapLeadRow(row) {
     date: formatDisplayDate(lead.created_at),
     lead_type: formatLeadType(lead.lead_type),
     intent: leadAssignmentService.getLeadIntent({ lead, booking }),
-    booking_status: leadAssignmentService.getLeadBookingStatus(lead, booking),
+    booking_status: bookingStatus,
     raw_booking_status: lead.lead_status,
     last_activity: formatRelativeTime(lead.last_activity_at),
     last_activity_at: lead.last_activity_at,
@@ -516,7 +526,23 @@ exports.salesRepLeads = async (req, res) => {
       order: [['created_at', 'DESC']],
       ...(shouldFilterDerivedIntent || shouldFilterDerivedStatus ? {} : { limit, offset })
     });
-    const mappedRows = result.rows.map(mapLeadRow);
+    const bookingIds = [...new Set(result.rows.map((row) => Number(row.booking_id)).filter((id) => id > 0))];
+    const paymentSummaryByBookingId = new Map();
+    if (bookingIds.length) {
+      const summaries = await models.sequelize.query(
+        `SELECT booking_id, paid_amount, credit_used_amount, due_amount
+         FROM booking_payment_summary
+         WHERE booking_id IN (:bookingIds)`,
+        {
+          replacements: { bookingIds },
+          type: models.Sequelize.QueryTypes.SELECT
+        }
+      );
+      summaries.forEach((summary) => paymentSummaryByBookingId.set(Number(summary.booking_id), summary));
+    }
+    const mappedRows = result.rows.map((row) => (
+      mapLeadRow(row, paymentSummaryByBookingId.get(Number(row.booking_id)) || null)
+    ));
     const filteredRows = mappedRows.filter((row) => {
       if (shouldFilterDerivedIntent && String(row.intent || '').toLowerCase() !== intentFilter) return false;
       if (shouldFilterDerivedStatus && normalizeStatusLabel(row.booking_status || row.raw_booking_status) !== statusFilter) return false;

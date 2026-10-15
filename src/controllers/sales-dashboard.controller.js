@@ -20,6 +20,7 @@ const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const salesQuoteService = require('../services/sales-quote.service');
 
 function parseQuoteRequestMetadata(value) {
   if (!value) return null;
@@ -2249,6 +2250,7 @@ async function reviewQuoteChangeRequest(req, res, decision) {
     };
 
     if (decision === 'approve') {
+      await salesQuoteService.applyPendingQuoteChange(salesQuoteId, activityId);
       nextMetadata.approved_at = reviewedAt;
       nextMetadata.approved_by_user_id = req.userId || null;
     } else {
