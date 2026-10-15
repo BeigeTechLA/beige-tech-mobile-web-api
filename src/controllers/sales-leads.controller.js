@@ -589,9 +589,17 @@ function hasOutstandingAdditionalPayment(customQuoteFinancials = null) {
 }
 
 function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, customQuoteFinancials = null }) {
-  const summaryStatus = String(customQuoteFinancials?.payment_summary?.payment_status || '').toLowerCase();
-  const summaryApprovalStatus = String(customQuoteFinancials?.payment_summary?.last_quote_change_status || '').toLowerCase();
-  if (summaryStatus && (!summaryApprovalStatus || summaryApprovalStatus === 'approved')) {
+  const paymentSummary = customQuoteFinancials?.payment_summary || null;
+  const summaryStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+  if (summaryStatus) {
+    const approvalStatus = String(paymentSummary.last_quote_change_status || '').toLowerCase();
+    if (approvalStatus === 'pending' || approvalStatus === 'rejected') {
+      const paidAmount = parseFloat(paymentSummary.paid_amount || 0) + parseFloat(paymentSummary.credit_used_amount || 0);
+      const dueAmount = parseFloat(paymentSummary.due_amount || 0);
+      if (dueAmount <= 0.009 && paidAmount > 0) return 'paid';
+      if (paidAmount > 0 && dueAmount > 0.009) return 'partially_paid';
+      if (dueAmount > 0.009) return 'unpaid';
+    }
     return summaryStatus;
   }
 
@@ -609,8 +617,7 @@ function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, cu
 
 function resolveLeadQuoteAmounts({ linkedSalesQuote = null, booking = null, customQuoteFinancials = null }) {
   const paymentSummary = customQuoteFinancials?.payment_summary || null;
-  const paymentSummaryStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
-  if (paymentSummary && (!paymentSummaryStatus || paymentSummaryStatus === 'approved')) {
+  if (paymentSummary) {
     return {
       collected_amount: parseFloat(paymentSummary.paid_amount || 0),
       outstanding_amount: parseFloat(paymentSummary.due_amount || 0)
@@ -3445,10 +3452,8 @@ exports.getLeadById = async (req, res) => {
     let creditApplied = 0;
     let totalPaid = null;
     const paymentSummary = customQuoteFinancials?.payment_summary || null;
-    const paymentSummaryChangeStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
-    const canUsePaymentSummaryChange = !paymentSummaryChangeStatus || paymentSummaryChangeStatus === 'approved';
 
-    if (paymentSummary && canUsePaymentSummaryChange) {
+    if (paymentSummary) {
       creditApplied = parseFloat(paymentSummary.credit_used_amount || 0);
       totalPaid = parseFloat(paymentSummary.paid_amount || 0);
     } else if (leadJson.booking?.payment_id) {
@@ -4391,13 +4396,16 @@ async function processSalesLeadForList(lead, context = {}) {
     const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
 
     if (manualProgress.hasFullPayment) {
-      computedBookingStatus = 'Booked';
+      computedBookingStatus = 'Paid';
     } else if (manualProgress.isPartiallyPaid) {
       computedBookingStatus = 'Partially Paid';
-    } else if (summaryStatus === 'paid') {
+    } else if (
+      summaryStatus === 'paid' ||
+      (summaryPaidAmount > 0 && summaryDueAmount <= 0.009)
+    ) {
       computedBookingStatus = 'Paid';
     } else if (
-      ['partially_paid', 'partial_paid', 'approval_pending'].includes(summaryStatus) ||
+      (['partially_paid', 'partial_paid', 'approval_pending'].includes(summaryStatus) && summaryDueAmount > 0.009) ||
       (summaryPaidAmount > 0 && summaryDueAmount > 0)
     ) {
       computedBookingStatus = 'Partially Paid';
