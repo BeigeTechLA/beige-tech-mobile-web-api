@@ -96,6 +96,7 @@ router.post('/admin/credit-points/manual', authenticate, adminFinanceCreditPoint
 router.get('/admin/credit-points/export', authenticate, adminFinanceCreditPointsView, financeController.listAdminCreditPointTransactions);
 router.get('/cp-compensation/pending-shoots', authenticate, adminFinanceCpCompensationView, cpCompensationController.listPendingShoots);
 router.get('/cp-compensation/overview', authenticate, adminFinanceCpCompensationView, cpCompensationController.overview);
+router.get('/cp-compensation/calendar', authenticate, adminFinanceCpCompensationView, cpCompensationController.calendar);
 router.get('/cp-compensation', authenticate, adminFinanceCpCompensationView, cpCompensationController.list);
 router.post('/cp-compensation/payment-proof', authenticate, adminFinanceCpCompensationCreate, cpReceiptUpload.single('proof_file'), cpCompensationController.uploadPaymentProof);
 router.patch('/cp-compensation/:bookingId/due-date', authenticate, adminFinanceCpCompensationEdit, cpCompensationController.updateDueDate);

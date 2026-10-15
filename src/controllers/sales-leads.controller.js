@@ -5115,6 +5115,160 @@ exports.recordManualPayment = async (req, res) => {
   }
 };
 
+const editManualPaymentAmount = async ({ leadModel, activityModel, req, res }) => {
+  const { id: leadId, paymentId } = req.params;
+  const newAmount = Number(req.body?.amount);
+
+  if (!Number.isFinite(newAmount) || newAmount < 0) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'amount must be a valid number (0 or more)'
+    });
+  }
+
+  const lead = await leadModel.findOne({ where: { lead_id: leadId, is_active: 1 } });
+  if (!lead) {
+    return res.status(constants.NOT_FOUND.code).json({ success: false, message: 'Lead not found' });
+  }
+
+  // NOTE: change `id` below if your booking_manual_payments primary key has another name
+  const [row] = await db.sequelize.query(
+    `SELECT * FROM booking_manual_payments WHERE booking_manual_payment_id = :paymentId AND lead_id = :leadId LIMIT 1`,
+    { replacements: { paymentId: Number(paymentId), leadId: Number(leadId) }, type: Sequelize.QueryTypes.SELECT }
+  );
+  if (!row) {
+    return res.status(constants.NOT_FOUND.code).json({ success: false, message: 'Manual payment not found' });
+  }
+
+  const bookingId = Number(row.booking_id);
+  const oldAmount = Number(row.amount || 0);
+  const delta = newAmount - oldAmount;
+
+  const summary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const quoteTotal = Number(summary?.quote_total || 0);
+  const creditUsed = Number(summary?.credit_used_amount || 0);
+  const paidAfter = Math.max(Number(summary?.paid_amount || 0) + delta, 0);
+
+  if (quoteTotal > 0 && paidAfter + creditUsed > quoteTotal + 0.009) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'Edited amount would exceed the quote total'
+    });
+  }
+
+  const isNowFull = quoteTotal > 0 && paidAfter + creditUsed >= quoteTotal - 0.009;
+  const nextType = isNowFull ? 'full' : 'partial';
+
+  await db.sequelize.query(
+    `UPDATE booking_manual_payments SET amount = :amount, payment_type = :paymentType WHERE booking_manual_payment_id = :paymentId`,
+    { replacements: { amount: newAmount, paymentType: nextType, paymentId: Number(paymentId) }, type: Sequelize.QueryTypes.UPDATE }
+  );
+
+  await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    leadId: Number(leadId),
+    salesQuoteId: summary?.sales_quote_id || row.sales_quote_id || null,
+    quoteTotal,
+    paidAmount: paidAfter,
+    creditUsedAmount: creditUsed,
+    creditCreatedAmount: Number(summary?.credit_created_amount || 0),
+    manualPaymentMode: row.payment_mode,
+    manualPaymentOtherMode: row.other_payment_mode,
+    manualPaymentProofUrl: row.proof_url,
+    manualPaymentProofFilePath: row.proof_file_path,
+    manualPaymentProofFileName: row.proof_file_name,
+    manualPaymentNotes: row.notes,
+    manualPaymentUpdatedByUserId: req.userId || null,
+    manualPaymentUpdatedAt: new Date(),
+    lastQuoteChangeType: summary?.last_quote_change_type || 'none',
+    lastQuoteChangeAmount: Number(summary?.last_quote_change_amount || 0),
+    lastQuoteChangeStatus: summary?.last_quote_change_status || 'none',
+  });
+
+  // Keep the activity log in sync (the UI reads paid status from it)
+  const activities = await activityModel.findAll({
+    where: { lead_id: Number(leadId), activity_type: 'payment_completed' }
+  });
+  for (const activity of activities) {
+    const data = parseJsonIfNeeded(activity.activity_data);
+    if (Number(data?.booking_manual_payment_id) === Number(paymentId)) {
+      await activity.update({
+        activity_data: {
+          ...data,
+          amount: newAmount,
+          payment_type: nextType,
+          paid_amount_after: paidAfter,
+          remaining_after_payment: Math.max(quoteTotal - paidAfter - creditUsed, 0),
+          edited_from_amount: oldAmount,
+          edited_by: req.userId || null,
+          edited_at: new Date().toISOString()
+        }
+      });
+    }
+  }
+
+  // Only one entry can be the "full" one: demote every other manual 'full' entry to 'partial'
+  await db.sequelize.query(
+    `UPDATE booking_manual_payments
+     SET payment_type = 'partial'
+     WHERE booking_id = :bookingId
+       AND payment_type = 'full'
+       AND booking_manual_payment_id <> :paymentId`,
+    { replacements: { bookingId, paymentId: Number(paymentId) }, type: Sequelize.QueryTypes.UPDATE }
+  );
+  for (const activity of activities) {
+    const data = parseJsonIfNeeded(activity.activity_data);
+    if (
+      data?.payment_method === 'manual' &&
+      data?.payment_type === 'full' &&
+      Number(data?.booking_manual_payment_id) !== Number(paymentId)
+    ) {
+      await activity.update({ activity_data: { ...data, payment_type: 'partial' } });
+    }
+  }
+
+  if (isNowFull) await lead.update({ lead_status: 'booked', last_activity_at: new Date() });
+  else await lead.update({ last_activity_at: new Date() });
+
+  return res.json({
+    success: true,
+    message: 'Manual payment amount updated',
+    data: {
+      lead_id: Number(leadId),
+      paid_amount_total: paidAfter,
+      pending_amount: Math.max(quoteTotal - paidAfter - creditUsed, 0),
+      payment_type: nextType
+    }
+  });
+};
+
+const SUPER_ADMIN_ROLES = ['super_admin', 'superadmin', 'super admin'];
+
+exports.editManualPaymentAmount = async (req, res) => {
+  try {
+    const role = String(req.userRole || req.user?.userRole || '').trim().toLowerCase();
+    if (!SUPER_ADMIN_ROLES.includes(role)) {
+      return res.status(constants.FORBIDDEN?.code || 403).json({
+        success: false,
+        message: 'Only a super admin can edit a recorded manual payment'
+      });
+    }
+
+    return await editManualPaymentAmount({
+      leadModel: sales_leads,
+      activityModel: sales_lead_activities,
+      req,
+      res
+    });
+  } catch (error) {
+    console.error('Error editing manual payment:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to edit manual payment'
+    });
+  }
+};
+
 exports.recordClientManualPayment = async (req, res) => {
   try {
     const { id } = req.params;

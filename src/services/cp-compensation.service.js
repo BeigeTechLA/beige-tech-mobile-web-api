@@ -1803,6 +1803,7 @@ async function listCpCompensations(filters = {}) {
       const paymentSummary = paymentSummaryByBookingId.get(bookingId) || {};
       const shootAmount = await resolveShootAmountLikeShoots(booking, breakdown, paymentSummary);
       const cpPayout = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
+      const paymentState = await getCompensationPaymentState(earning);
       const marginAmount = toMoney(Math.max(shootAmount - cpPayout, 0));
       const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
       const status = await buildCompensationStatus([earning]);
@@ -1821,6 +1822,9 @@ async function listCpCompensations(filters = {}) {
         customer: buildCustomer(booking),
         shoot_amount: shootAmount,
         cp_payout: cpPayout,
+        advance_paid: paymentState.advance_paid,
+        paid_total: paymentState.paid_total,
+        remaining_balance: paymentState.remaining_balance,
         margin_amount: marginAmount,
         margin_percent: marginPercent,
         status,

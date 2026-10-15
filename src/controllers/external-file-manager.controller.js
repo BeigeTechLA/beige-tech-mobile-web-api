@@ -3455,7 +3455,11 @@ const getWorkspaceSearchMetadataByExternalIds = async (externalIds = []) => {
     (Array.isArray(rows) ? rows : []).map((row) => [
       String(row.stream_project_booking_id),
       {
-        projectName: row.project_name || '',
+        // Keep File Manager consistent with the name shown in the Shoots
+        // module. For example, "CUSTOM Shoot - Nerdstage" is displayed as
+        // "CUSTOM - Nerdstage" there.
+        projectName: String(row.project_name || '').replace(/^CUSTOM Shoot\b/i, 'CUSTOM'),
+        rawProjectName: row.project_name || '',
         clientName: row.client_name || row.user_name || '',
         clientEmail: row.client_email || row.user_email || row.guest_email || '',
       },
@@ -4505,10 +4509,13 @@ exports.listWorkspaces = async (req, res) => {
       );
     }
 
+    let workspaceSearchMetadata = new Map();
+    let hasWorkspaceSearchMetadata = false;
     if (search) {
-      const workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
+      workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
         filteredWorkspaces.map((workspace) => workspace?.externalId)
       );
+      hasWorkspaceSearchMetadata = true;
 
       filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
         const folderName = String(workspace.folderName || '').toLowerCase();
@@ -4516,6 +4523,7 @@ exports.listWorkspaces = async (req, res) => {
         const eventName = String(workspace.eventName || '').toLowerCase();
         const bookingSearchMetadata = workspaceSearchMetadata.get(String(workspace.externalId || '').trim()) || {};
         const projectName = String(bookingSearchMetadata.projectName || '').toLowerCase();
+        const rawProjectName = String(bookingSearchMetadata.rawProjectName || '').toLowerCase();
         const clientName = String(bookingSearchMetadata.clientName || '').toLowerCase();
         const clientEmail = String(bookingSearchMetadata.clientEmail || '').toLowerCase();
 
@@ -4524,11 +4532,30 @@ exports.listWorkspaces = async (req, res) => {
           externalId.includes(search) ||
           eventName.includes(search) ||
           projectName.includes(search) ||
+          rawProjectName.includes(search) ||
           clientName.includes(search) ||
           clientEmail.includes(search)
         );
       });
     }
+
+    // Keep the source shoot information alongside a workspace display label.
+    // A display label is intentionally editable in File Manager, whereas the
+    // project name is the canonical, current name shown in Shoots.
+    if (!hasWorkspaceSearchMetadata) {
+      workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
+        filteredWorkspaces.map((workspace) => workspace?.externalId)
+      );
+    }
+    filteredWorkspaces = filteredWorkspaces.map((workspace) => {
+      const metadata = workspaceSearchMetadata.get(String(workspace?.externalId || '').trim());
+      if (!metadata?.projectName) return workspace;
+
+      return {
+        ...workspace,
+        projectName: metadata.projectName,
+      };
+    });
     filteredWorkspaces = [...filteredWorkspaces].sort((a, b) => {
       const diff = getWorkspaceUpdatedTimestamp(b) - getWorkspaceUpdatedTimestamp(a);
       if (diff !== 0) return diff;
