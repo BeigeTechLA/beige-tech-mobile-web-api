@@ -22,6 +22,7 @@ const accountCreditService = require('./account-credit.service');
 const paymentLinksService = require('./payment-links.service');
 const bookingPaymentSummaryService = require('./booking-payment-summary.service');
 const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
+const { paidQuoteSql, partiallyPaidQuoteSql, resolveCurrentQuotePaymentStatus } = require('../utils/quotePaymentStatusFilter');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -845,6 +846,23 @@ function appendAndCondition(where, condition) {
   return where;
 }
 
+function applyQuoteStatusFilter(where, rawStatus) {
+  const status = String(rawStatus || '').trim().toLowerCase();
+  if (status === 'paid' || status === 'partially_paid') {
+    return appendAndCondition(where, db.sequelize.literal(
+      `(${status === 'paid' ? paidQuoteSql : partiallyPaidQuoteSql})`
+    ));
+  }
+
+  const statusFilter = normalizeQuoteFilterStatus(rawStatus);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
+  }
+  return where;
+}
+
 function applyQuoteSalesRepFilter(where, assignedSalesRepId, user) {
   if (!assignedSalesRepId) {
     return where;
@@ -914,12 +932,7 @@ function buildQuoteListWhere(query, user) {
     ? { ...buildQuoteAccessWhere(user) }
     : {};
 
-  const statusFilter = normalizeQuoteFilterStatus(query.status);
-  if (statusFilter?.length) {
-    appendAndCondition(where, {
-      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
-    });
-  }
+  applyQuoteStatusFilter(where, query.status);
 
   applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
 
@@ -6757,17 +6770,24 @@ async function listQuotes(query, user) {
     const resolvedManualPaymentSummary = financialDetails?.manual_payment_summary || manualPaymentSummary;
     const hasSummaryManualFullPayment = Boolean(resolvedManualPaymentSummary?.hasFullPayment);
     const hasSummaryManualPartialPayment = Boolean(resolvedManualPaymentSummary?.isPartiallyPaid);
-    const finalPaymentStatus = hasSummaryManualFullPayment
-      ? 'paid'
-      : hasSummaryManualPartialPayment
-        ? 'partially_paid'
-        : resolvedPaymentStatus;
-    const finalCollectedAmount = hasSummaryManualFullPayment || hasSummaryManualPartialPayment
-      ? resolvedManualPaymentSummary.paidAmount
-      : resolvedCollectedAmount;
-    const finalOutstandingAmount = hasSummaryManualFullPayment || hasSummaryManualPartialPayment
-      ? resolvedManualPaymentSummary.pendingAmount
-      : resolvedOutstandingAmount;
+    const currentSummary = financialDetails?.payment_summary || null;
+    const summaryDue = roundCurrency(currentSummary?.due_amount || 0);
+    const fallbackPaymentStatus = hasSummaryManualFullPayment
+        ? 'paid'
+        : hasSummaryManualPartialPayment
+          ? 'partially_paid'
+          : resolvedPaymentStatus;
+    const finalPaymentStatus = resolveCurrentQuotePaymentStatus(currentSummary, fallbackPaymentStatus);
+    const finalCollectedAmount = currentSummary
+      ? roundCurrency(currentSummary.paid_amount || 0)
+      : hasSummaryManualFullPayment || hasSummaryManualPartialPayment
+        ? resolvedManualPaymentSummary.paidAmount
+        : resolvedCollectedAmount;
+    const finalOutstandingAmount = currentSummary
+      ? summaryDue
+      : hasSummaryManualFullPayment || hasSummaryManualPartialPayment
+        ? resolvedManualPaymentSummary.pendingAmount
+        : resolvedOutstandingAmount;
     const openedAt = new Date(plain.sent_at || plain.created_at);
     const isClosed = ['paid', 'rejected', 'expired'].includes(String(plain.status || '').toLowerCase()) || finalPaymentStatus === 'paid';
     const closedAt = isClosed ? new Date(plain.updated_at || Date.now()) : new Date();
@@ -6787,7 +6807,9 @@ async function listQuotes(query, user) {
       latest_change_log: buildQuoteChangeLogs(changeLogsByQuote[Number(plain.sales_quote_id || 0)] || [])[0] || null,
       change_log_count: buildQuoteChangeLogs(changeLogsByQuote[Number(plain.sales_quote_id || 0)] || []).length,
       payment_status: finalPaymentStatus,
-      is_collected: hasSummaryManualFullPayment ? true : (hasManualFullPayment ? true : billingState.is_collected),
+      is_collected: currentSummary
+        ? finalPaymentStatus === 'paid'
+        : (hasSummaryManualFullPayment ? true : (hasManualFullPayment ? true : billingState.is_collected)),
       collected_amount: finalCollectedAmount,
       outstanding_amount: finalOutstandingAmount,
       payment: {
@@ -6866,12 +6888,7 @@ async function getQuoteDashboard(query, user) {
     ? { ...buildQuoteAccessWhere(user) }
     : {};
 
-  const statusFilter = normalizeQuoteFilterStatus(query.status);
-  if (statusFilter?.length) {
-    appendAndCondition(where, {
-      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
-    });
-  }
+  applyQuoteStatusFilter(where, query.status);
 
   applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
 
