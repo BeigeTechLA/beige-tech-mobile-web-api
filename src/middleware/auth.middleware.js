@@ -22,6 +22,7 @@ exports.authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const user = await auth.validatePermissionVersion(decoded);
+    if (await auth.rejectExpiredPassword(req, res, user)) return;
 
     // Attach user info to request
     req.userId = decoded.userId;
@@ -32,6 +33,7 @@ exports.authenticate = async (req, res, next) => {
       userId: decoded.userId,
       userTypeId: decoded.userTypeId,
       userRole: decoded.userRole,
+      sessionId: decoded.sessionId,
       isInternalMember: req.isInternalMember
     };
 
@@ -54,7 +56,9 @@ exports.authenticate = async (req, res, next) => {
 
     if (
       error.message === 'PERMISSION_CHANGED' ||
-      error.message === 'USER_NOT_FOUND'
+      error.message === 'USER_NOT_FOUND' ||
+      error.message === 'SESSION_REVOKED' ||
+      error.message === 'INVALID_TOKEN_TYPE'
     ) {
       return res.status(401).json({
         success: false,
@@ -109,7 +113,8 @@ exports.optionalAuth = async (req, res, next) => {
 
     const token = authHeader.substring(7);
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
+    const user = await auth.validatePermissionVersion(decoded);
+    if (await auth.rejectExpiredPassword(req, res, user)) return;
     req.userId = decoded.userId;
     req.userRole = decoded.userRole;
 

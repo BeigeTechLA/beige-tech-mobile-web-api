@@ -482,6 +482,10 @@ router.put('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingEdi
 router.delete('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteCatalogItem);
 
 router.get('/quotes/dashboard', authenticate, adminQuotesView, salesQuotesController.getQuoteDashboard);
+router.get('/quotes/analytics/filters', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalyticsFilters);
+router.get('/quotes/analytics/quotes', authenticate, adminQuotesView, salesQuotesController.listQuoteAnalyticsCards);
+router.get('/quotes/analytics/reps/:salesRepId', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalyticsByRep);
+router.get('/quotes/analytics', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalytics);
 router.get('/quotes', authenticate, adminQuotesView, salesQuotesController.listQuotes);
 router.get(
   '/quotes/export',

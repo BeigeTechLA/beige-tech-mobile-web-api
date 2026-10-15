@@ -39,9 +39,12 @@ router.post('/logout', authController.logout);
 
 // ===== PASSWORD MANAGEMENT =====
 router.post('/forgot-password', authController.forgotPassword);
+router.post('/forgot-password/request-otp', authController.requestForgotPasswordOtp);
+router.post('/forgot-password/verify-otp', authController.verifyForgotPasswordOtp);
+router.post('/forgot-password/reset', authController.resetForgottenPassword);
 router.post('/reset-password', authController.resetPassword);
 router.post('/admin/generate-reset-link', authController.generateUserResetLinkForAdmin);
-router.post('/change-password', authController.changePassword);
+router.post('/change-password', authenticate, authController.changePassword);
 
 // ===== PERMISSIONS =====
 router.get('/permissions/:role', authController.getPermissions);
@@ -54,11 +57,15 @@ router.get('/permissions/:role', authController.getPermissions);
 
 // GET /auth/me - Get current user info
 router.get('/me', authenticate, authController.getCurrentUser);
+router.patch('/timezone', authenticate, authController.updateTimezone);
 router.get('/onboarding-status', authenticate, authController.getOnboardingStatus);
 router.post('/cp-event-location/confirm', authenticate, authController.confirmCpEventLocation);
 router.post('/admin/create-internal-credential', authenticate, adminUsersCreate, authController.createInternalCredential);
 
 router.post('/change-password-client', authenticate, clientFinancesEdit, authController.changePasswordclient);
 router.post('/change-password-crew', authenticate, authController.changePasswordCrewMember);
+router.post('/password-expiry/request-otp', authenticate, authController.requestPasswordExpiryOtp);
+router.post('/password-expiry/verify-otp', authenticate, authController.verifyPasswordExpiryOtp);
+router.post('/password-expiry/change', authenticate, authController.changeExpiredPassword);
 
 module.exports = router;
