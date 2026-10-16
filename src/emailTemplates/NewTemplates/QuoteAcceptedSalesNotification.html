@@ -173,6 +173,27 @@
       }
     }
   </style>
+
+  <!-- MOBILE: put Client Email, Project Description and Location values on their own line.
+       Kept in its own <style> block so Gmail doesn't discard it along with the Outlook selectors. -->
+  <style>
+    @media only screen and (max-width: 620px) {
+      .stack-cell {
+        display: block !important;
+        width: 100% !important;
+      }
+
+      .stack-label-cell {
+        padding-bottom: 6px !important;
+      }
+
+      .stack-value-text {
+        text-align: left !important;
+        word-break: break-word !important;
+        overflow-wrap: anywhere !important;
+      }
+    }
+  </style>
 </head>
 
 <body
@@ -305,13 +326,13 @@
                                           <td style="padding: 15px 0 0;">
                                             <table width="100%" cellpadding="0" cellspacing="0">
                                               <tr>
-                                                <td style="padding-bottom: 15px;">
+                                                <td class="stack-cell stack-label-cell" style="padding-bottom: 15px;">
                                                   <div class="muted-label"
                                                     style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
                                                     Client Email</div>
                                                 </td>
-                                                <td style="padding-bottom: 15px;">
-                                                  <div class="dark-text"
+                                                <td class="stack-cell" style="padding-bottom: 15px;">
+                                                  <div class="dark-text stack-value-text"
                                                     style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
                                                     {{client_email}}</div>
                                                 </td>
@@ -377,13 +398,13 @@
                                           <td style="padding: 15px 0 0;">
                                             <table width="100%" cellpadding="0" cellspacing="0">
                                               <tr>
-                                                <td style="padding-bottom: 15px;">
+                                                <td class="stack-cell stack-label-cell" style="padding-bottom: 15px;">
                                                   <div class="muted-label"
                                                     style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
                                                     Project Description</div>
                                                 </td>
-                                                <td style="padding-bottom: 15px;">
-                                                  <div class="dark-text"
+                                                <td class="stack-cell" style="padding-bottom: 15px;">
+                                                  <div class="dark-text stack-value-text"
                                                     style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
                                                     {{project_description}}</div>
                                                 </td>
@@ -401,13 +422,13 @@
                                           <td style="padding: 15px 0 0;">
                                             <table width="100%" cellpadding="0" cellspacing="0">
                                               <tr>
-                                                <td style="padding-bottom: 15px;">
+                                                <td class="stack-cell stack-label-cell" style="padding-bottom: 15px;">
                                                   <div class="muted-label"
                                                     style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
                                                     Location</div>
                                                 </td>
-                                                <td style="padding-bottom: 15px;">
-                                                  <div class="dark-text"
+                                                <td class="stack-cell" style="padding-bottom: 15px;">
+                                                  <div class="dark-text stack-value-text"
                                                     style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
                                                     {{location}}</div>
                                                 </td>
