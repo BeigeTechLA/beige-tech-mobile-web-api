@@ -114,6 +114,18 @@ const recordSuccessfulLogin = async (req, user, loginMethod, token, sessionExpir
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(getGoogleClientId());
 
+const normalizeIanaTimezone = (value) => {
+  const timezone = String(value || '').trim();
+  if (!timezone) return null;
+
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch (_) {
+    return null;
+  }
+};
+
 const findCreatorTypeId = async (transaction = null) => {
   const creatorType = await user_type.findOne({
     where: {
@@ -696,6 +708,7 @@ async function buildAuthenticatedUserResponse(user, req, res, loginMethod = 'goo
       is_registration_complete,
       temp_event_popup,
       permissions_version: user.permissions_version,
+      timezone: user.timezone || null,
       has_password: Boolean(user.password_hash)
     }
   };
@@ -1262,7 +1275,8 @@ exports.logout = webSessionService.logout;
  */
 exports.login = async (req, res) => {
   try {
-    const { email, password, mobile, otp } = req.body;
+    const { email, password, mobile, otp, timezone: requestedTimezone } = req.body;
+    const loginTimezone = normalizeIanaTimezone(requestedTimezone);
 
     // EMAIL/PASSWORD LOGIN
     if (email) {
@@ -1328,6 +1342,10 @@ exports.login = async (req, res) => {
         });
       }
 
+      if (!user.timezone && loginTimezone) {
+        await user.update({ timezone: loginTimezone, updated_at: new Date() });
+      }
+
       // Get user role
       const role = user.userType?.user_role || "client";
       const user_type_id = user.userType?.user_type_id || null;
@@ -1387,6 +1405,7 @@ exports.login = async (req, res) => {
           is_registration_complete,
         temp_event_popup,
           permissions_version: user.permissions_version,
+          timezone: user.timezone || null,
           has_password: Boolean(user.password_hash)
         },
         token,
@@ -1474,6 +1493,10 @@ exports.login = async (req, res) => {
         });
       }
 
+      if (!user.timezone && loginTimezone) {
+        await user.update({ timezone: loginTimezone, updated_at: new Date() });
+      }
+
       // Clear OTP code (otp_expiry left as-is since it doesn't allow null)
       await User.update(
         { otp_code: null },
@@ -1537,6 +1560,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           is_registration_complete,
           temp_event_popup,
           permissions_version: user.permissions_version,
+          timezone: user.timezone || null,
           has_password: Boolean(user.password_hash)
         },
 
@@ -1567,8 +1591,10 @@ exports.googleLogin = async (req, res) => {
       credential,
       mode = 'login',
       phone_number,
-      account_type = 'client'
+      account_type = 'client',
+      timezone: requestedTimezone
     } = req.body;
+    const loginTimezone = normalizeIanaTimezone(requestedTimezone);
     const idToken = googleToken || credential;
     const googleClientId = getGoogleClientId();
     const isSignup = mode === 'signup';
@@ -1925,6 +1951,10 @@ exports.googleLogin = async (req, res) => {
         phoneNumber: user.phone_number || normalizedPhone,
         userId: user.id
       });
+    }
+
+    if (!user.timezone && loginTimezone) {
+      await user.update({ timezone: loginTimezone, updated_at: new Date() });
     }
 
     const authPayload = await buildAuthenticatedUserResponse(user, req, res);
@@ -2298,6 +2328,7 @@ exports.getCurrentUser = async (req, res) => {
         is_crew_verified: crewMember?.is_crew_verified || null,
         is_registration_complete: crewMember?.is_registration_complete ?? null,
         temp_event_popup: getTempCpEventPopup(crewMember),
+        timezone: user.timezone || null,
         has_password: Boolean(user.password_hash)
       },
       permissions
@@ -2310,6 +2341,29 @@ exports.getCurrentUser = async (req, res) => {
       message: 'Server error fetching user info',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+exports.updateTimezone = async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    const timezone = normalizeIanaTimezone(req.body?.timezone);
+    const onlyIfMissing = req.body?.only_if_missing === true;
+
+    if (!userId) return res.status(401).json({ success: false, message: 'Not authenticated' });
+    if (!timezone) return res.status(400).json({ success: false, message: 'timezone must be a valid IANA timezone' });
+
+    const user = await User.findByPk(userId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (!onlyIfMissing || !user.timezone) {
+      await user.update({ timezone, updated_at: new Date() });
+    }
+
+    return res.status(200).json({ success: true, message: 'Timezone saved successfully', timezone: user.timezone || timezone });
+  } catch (error) {
+    console.error('Update Timezone Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to save timezone' });
   }
 };
 

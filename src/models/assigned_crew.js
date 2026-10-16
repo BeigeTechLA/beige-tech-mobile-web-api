@@ -60,6 +60,22 @@ module.exports = function(sequelize, DataTypes) {
     new_booking_email_sent_at: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+     google_calendar_event_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    google_calendar_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    google_calendar_synced_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    google_calendar_sync_error: {
+      type: DataTypes.TEXT,
+      allowNull: true
     }
   }, {
     sequelize,

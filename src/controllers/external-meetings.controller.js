@@ -111,7 +111,9 @@ const toCalendarDateTime = (value) => {
 };
 
 const normalizeRole = (value) => String(value || '').trim().toLowerCase();
-const MEETING_PUSH_ROLES = new Set(['client', 'cp', 'creator', 'creative']);
+const MEETING_PUSH_ROLES = new Set([
+  'client', 'cp', 'creator', 'creative', 'admin', 'sales_rep', 'sales_admin', 'production_manager', 'pm', 'participant',
+]);
 
 const isAdminLikeRole = (role) =>
   ['admin', 'administrator', 'production_manager', 'pm', 'sales_admin'].includes(normalizeRole(role));
@@ -119,7 +121,7 @@ const isAdminLikeRole = (role) =>
 const getRequestUserId = (req) => req.user?.userId || null;
 const getRequestUserRole = (req) => normalizeRole(req.user?.userRole || '');
 const getParticipantKey = (participant) =>
-  String(participant?.id || participant?.email || participant?.name || '').trim();
+  String(participant?.email ? `email:${String(participant.email).trim().toLowerCase()}` : participant?.id || participant?.name || '').trim();
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
 const truncateText = (value, maxLength = 120) => {
@@ -210,69 +212,56 @@ const normalizeMeetingPushUserId = (value = {}) => {
 const getMeetingParticipantPushUserId = async (participant = {}, booking = null) => {
   const role = normalizeRole(participant?.role);
   if (!MEETING_PUSH_ROLES.has(role)) return null;
+  const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
+  const email = normalizeEmail(participant?.email || (role === 'client' ? plainBooking?.guest_email || plainBooking?.user?.email : ''));
+  const userType = role === 'client' ? 3 : ['cp', 'creator', 'creative'].includes(role) ? 2 : null;
 
-  if (role === 'client') {
-    const directUserId = normalizeMeetingPushUserId(participant);
-    if (directUserId) return directUserId;
-
-    const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
-    const bookingUserId = normalizeMeetingPushUserId(plainBooking?.user) ||
-      normalizeMeetingPushUserId({ id: plainBooking?.user_id }) ||
-      normalizeMeetingPushUserId(plainBooking?.cms_project?.client);
-    if (bookingUserId) return bookingUserId;
-
-    const email = normalizeEmail(participant?.email || plainBooking?.guest_email || plainBooking?.user?.email);
-    if (!email) return null;
-
+  // Email identifies the intended person; numeric crew, client, and login IDs overlap.
+  if (email) {
     const user = await db.users.findOne({
-      where: { email, user_type: 3, is_active: 1 },
-      attributes: ['id'],
-      raw: true,
+      where: { email, is_active: 1, ...(userType ? { user_type: userType } : {}) },
+      attributes: ['id'], raw: true,
     });
     return normalizeMeetingPushUserId(user);
   }
 
-  const directCpUserId = participant?.user_id || participant?.userId;
-  if (normalizeMeetingPushUserId({ id: directCpUserId })) {
-    return normalizeMeetingPushUserId({ id: directCpUserId });
+  const directUserId = toPositiveInt(participant?.user_id || participant?.userId || participant?.id);
+  if (directUserId) {
+    const user = await db.users.findOne({
+      where: { id: directUserId, is_active: 1, ...(userType ? { user_type: userType } : {}) },
+      attributes: ['id'], raw: true,
+    });
+    if (user) return normalizeMeetingPushUserId(user);
   }
 
-  const crewLookup = [];
-  const participantId = toPositiveInt(participant?.id);
-  if (participantId) crewLookup.push({ crew_member_id: participantId });
-  const email = normalizeEmail(participant?.email);
-  if (email) crewLookup.push({ email });
+  if (role === 'client') {
+    const bookingUserId = toPositiveInt(plainBooking?.user_id || plainBooking?.user?.id);
+    if (!bookingUserId) return null;
+    const user = await db.users.findOne({
+      where: { id: bookingUserId, user_type: 3, is_active: 1 }, attributes: ['id'], raw: true,
+    });
+    return normalizeMeetingPushUserId(user);
+  }
 
-  const crewMember = crewLookup.length
-    ? await db.crew_members.findOne({
-        where: {
-          is_active: 1,
-          [Op.or]: crewLookup,
-        },
-        attributes: ['crew_member_id', 'user_id', 'email'],
-        raw: true,
-      })
-    : null;
-
-  const crewUserId = normalizeMeetingPushUserId({ id: crewMember?.user_id });
-  if (crewUserId) return crewUserId;
-
-  const fallbackEmail = normalizeEmail(crewMember?.email || participant?.email);
-  if (!fallbackEmail) return null;
-
-  const cpUser = await db.users.findOne({
-    where: { email: fallbackEmail, user_type: 2, is_active: 1 },
-    attributes: ['id'],
-    raw: true,
+  if (!['cp', 'creator', 'creative'].includes(role)) return null;
+  const crewId = toPositiveInt(participant?.crew_member_id || participant?.id);
+  if (!crewId) return null;
+  const crew = await db.crew_members.findOne({
+    where: { crew_member_id: crewId, is_active: 1 }, attributes: ['email'], raw: true,
   });
-
-  return normalizeMeetingPushUserId(cpUser);
+  if (!crew?.email) return null;
+  const user = await db.users.findOne({
+    where: { email: normalizeEmail(crew.email), user_type: 2, is_active: 1 },
+    attributes: ['id'], raw: true,
+  });
+  return normalizeMeetingPushUserId(user);
 };
 
 const collectMeetingPushParticipants = async (state = {}, booking = null, explicitParticipants = null) => {
   const participants = explicitParticipants || [
     state?.client,
     ...(state?.cps || []),
+    state?.admin,
     ...(state?.participants || []),
   ];
   const seen = new Set();
@@ -292,7 +281,7 @@ const collectMeetingPushParticipants = async (state = {}, booking = null, explic
   return targets;
 };
 
-const formatMeetingDateForPush = (meeting) => {
+const formatMeetingDateForPush = (meeting, recipientTimezone = 'UTC') => {
   if (!meeting?.meeting_date_time) return '';
   const date = new Date(meeting.meeting_date_time);
   if (Number.isNaN(date.getTime())) return '';
@@ -301,15 +290,15 @@ const formatMeetingDateForPush = (meeting) => {
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    timeZone: recipientTimezone,
+    timeZoneName: 'short',
   };
-  const timezone = normalizeMeetingTimezone(meeting.meeting_timezone);
-  if (timezone) options.timeZone = timezone;
   return date.toLocaleString('en-US', options);
 };
 
-const buildMeetingPushContent = ({ meeting, type }) => {
+const buildMeetingPushContent = ({ meeting, type, recipientTimezone }) => {
   const title = truncateText(meeting?.meeting_title || 'Meeting', 70);
-  const dateLabel = formatMeetingDateForPush(meeting);
+  const dateLabel = formatMeetingDateForPush(meeting, recipientTimezone);
 
   if (type === 'meeting_cancelled') {
     return { title: 'Meeting cancelled', body: `${title} has been cancelled.` };
@@ -346,16 +335,23 @@ const sendMeetingPushNotifications = async ({
   type,
   explicitParticipants = null,
 }) => {
-  /*
   try {
     const targets = await collectMeetingPushParticipants(state, booking, explicitParticipants);
     if (!targets.length) return;
+    const timezoneRows = await db.users.findAll({
+      where: { id: { [Op.in]: targets.map(({ userId }) => userId) } },
+      attributes: ['id', 'timezone'],
+      raw: true,
+    });
+    const timezoneByUserId = new Map(timezoneRows.map((user) => [String(user.id), normalizeMeetingTimezone(user.timezone)]));
+    const fallbackTimezone = normalizeMeetingTimezone(meeting?.meeting_timezone) || 'UTC';
 
-    const content = buildMeetingPushContent({ meeting, type });
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const bookingId = String(plainBooking?.stream_project_booking_id || meeting?.booking_id || '');
 
     const results = await Promise.allSettled(targets.map(({ userId }) => {
+      const recipientTimezone = timezoneByUserId.get(String(userId)) || fallbackTimezone;
+      const content = buildMeetingPushContent({ meeting, type, recipientTimezone });
       const payload = {
         topic: 'meetings',
         category: 'meetings',
@@ -363,6 +359,8 @@ const sendMeetingPushNotifications = async ({
         meeting_id: String(meeting?.meeting_id || ''),
         booking_id: bookingId,
         meeting_status: String(meeting?.meeting_status || ''),
+        starts_at: meeting?.meeting_date_time ? new Date(meeting.meeting_date_time).toISOString() : '',
+        display_timezone: recipientTimezone,
       };
 
       return appNotificationService.createAndPushNotification({
@@ -394,12 +392,13 @@ const sendMeetingPushNotifications = async ({
       message: error.message || error,
     });
   }
-    */
 };
 
 const matchesParticipantByIdentity = (participant, identities = new Set()) => {
   const participantId = String(participant?.id || '').trim();
   const participantEmail = normalizeEmail(participant?.email || '');
+  if (participantEmail && [...identities].some((identity) => identity.startsWith('email:')))
+    return identities.has(`email:${participantEmail}`);
   if (participantId && identities.has(participantId)) return true;
   if (participantEmail && identities.has(`email:${participantEmail}`)) return true;
   return false;
@@ -902,34 +901,30 @@ const writeMeetingShootHistory = async ({ req, meeting, action, reason }) => {
   }
 };  
 
-const getCrewRecordById = async (crewMemberId) => {
-  const normalizedCrewId = toPositiveInt(crewMemberId);
-  if (!normalizedCrewId) return null;
+const getCrewRecordById = async (identifier, idType = 'legacy') => {
 
   // CPs are now exposed to the web app by their users.id. Keep accepting the
   // old crew_member_id as a fallback so existing clients and saved payloads
   // continue to work. Prefer user_id because the two numeric ID spaces can
   // contain the same value for different people.
   const attributes = ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'];
+
+  const numericId = toPositiveInt(identifier);
+  if (!numericId) return null;
+  const byCrewId = await db.crew_members.findOne({
+    where: { crew_member_id: numericId, is_active: 1 }, attributes, raw: true,
+  });
+  if (idType === 'crew_member') return byCrewId;
+
   const byUserId = await db.crew_members.findOne({
-    where: {
-      user_id: normalizedCrewId,
-      is_active: 1,
-    },
-    attributes,
-    raw: true,
+    where: { user_id: numericId, is_active: 1 }, attributes, raw: true,
   });
-
-  if (byUserId) return byUserId;
-
-  return db.crew_members.findOne({
-    where: {
-      crew_member_id: normalizedCrewId,
-      is_active: 1,
-    },
-    attributes,
-    raw: true,
-  });
+  if (byCrewId && byUserId && byCrewId.crew_member_id !== byUserId.crew_member_id) {
+    const error = new Error(`CP ID ${numericId} is ambiguous; specify cp_id_type: crew_member`);
+    error.status = 400;
+    throw error;
+  }
+  return byUserId || byCrewId;
 };
 
 const getCrewRecordIdsByEmail = async (email) => {
@@ -965,17 +960,39 @@ const buildManagerParticipants = async (userIds) => {
     }));
 };
 
-const buildCpParticipants = async (userIds) => {
-  const records = await Promise.all((userIds || []).map((userId) => getCrewRecordById(userId)));
-  return records
-    .filter(Boolean)
-    .map((crewMember) => ({
-      id: crewMember.user_id || crewMember.crew_member_id,
-      name: [crewMember.first_name, crewMember.last_name].filter(Boolean).join(' ').trim() || crewMember.email || `CP ${crewMember.user_id || crewMember.crew_member_id}`,
+const buildCpParticipants = async (identifiers, idType = 'legacy') => Promise.all(
+  (identifiers || []).map(async (identifier) => {
+    const crewMember = await getCrewRecordById(identifier, idType);
+    const email = normalizeEmail(crewMember?.email);
+    const linkedUserId = toPositiveInt(crewMember?.user_id);
+    const linkedUser = linkedUserId
+      ? await db.users.findOne({
+          where: { id: linkedUserId, user_type: 2, is_active: 1 }, attributes: ['id', 'email'], raw: true,
+        })
+      : null;
+    // Never trust a stale link to a different person's account.
+    const verifiedLinkedUser = linkedUser && normalizeEmail(linkedUser.email) === email ? linkedUser : null;
+    const loginUser = verifiedLinkedUser || (email
+      ? await db.users.findOne({
+          where: { email, user_type: 2, is_active: 1 }, attributes: ['id'], raw: true,
+        })
+      : null);
+    if (!crewMember || !loginUser) {
+      const error = new Error(`CP ${String(identifier).trim()} is invalid, inactive, or has no active login`);
+      error.status = 400;
+      throw error;
+    }
+
+    return {
+      id: loginUser.id,
+      user_id: loginUser.id,
+      crew_member_id: crewMember.crew_member_id,
+      name: [crewMember.first_name, crewMember.last_name].filter(Boolean).join(' ').trim() || crewMember.email || `CP ${crewMember.crew_member_id}`,
       email: crewMember.email || null,
       role: 'cp',
-    }));
-};
+    };
+  })
+);
 
 const validateResolvedParticipants = (requestedIds, resolvedParticipants, role) => {
   const normalizedRequestedIds = (requestedIds || []).map(toPositiveInt);
@@ -1014,7 +1031,7 @@ const filterNewParticipants = (existingParticipants, additions) => {
   return (additions || []).filter((participant) => {
     const id = String(participant?.id || '').trim();
     const email = normalizeEmail(participant?.email);
-    return !(id && existingIds.has(id)) && !(email && existingEmails.has(email));
+    return email ? !existingEmails.has(email) : !(id && existingIds.has(id));
   });
 };
 
@@ -1429,7 +1446,7 @@ exports.createMeeting = async (req, res) => {
     const requestedCpIds = Array.isArray(req.body.cp_ids) ? req.body.cp_ids : [];
     const requestedManagerIds = Array.isArray(req.body.participants) ? req.body.participants : [];
     const [requestedCps, requestedManagers] = await Promise.all([
-      buildCpParticipants(requestedCpIds),
+      buildCpParticipants(requestedCpIds, req.body.cp_id_type === 'crew_member' ? 'crew_member' : 'legacy'),
       buildManagerParticipants(requestedManagerIds),
     ]);
     validateResolvedParticipants(requestedCpIds, requestedCps, 'cp');
@@ -1777,20 +1794,28 @@ exports.addParticipants = async (req, res) => {
   try {
     const { meeting, booking, state } = await getMeetingByIdInternal(req.params.meetingId);
     const role = String(req.body.role || '').toLowerCase();
-    const userIds = Array.isArray(req.body.user_ids) ? req.body.user_ids : [];
+    const userIds = [...new Set(
+      (Array.isArray(req.body.user_ids) ? req.body.user_ids : []).map(toPositiveInt)
+    )];
 
     if (!['cp', 'manager'].includes(role)) {
       return res.status(400).json({ message: 'role must be cp or manager' });
     }
 
     const additions = role === 'cp'
-      ? await buildCpParticipants(userIds)
+      ? await buildCpParticipants(userIds, req.body.cp_id_type === 'crew_member' ? 'crew_member' : 'legacy')
       : await buildManagerParticipants(userIds);
     validateResolvedParticipants(userIds, additions, role);
     const newAdditions = filterNewParticipants(
       role === 'cp' ? state.cps : state.participants,
       additions
     );
+
+    // Re-submitting existing participants is a successful no-op. This avoids
+    // duplicate writes and duplicate invitations when the UI retries a request.
+    if (!newAdditions.length) {
+      return res.status(200).json(formatMeeting(meeting, booking, state));
+    }
 
     const nextState = {
       ...state,
@@ -1841,16 +1866,16 @@ exports.addParticipants = async (req, res) => {
           sent_at: new Date().toISOString(),
         },
       });
+    }
 
-      if (role === 'cp') {
-        await sendMeetingPushNotifications({
-          meeting,
-          booking,
-          state: nextState,
-          type: 'meeting_participant_added',
-          explicitParticipants: newAdditions,
-        });
-      }
+    if (newAdditions.length) {
+      await sendMeetingPushNotifications({
+        meeting,
+        booking,
+        state: nextState,
+        type: 'meeting_participant_added',
+        explicitParticipants: newAdditions,
+      });
     }
 
     return res.status(200).json(formatMeeting(meeting, booking, nextState));

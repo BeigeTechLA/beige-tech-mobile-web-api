@@ -2,8 +2,16 @@ const db = require('../models');
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
+const quoteAnalyticsService = require('./quote-analytics.service');
+const { DIGEST_INTERVAL_HOURS, runChatMessageEmailDigestJob } = require('./chat-message-email-digest.service');
 
 const JOB_INTERVAL_MINUTES = parseInt(process.env.SHOOT_REMINDER_JOB_INTERVAL_MINUTES || '30', 10);
+const QUOTE_INACTIVITY_DAYS = Math.max(1, parseInt(process.env.QUOTE_INACTIVITY_DAYS || '3', 10) || 3);
+const QUOTE_INACTIVITY_ALERT_CADENCE_DAYS = Math.max(
+  1,
+  parseInt(process.env.QUOTE_INACTIVITY_ALERT_CADENCE_DAYS || String(QUOTE_INACTIVITY_DAYS), 10) || QUOTE_INACTIVITY_DAYS
+);
+const QUOTE_PIPELINE_EMAIL_QUOTE_LIMIT = Math.max(1, Math.min(100, parseInt(process.env.QUOTE_PIPELINE_EMAIL_QUOTE_LIMIT || '50', 10) || 50));
 const REMINDER_MARKER = 'shoot_reminder_5_days';
 const REMINDER_2H_MARKER = 'shoot_reminder_2_hours';
 const SHOOT_COMPLETION_MARKER = 'shoot_completion_next_day';
@@ -1285,6 +1293,166 @@ const runCPPaymentOverdue3DaysJob = async () => {
   }
 };
 
+let isRunningQuotePipelineInactivityAlerts = false;
+
+const getPipelineAlertRecipients = () => String(process.env.SALES_PIPELINE_ALERT_EMAILS || '')
+  .split(',')
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean)
+  .filter((email, index, list) => list.indexOf(email) === index);
+
+const getQuotePipelineDashboardUrl = (salesRepId = null) => {
+  const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  const baseUrl = frontendUrl ? `${frontendUrl}/admin/quotes/analytics` : '';
+  if (!baseUrl) return '';
+  if (!salesRepId) return baseUrl;
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  return `${baseUrl}${separator}sales_rep_id=${encodeURIComponent(salesRepId)}`;
+};
+
+const getPipelineAlertLog = async (alertType, recipientKey) => {
+  const rows = await db.sequelize.query(
+    `SELECT last_sent_at
+       FROM quote_pipeline_alert_logs
+      WHERE alert_type = :alertType AND recipient_key = :recipientKey
+      LIMIT 1`,
+    {
+      replacements: { alertType, recipientKey },
+      type: db.Sequelize.QueryTypes.SELECT
+    }
+  );
+  return rows[0] || null;
+};
+
+const markPipelineAlertSent = async (alertType, recipientKey, sentAt) => {
+  await db.sequelize.query(
+    `INSERT INTO quote_pipeline_alert_logs
+       (alert_type, recipient_key, last_sent_at, created_at, updated_at)
+     VALUES (:alertType, :recipientKey, :sentAt, :sentAt, :sentAt)
+     ON DUPLICATE KEY UPDATE last_sent_at = VALUES(last_sent_at), updated_at = VALUES(updated_at)`,
+    { replacements: { alertType, recipientKey, sentAt } }
+  );
+};
+
+const isPipelineAlertDue = (log, nowValue) => {
+  if (!log?.last_sent_at) return true;
+  const lastSentAt = new Date(log.last_sent_at).getTime();
+  return Number.isNaN(lastSentAt)
+    || lastSentAt <= nowValue.getTime() - QUOTE_INACTIVITY_ALERT_CADENCE_DAYS * 24 * 60 * 60 * 1000;
+};
+
+const formatPipelineAlertDate = (value) => {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  }).format(new Date(value));
+};
+
+const toPipelineEmailQuotes = (records) => records
+  .slice(0, QUOTE_PIPELINE_EMAIL_QUOTE_LIMIT)
+  .map((record) => ({
+    quote_id: record.quote?.quote_number || `Quote #${record.quoteId}`,
+    client_name: record.quote?.client_name || 'Client'
+  }));
+
+const buildPipelineEmailData = ({ records, recipientName, salesRepId = null }) => {
+  const lastActivityAt = records.reduce((oldest, record) => {
+    const lifecycleTimes = [
+      record.quote?.created_at,
+      record.quote?.sent_at,
+      record.quote?.viewed_at,
+      record.quote?.accepted_at,
+      record.quote?.updated_at,
+      record.lastPaymentAt
+    ]
+      .filter(Boolean)
+      .map((value) => new Date(value).getTime())
+      .filter((value) => !Number.isNaN(value));
+    const value = lifecycleTimes.length ? new Date(Math.max(...lifecycleTimes)) : null;
+    if (!value) return oldest;
+    return !oldest || new Date(value) < new Date(oldest) ? value : oldest;
+  }, null);
+
+  return {
+    recipient_name: recipientName,
+    open_quote_count: records.length,
+    pipeline_value: records.reduce((total, record) => total + Number(record.outstandingAmount || 0), 0).toFixed(2),
+    last_activity_date: formatPipelineAlertDate(lastActivityAt),
+    quotes: toPipelineEmailQuotes(records),
+    frontend_url: getQuotePipelineDashboardUrl(salesRepId)
+  };
+};
+
+const runQuotePipelineInactivityAlertsJob = async () => {
+  if (isRunningQuotePipelineInactivityAlerts) return;
+  isRunningQuotePipelineInactivityAlerts = true;
+
+  try {
+    const nowValue = new Date();
+    const records = await quoteAnalyticsService.getInactivePipelineRecords({
+      inactivityHours: QUOTE_INACTIVITY_DAYS * 24,
+      nowValue
+    });
+    if (!records.length) return;
+
+    const recordsByRep = new Map();
+    records.forEach((record) => {
+      const repId = Number(record.repId || 0);
+      const email = String(record.salesRep?.email || '').trim().toLowerCase();
+      if (!repId || !email) return;
+      if (!recordsByRep.has(repId)) {
+        recordsByRep.set(repId, { email, name: record.salesRep?.name || email, records: [] });
+      }
+      recordsByRep.get(repId).records.push(record);
+    });
+
+    for (const [repId, group] of recordsByRep) {
+      const alertType = 'overdue_pipeline_sales_rep';
+      const recipientKey = String(repId);
+      const log = await getPipelineAlertLog(alertType, recipientKey);
+      if (!isPipelineAlertDue(log, nowValue)) continue;
+
+      const result = await emailService.sendOverduePipelineSalesRepEmail({
+        to: group.email,
+        data: buildPipelineEmailData({
+          records: group.records,
+          recipientName: group.name,
+          salesRepId: repId
+        })
+      });
+      if (result?.success) {
+        await markPipelineAlertSent(alertType, recipientKey, nowValue);
+      } else {
+        console.error(`[Email Job] Overdue pipeline sales-rep email failed for rep ${repId}:`, result?.error || 'unknown error');
+      }
+    }
+
+    const adminRecipients = getPipelineAlertRecipients();
+    for (const recipient of adminRecipients) {
+      const alertType = 'overdue_pipeline_sales_admin';
+      const log = await getPipelineAlertLog(alertType, recipient);
+      if (!isPipelineAlertDue(log, nowValue)) continue;
+
+      const result = await emailService.sendOverduePipelineSalesAdminEmail({
+        to: recipient,
+        data: buildPipelineEmailData({ records, recipientName: 'Team' })
+      });
+      if (result?.success) {
+        await markPipelineAlertSent(alertType, recipient, nowValue);
+      } else {
+        console.error(`[Email Job] Overdue pipeline admin email failed for ${recipient}:`, result?.error || 'unknown error');
+      }
+    }
+  } catch (error) {
+    console.error('[Email Job] Overdue pipeline inactivity alert run failed:', error);
+  } finally {
+    isRunningQuotePipelineInactivityAlerts = false;
+  }
+};
+
 const startScheduledEmailJobs = () => {
   const enabled = String(process.env.ENABLE_SCHEDULED_EMAIL_JOBS || 'true').toLowerCase() === 'true';
   if (!enabled) {
@@ -1319,12 +1487,21 @@ const startScheduledEmailJobs = () => {
   runCPPaymentOverdue3DaysJob().catch((err) => {
     console.error('[Email Job] Initial CP payment overdue 3-day run failed:', err.message);
   });
+  runQuotePipelineInactivityAlertsJob().catch((err) => {
+    console.error('[Email Job] Initial overdue pipeline alert run failed:', err.message);
+  });
   expireQuotesPastValidUntil().then((result) => {
     if (result.expired_count) {
       console.log(`[Quote Expiration Job] Expired ${result.expired_count} quote(s)`);
     }
   }).catch((err) => {
     console.error('[Quote Expiration Job] Initial run failed:', err.message);
+  });
+
+  // The initial run only considers messages from the preceding digest window,
+  // so older chat history is never emailed after a deployment or restart.
+  runChatMessageEmailDigestJob().catch((err) => {
+    console.error('[Chat Email Digest] Initial run failed:', err.message);
   });
 
   setInterval(() => {
@@ -1352,6 +1529,9 @@ const startScheduledEmailJobs = () => {
     runCPPaymentOverdue3DaysJob().catch((err) => {
       console.error('[Email Job] Interval CP payment overdue 3-day run failed:', err.message);
     });
+    runQuotePipelineInactivityAlertsJob().catch((err) => {
+      console.error('[Email Job] Interval overdue pipeline alert run failed:', err.message);
+    });
     expireQuotesPastValidUntil().then((result) => {
       if (result.expired_count) {
         console.log(`[Quote Expiration Job] Expired ${result.expired_count} quote(s)`);
@@ -1360,6 +1540,14 @@ const startScheduledEmailJobs = () => {
       console.error('[Quote Expiration Job] Interval run failed:', err.message);
     });
   }, intervalMs);
+
+  const chatDigestIntervalMs = DIGEST_INTERVAL_HOURS * 60 * 60 * 1000;
+  console.log(`[Chat Email Digest] Scheduled every ${DIGEST_INTERVAL_HOURS} hour(s)`);
+  setInterval(() => {
+    runChatMessageEmailDigestJob().catch((err) => {
+      console.error('[Chat Email Digest] Interval run failed:', err.message);
+    });
+  }, chatDigestIntervalMs);
 };
 
 module.exports = {
@@ -1368,8 +1556,10 @@ module.exports = {
   runShootReminder2HoursJob,
   runShootCompletionNextDayJob,
   runFinalNudge7DaysJob,
+  runChatMessageEmailDigestJob,
   runShootCompletedPaymentDueJob,
   runCPPaymentDue7DaysJob,
   runCPPaymentOverdue1DayJob,
-  runCPPaymentOverdue3DaysJob
+  runCPPaymentOverdue3DaysJob,
+  runQuotePipelineInactivityAlertsJob
 };

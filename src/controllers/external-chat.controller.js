@@ -1,7 +1,6 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
-const appNotificationService = require('../services/app-notification.service');
-const pushNotificationService = require('../services/push-notification.service');
+const { runChatMessageEmailDigestJob } = require('../services/chat-message-email-digest.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -393,11 +392,6 @@ const isAdminRequestUser = (user = {}) => {
 
   const role = String(user?.userRole || user?.role || '').trim().toLowerCase();
   return ['admin', 'administrator', 'sales_admin'].includes(role);
-};
-
-const isSuperAdminRequestUser = (user = {}) => {
-  const role = String(user?.userRole || user?.role || '').trim().toLowerCase();
-  return ['super_admin', 'superadmin', 'super-admin'].includes(role);
 };
 
 const resolveChatSender = async (requestUser = {}) => {
@@ -1044,8 +1038,8 @@ const sendChatPushNotifications = async ({
   messagePreview = '',
   recipientTargets = [],
   mentionedUserIds = [],
+  sendPush = true,
 }) => {
-  /*
   try {
     const senderId = String(sender?.id || '').trim();
     const mentionIds = new Set(
@@ -1104,7 +1098,7 @@ const sendChatPushNotifications = async ({
         referenceType: 'chat_room',
         payload,
         actionLabel: 'View message',
-        sendPush: false,
+        sendPush,
       });
     }));
 
@@ -1124,7 +1118,6 @@ const sendChatPushNotifications = async ({
       message: error.message || error,
     });
   }
-    */
 };
 
 const sendChatNotificationTemplate = async ({
@@ -1133,17 +1126,12 @@ const sendChatNotificationTemplate = async ({
   eventType = 'message_created',
   messagePreview = '',
   fallbackPayload = {},
-  recipientTargetsOverride = null,
 }) => {
-  /*
   try {
     const participantPayload = await proxyRequest(`/participants/${roomId}`).catch(() => null);
     const { envelope } = extractParticipantEnvelope(participantPayload || {});
     const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
-    const hasRecipientTargetsOverride = Array.isArray(recipientTargetsOverride);
-    let recipientTargets = hasRecipientTargetsOverride
-      ? recipientTargetsOverride.filter(Boolean)
-      : extractChatRecipientTargets(enrichedEnvelope || {});
+    let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
 
     const roomPayload = toObject(fallbackPayload?.data) || toObject(fallbackPayload) || {};
     const mappedBookingId = await getMappedBookingIdForRoom(roomId);
@@ -1161,15 +1149,22 @@ const sendChatNotificationTemplate = async ({
         bookingId: projectId,
       });
     }
-    if (!recipientTargets.length && !hasRecipientTargetsOverride) {
+    if (!recipientTargets.length) {
       recipientTargets = await getChatBookingFallbackRecipients(projectId);
     }
 
-    if (!recipientTargets.length) return;
-    const emailRecipients = await pushNotificationService.filterEmailRecipientsByPreference({
-      recipients: recipientTargets,
-      topic: 'messages',
+    await sendChatPushNotifications({
+      roomId,
+      bookingId: projectId,
+      sender,
+      eventType: eventType === 'participant_added' ? 'messaging_initiated' : eventType,
+      messagePreview,
+      recipientTargets,
     });
+
+    // A room-creation email is intentionally sent to every chat member with a
+    // valid email address. The email service removes duplicate addresses.
+    const emailRecipients = recipientTargets.filter((recipient) => shouldUseProvidedEmail(recipient?.email));
     if (!emailRecipients.length) return;
 
     const chatName = resolveChatDisplayName(roomPayload);
@@ -1213,18 +1208,9 @@ const sendChatNotificationTemplate = async ({
       console.error('Chat email notification send result:', emailResult);
     }
 
-    await sendChatPushNotifications({
-      roomId,
-      bookingId: projectId,
-      sender,
-      eventType: eventType === 'participant_added' ? 'messaging_initiated' : eventType,
-      messagePreview,
-      recipientTargets,
-    });
   } catch (notificationError) {
-    console.error('Chat notification failed:', notificationError?.message || notificationError);
+    console.error('Chat email notification failed:', notificationError?.message || notificationError);
   }
-    */
 };
 
 const parseDirectoryPaging = (query = {}) => {
@@ -1415,6 +1401,7 @@ const getCreativePartnerDirectory = async (search = '') => {
     const profilePhoto = Array.isArray(plain.crew_member_files) ? plain.crew_member_files[0] : null;
     return {
       id: String(plain.user_id || plain.crew_member_id),
+      crew_member_id: String(plain.crew_member_id),
       name: `${plain.first_name || ''} ${plain.last_name || ''}`.trim() || plain.email || `CP ${plain.crew_member_id}`,
       email: plain.email || null,
       role: 'cp',
@@ -1757,10 +1744,6 @@ exports.createChatRoom = async (req, res) => {
 
     const mergedParticipants = [...participants, ...requestedParticipants];
     if (directClient) mergedParticipants.push(directClient);
-    const enrichedNotificationRecipients = await enrichParticipantCollection(mergedParticipants, 'participant');
-    const notificationRecipients = enrichedNotificationRecipients.length
-      ? enrichedNotificationRecipients
-      : mergedParticipants;
 
     const result = await exports.createChatRoomForBooking({
       bookingId,
@@ -1799,10 +1782,9 @@ exports.createChatRoom = async (req, res) => {
           email: req.user?.email || '',
           name: req.user?.name || `User ${req.user?.userId || ''}`.trim(),
         },
-        eventType: 'participant_added',
-        messagePreview: `${mergedParticipants.length} participant(s) added`,
+        eventType: 'chat_room_created',
+        messagePreview: 'Chat room created',
         fallbackPayload: result || {},
-        recipientTargetsOverride: notificationRecipients,
       });
     }
 
@@ -1889,7 +1871,6 @@ exports.addChatParticipants = async (req, res) => {
     }
 
     const adminUser = await getPlatformUserById(req.user?.userId || null);
-    const notificationRecipients = await enrichParticipantCollection(participants, 'participant');
     const groupedParticipants = participants.reduce((acc, participant) => {
       const role = explicitRole || participant.role || 'manager';
       if (!acc[role]) acc[role] = [];
@@ -1917,19 +1898,6 @@ exports.addChatParticipants = async (req, res) => {
       });
       results.push(result);
     }
-
-    await sendChatNotificationTemplate({
-      roomId: req.params.roomId,
-      sender: adminUser || {
-        id: req.user?.userId || '',
-        email: req.user?.email || '',
-        name: req.user?.name || `User ${req.user?.userId || ''}`.trim(),
-      },
-      eventType: 'participant_added',
-      messagePreview: `${participants.length} participant(s) added`,
-      fallbackPayload: results[results.length - 1] || {},
-      recipientTargetsOverride: notificationRecipients,
-    });
 
     return res.status(200).json({
       success: true,
@@ -2275,37 +2243,6 @@ exports.sendChatMessage = async (req, res) => {
       }),
     });
 
-    const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
-    const { envelope } = extractParticipantEnvelope(participantPayload || {});
-    const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
-    let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
-    const roomPayload = toObject(result?.data) || toObject(result) || {};
-    const mappedBookingId = await getMappedBookingIdForRoom(req.params.roomId);
-    const resolvedBookingId =
-      mappedBookingId ||
-      resolveChatBookingId(roomPayload) ||
-      resolveChatBookingId(participantPayload || {}) ||
-      '';
-
-    if (!recipientTargets.length && resolvedBookingId) {
-      recipientTargets = await getChatBookingFallbackRecipients(resolvedBookingId);
-    }
-
-    await sendChatPushNotifications({
-      roomId: req.params.roomId,
-      bookingId: resolvedBookingId,
-      sender,
-      eventType: 'direct_message',
-      messagePreview: req.body.message,
-      recipientTargets,
-      mentionedUserIds:
-        req.body.mentioned_user_ids ||
-        req.body.mentionedUserIds ||
-        req.body.mentions ||
-        req.body.mentionedUsers ||
-        [],
-    });
-
     const mentionedUserIds =
       req.body.mentioned_user_ids ||
       req.body.mentionedUserIds ||
@@ -2313,10 +2250,32 @@ exports.sendChatMessage = async (req, res) => {
       req.body.mentionedUsers ||
       [];
 
+    const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+    const { envelope } = extractParticipantEnvelope(participantPayload || {});
+    const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
+    let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
+    const mappedBookingId = await getMappedBookingIdForRoom(req.params.roomId);
+
+    if (!recipientTargets.length && mappedBookingId) {
+      recipientTargets = await getChatBookingFallbackRecipients(mappedBookingId);
+    }
+
+    // The centralized chat service already sends the normal message push.
+    // Store the matching MySQL dashboard record here without a second popup.
+    await sendChatPushNotifications({
+      roomId: req.params.roomId,
+      bookingId: mappedBookingId,
+      sender,
+      eventType: 'direct_message',
+      messagePreview: req.body.message,
+      recipientTargets,
+      sendPush: false,
+    });
+
     if (Array.isArray(mentionedUserIds) && mentionedUserIds.length) {
       await sendChatPushNotifications({
         roomId: req.params.roomId,
-        bookingId: resolvedBookingId,
+        bookingId: mappedBookingId,
         sender,
         eventType: 'mention',
         messagePreview: req.body.message,
@@ -2330,6 +2289,21 @@ exports.sendChatMessage = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message,
+    });
+  }
+};
+
+// Protected operational endpoint for running the six-hour digest immediately.
+// It uses the same persisted state as the scheduled job, so it cannot resend
+// rooms that have already been processed.
+exports.runChatMessageEmailDigest = async (req, res) => {
+  try {
+    const result = await runChatMessageEmailDigestJob();
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to run chat email digest',
     });
   }
 };
@@ -2360,10 +2334,9 @@ exports.editChatMessage = async (req, res) => {
   }
 };
 
-exports.deleteChatMessage = async (req, res) => {
+const deleteChatMessage = async (req, res, allowAnySender = false) => {
   try {
     const sender = await resolveChatSender(req.user);
-    const allowAnySender = isSuperAdminRequestUser(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
@@ -2387,7 +2360,10 @@ exports.deleteChatMessage = async (req, res) => {
   }
 };
 
-exports.batchDeleteChatMessages = async (req, res) => {
+exports.deleteChatMessage = (req, res) => deleteChatMessage(req, res, false);
+exports.moderateDeleteChatMessage = (req, res) => deleteChatMessage(req, res, true);
+
+const batchDeleteChatMessages = async (req, res, allowAnySender = false) => {
   try {
     const roomId = String(req.params.roomId || '').trim();
     const messageIds = Array.isArray(req.body.messageIds)
@@ -2405,7 +2381,6 @@ exports.batchDeleteChatMessages = async (req, res) => {
     }
 
     const sender = await resolveChatSender(req.user);
-    const allowAnySender = isSuperAdminRequestUser(req.user);
 
     const result = await proxyRequest(`/room/${roomId}/messages/batch-delete`, {
       method: 'POST',
@@ -2429,12 +2404,11 @@ exports.batchDeleteChatMessages = async (req, res) => {
   }
 };
 
+exports.batchDeleteChatMessages = (req, res) => batchDeleteChatMessages(req, res, false);
+exports.moderateBatchDeleteChatMessages = (req, res) => batchDeleteChatMessages(req, res, true);
+
 exports.updateChatRoomStatus = async (req, res) => {
   try {
-    if (!isSuperAdminRequestUser(req.user)) {
-      return res.status(403).json({ success: false, message: 'Only super admins can archive or restore chats' });
-    }
-
     const roomId = String(req.params.roomId || '').trim();
     const status = String(req.body.status || '').trim().toLowerCase();
     if (!roomId) {

@@ -189,7 +189,7 @@ exports.getLoginHistory = async (req, res) => {
 const POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES = [
   'Post Production Manager',
   'Producer',
-  'super_admin'
+  // 'super_admin'
 ];
 const normalizePhoneNumber = (number) => String(number || '').replace(/\D/g, '');
 
@@ -3563,6 +3563,94 @@ exports.updateProjectName = async (req, res) => {
   }
 };
 
+exports.updateProjectDescription = async (req, res) => {
+  let transaction = null;
+  try {
+    const { project_id } = req.params;
+
+    if (!project_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Project ID is required'
+      });
+    }
+
+    if (typeof req.body?.description !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'description is required'
+      });
+    }
+
+    const description = req.body.description.trim();
+
+    const project = await stream_project_booking.findOne({
+      where: {
+        stream_project_booking_id: project_id,
+        is_active: 1
+      }
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found'
+      });
+    }
+
+    const previousDescription = project.description;
+
+    if (String(previousDescription || '').trim() === description) {
+      return res.status(200).json({
+        success: true,
+        message: 'No changes to save',
+        data: {
+          stream_project_booking_id: project.stream_project_booking_id,
+          description: project.description
+        }
+      });
+    }
+
+    transaction = await db.sequelize.transaction();
+    await project.update({ description }, { transaction });
+
+    const actor = await getRequestActor(req);
+    await writeShootHistory({
+      projectId: project.stream_project_booking_id,
+      action: 'project_description_updated',
+      actor,
+      reason: 'Project description updated',
+      metadata: {
+        changes: [{
+          field: 'description',
+          old_value: previousDescription || null,
+          new_value: description || null
+        }]
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Project description updated successfully',
+      data: {
+        stream_project_booking_id: project.stream_project_booking_id,
+        description: project.description
+      }
+    });
+  } catch (error) {
+    if (transaction && !transaction.finished) await transaction.rollback();
+    console.error('Error updating project description:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update project description',
+      error: error.message
+    });
+  }
+};
+
 // exports.getAllProjectDetails = async (req, res) => {
 //   try {
 //     const { status, event_type, search } = req.query;  // Get filters from query params
@@ -4212,7 +4300,7 @@ exports.updateProjectName = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, post_production_user_id, summary_only, board_view } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, post_production_user_id, post_production_assignment, summary_only, board_view } = req.query;
     const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
     const today = new Date();
     const isBoardView = String(board_view || '').toLowerCase() === 'true' || String(board_view) === '1';
@@ -4224,7 +4312,8 @@ exports.getAllProjectDetails = async (req, res) => {
     const hasPostFetchFilters = Boolean(
       (cp_assignment && cp_assignment !== 'all') ||
       (production_filter && production_filter !== 'all') ||
-      (payment_filter && payment_filter !== 'all')
+      (payment_filter && payment_filter !== 'all') ||
+      (post_production_assignment && post_production_assignment !== 'all')
     );
     const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
     const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
@@ -4826,6 +4915,20 @@ exports.getAllProjectDetails = async (req, res) => {
       });
     }
 
+    if (post_production_assignment && post_production_assignment !== 'all') {
+      const normalizedPostProdAssignment = String(post_production_assignment).toLowerCase().trim();
+      projectDetails = projectDetails.filter((entry) => {
+        const members = Array.isArray(entry?.assignedPostProductionMembers)
+          ? entry.assignedPostProductionMembers
+          : [];
+        const hasPostProdAssigned = members.length > 0;
+
+        if (normalizedPostProdAssignment === 'assigned') return hasPostProdAssigned;
+        if (normalizedPostProdAssignment === 'not_assigned') return !hasPostProdAssigned;
+        return true;
+      });
+    }
+
     if (payment_filter && payment_filter !== 'all') {
       const normalizedPaymentFilter = String(payment_filter).toLowerCase().trim();
       projectDetails = projectDetails.filter((entry) => {
@@ -4833,7 +4936,9 @@ exports.getAllProjectDetails = async (req, res) => {
         const pendingAmount = Number(project.pending_amount || 0);
         const paidAmount = Number(project.paid_amount || project.total_paid_amount || 0);
 
-        if (normalizedPaymentFilter === 'pending') return pendingAmount > 0;
+        if (normalizedPaymentFilter === 'partially_paid') {
+          return paidAmount > 0 && pendingAmount > 0;
+        }
         if (normalizedPaymentFilter === 'paid') return pendingAmount <= 0 && paidAmount > 0;
         return true;
       });
@@ -5079,11 +5184,8 @@ exports.getAllProjectDetailsBoard = async (req, res) => {
   }
 };
 
-// ==================== GLOBAL SHOOTS API ====================
+// ==================== GLOBAL SHOOTS API ===================
 
-// Filters: upcoming (default), all, tbd, today, next_7_days, next_15_days, next_30_days,
-// last_7_days, last_15_days, last_30_days, custom (start_date + end_date)
-// Only is_active = 1 shoots are returned.
 const GLOBAL_SHOOT_DATE_COL = 'stream_project_booking.event_date';
 
 const buildGlobalShootRangeFilter = (rawRange, start_date, end_date) => {
@@ -5091,7 +5193,6 @@ const buildGlobalShootRangeFilter = (rawRange, start_date, end_date) => {
   const curdate = Sequelize.fn('CURDATE');
   const between = (from, to) => Sequelize.where(dateCol, { [Op.between]: [from, to] });
 
-  // Custom range: start_date + end_date
   if (start_date && end_date) {
     return [between(start_date, end_date)];
   }
@@ -5101,6 +5202,7 @@ const buildGlobalShootRangeFilter = (rawRange, start_date, end_date) => {
   switch (range) {
     case 'all':
       return [];
+
     case 'tbd':
       return [Sequelize.where(Sequelize.col(GLOBAL_SHOOT_DATE_COL), { [Op.is]: null })];
     case 'today':
@@ -5119,123 +5221,549 @@ const buildGlobalShootRangeFilter = (rawRange, start_date, end_date) => {
       return [between(Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 30 DAY)'), curdate)];
     case 'upcoming':
     default:
-      // Today + all future shoots
-      return [Sequelize.where(dateCol, { [Op.gte]: curdate })];
+      return [Sequelize.where(dateCol, { [Op.gte]: curdate,})];
+  }
+};
+
+const buildGlobalShootStatusFilter = (rawStatus) => {
+  const status = String(rawStatus || 'all').toLowerCase().trim();
+  const dateCol = Sequelize.fn('DATE', Sequelize.col(GLOBAL_SHOOT_DATE_COL));
+  const curdate = Sequelize.fn('CURDATE');
+  const notCancelled = {[Op.or]: [{is_cancelled: 0},{is_cancelled: {[Op.is]: null}}]};
+  const notCompleted = {[Op.or]: [{is_completed: 0,},{is_completed: {[Op.is]: null}}]};
+  const normalStatus = {[Op.or]: [{status: {[Op.notIn]: [4, 5]}},{status: {[Op.is]: null}}]};
+
+  switch (status) {
+    case 'cancelled':
+      return {[Op.or]: [{is_cancelled: 1},{status: 5}]};
+
+    case 'completed':
+      return {
+        [Op.and]: [
+          notCancelled,
+          {
+            [Op.or]: [
+              {
+                is_completed: 1,
+              },
+              {
+                status: 4,
+              },
+            ],
+          },
+        ],
+      };
+
+    case 'upcoming':
+      return {
+        [Op.and]: [
+          notCancelled,
+          notCompleted,
+          normalStatus,
+          Sequelize.where(
+            dateCol,
+            {
+              [Op.gt]: curdate,
+            }
+          ),
+        ],
+      };
+
+    case 'active':
+      return {
+        [Op.and]: [
+          notCancelled,
+          notCompleted,
+          normalStatus,
+          {
+            [Op.or]: [
+              {
+                event_date: {
+                  [Op.is]: null,
+                },
+              },
+              Sequelize.where(
+                dateCol,
+                {
+                  [Op.lte]:
+                    curdate,
+                }
+              ),
+            ],
+          },
+        ],
+      };
+
+    default:
+      return null;
   }
 };
 
 exports.getGlobalShoots = async (req, res) => {
   try {
-    const { range, start_date, end_date } = req.query;
+    const {range, start_date, end_date, search, status, cp_assignment, post_production_user_id, } = req.query;
 
-    // Paid-shoots base filter (same as getAllProjectDetails, client-role scoping included)
     const paidFilter = await getPaidCalendarFilter(req);
 
-    // Only active shoots (is_active = 1). Deleted shoots are never returned.
-    const whereConditions = { ...paidFilter, is_active: 1 };
+    let whereConditions = { ...paidFilter, is_active: 1};
+
     const andConditions = buildGlobalShootRangeFilter(range, start_date, end_date);
-    if (andConditions.length) {
-      whereConditions[Op.and] = andConditions;
-    }
-
-    const rows = await stream_project_booking.findAll({
-      where: whereConditions,
-      attributes: [
-        'stream_project_booking_id',
-        'project_name',
-        'is_active',
-        'event_date',
-        'start_time',
-        'end_time',
-        'time_zone',
-        'duration_hours',
-        'event_location',
-        'event_latitude',
-        'event_longitude',
-      ],
-      include: [
-        {
-          model: db.stream_project_booking_days,
-          as: 'booking_days',
-          required: false,
-          attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
-        },
-        {
-          model: assigned_crew,
-          as: 'assigned_crews',
-          where: { is_active: 1 },
-          required: false,
-          attributes: ['project_id', 'crew_member_id'],
-        },
-      ],
-      order: [
-        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN 0 ELSE 1 END'), 'ASC'],
-        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN `stream_project_booking`.`event_date` END'), 'ASC'],
-        [Sequelize.literal('CASE WHEN DATE(`stream_project_booking`.`event_date`) < CURDATE() THEN `stream_project_booking`.`event_date` END'), 'DESC'],
-      ],
-    });
-
-    const projects = rows.map((row) => {
-      const shoot = row.toJSON();
-
-      const bookingDays = (Array.isArray(shoot.booking_days) ? shoot.booking_days : [])
-        .sort((a, b) => {
-          const d = String(a.event_date || '').localeCompare(String(b.event_date || ''));
-          return d !== 0 ? d : String(a.start_time || '').localeCompare(String(b.start_time || ''));
-        })
-        .map((day) => ({
-          event_date: day.event_date,
-          start_time: day.start_time,
-          end_time: day.end_time,
-          duration_hours: day.duration_hours,
-          time_zone: day.time_zone || null,
-        }));
-
-      let eventLocation = shoot.event_location || null;
-      if (typeof eventLocation === 'string' && (eventLocation.startsWith('{') || eventLocation.startsWith('['))) {
-        try {
-          const parsed = JSON.parse(eventLocation);
-          eventLocation = parsed.address || eventLocation;
-        } catch (_) { /* keep original */ }
+    const appendAndCondition = (
+      condition
+    ) => {
+      if (!condition) {
+        return;
       }
 
-      return {
-        project: {
-          stream_project_booking_id: shoot.stream_project_booking_id,
-          project_name: shoot.project_name || null,
-          is_active: Number(shoot.is_active) === 1,
-          event_date: shoot.event_date,
-          start_time: shoot.start_time,
-          end_time: shoot.end_time,
-          time_zone: shoot.time_zone || null,
-          duration_hours: shoot.duration_hours,
-          booking_days: bookingDays,
-          event_location: eventLocation,
-          event_latitude: shoot.event_latitude ?? null,
-          event_longitude: shoot.event_longitude ?? null,
-        },
-        assignedCrew: (Array.isArray(shoot.assigned_crews) ? shoot.assigned_crews : []).map((ac) => ({
-          project_id: ac.project_id,
-          crew_member_id: ac.crew_member_id,
-        })),
+      whereConditions = {
+        ...whereConditions,
+        [Op.and]: [
+          ...(whereConditions[
+            Op.and
+          ] || []),
+          condition,
+        ],
       };
-    });
+    };
 
-    return res.status(200).json({
-      error: false,
-      message: 'Global shoots retrieved successfully',
-      data: {
-        total_records: projects.length,
-        projects,
-      },
-    });
+    andConditions.forEach(
+      appendAndCondition
+    );
+
+    const statusCondition =
+      buildGlobalShootStatusFilter(
+        status
+      );
+
+    appendAndCondition(
+      statusCondition
+    );
+
+    if (search) {
+      const normalizedSearch =
+        String(search).trim();
+
+      if (normalizedSearch) {
+        appendAndCondition({
+          [Op.or]: [
+            {
+              project_name: {
+                [Op.like]:
+                  `%${normalizedSearch}%`,
+              },
+            },
+
+            {
+              event_location: {
+                [Op.like]:
+                  `%${normalizedSearch}%`,
+              },
+            },
+
+            Sequelize.where(
+              Sequelize.cast(
+                Sequelize.col(
+                  'stream_project_booking.stream_project_booking_id'
+                ),
+                'CHAR'
+              ),
+              {
+                [Op.like]:
+                  `%${normalizedSearch.replace(
+                    /^#/,
+                    ''
+                  )}%`,
+              }
+            ),
+          ],
+        });
+      }
+    }
+
+    if (
+      post_production_user_id &&
+      post_production_user_id !=='all'
+    ) {
+      const selectedPostProductionUserId = Number(
+        post_production_user_id
+      );
+
+      if (
+        !Number.isInteger(selectedPostProductionUserId) ||
+        selectedPostProductionUserId <= 0
+      ) {
+        return res.status(400).json({
+          error: true,
+          message:
+            "post_production_user_id must be a positive integer",
+        });
+      }
+
+      const assignedProjectIds =
+        await getAssignedProjectIdsForPostProductionUser(
+          selectedPostProductionUserId
+        );
+
+      appendAndCondition({
+        stream_project_booking_id:
+          {
+            [Op.in]:
+              assignedProjectIds.length
+                ? assignedProjectIds
+                : [-1],
+          },
+      });
+    }
+
+    const rows =
+      await stream_project_booking.findAll(
+        {
+          where: whereConditions,
+
+          attributes: [
+            'stream_project_booking_id',
+            'project_name',
+            'is_active',
+            'status',
+            'is_cancelled',
+            'is_completed',
+            'event_date',
+            'start_time',
+            'end_time',
+            'time_zone',
+            'duration_hours',
+            'event_location',
+            'event_latitude',
+            'event_longitude',
+          ],
+
+          include: [
+            {
+              model:
+                db.stream_project_booking_days,
+
+              as: 'booking_days',
+
+              required: false,
+
+              attributes: [
+                'event_date',
+                'start_time',
+                'end_time',
+                'duration_hours',
+                'time_zone',
+              ],
+            },
+
+            {
+              model:
+                assigned_crew,
+
+              as: 'assigned_crews',
+
+              where: {
+                is_active: 1,
+              },
+
+              required: false,
+
+              attributes: [
+                'project_id',
+                'crew_member_id',
+              ],
+            },
+          ],
+
+          order: [
+            [
+              Sequelize.literal(
+                'CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN 0 ELSE 1 END'
+              ),
+              'ASC',
+            ],
+
+            [
+              Sequelize.literal(
+                'CASE WHEN DATE(`stream_project_booking`.`event_date`) >= CURDATE() THEN `stream_project_booking`.`event_date` END'
+              ),
+              'ASC',
+            ],
+
+            [
+              Sequelize.literal(
+                'CASE WHEN DATE(`stream_project_booking`.`event_date`) < CURDATE() THEN `stream_project_booking`.`event_date` END'
+              ),
+              'DESC',
+            ],
+          ],
+        }
+      );
+
+    let filteredRows = rows;
+
+    if (
+      cp_assignment &&
+      cp_assignment !== 'all'
+    ) {
+      const normalizedCpAssignment =
+        String(cp_assignment)
+          .toLowerCase()
+          .trim();
+
+      filteredRows =
+        rows.filter((row) => {
+          const plain =
+            typeof row.toJSON ===
+            'function'
+              ? row.toJSON()
+              : row;
+
+          const assignedCrews =
+            Array.isArray(
+              plain.assigned_crews
+            )
+              ? plain.assigned_crews
+              : [];
+
+          const hasAssignedCp =
+            assignedCrews.length >
+            0;
+
+          if (
+            normalizedCpAssignment ===
+            'assigned'
+          ) {
+            return hasAssignedCp;
+          }
+
+          if (
+            normalizedCpAssignment ===
+            'not_assigned'
+          ) {
+            return !hasAssignedCp;
+          }
+
+          return true;
+        });
+    }
+
+    const projects =
+      filteredRows.map((row) => {
+        const shoot =
+          row.toJSON();
+
+        const bookingDays = (
+          Array.isArray(
+            shoot.booking_days
+          )
+            ? shoot.booking_days
+            : []
+        )
+          .sort((a, b) => {
+            const dateDifference =
+              String(
+                a.event_date || ''
+              ).localeCompare(
+                String(
+                  b.event_date ||
+                    ''
+                )
+              );
+
+            return dateDifference !==
+              0
+              ? dateDifference
+              : String(
+                  a.start_time || ''
+                ).localeCompare(
+                  String(
+                    b.start_time ||
+                      ''
+                  )
+                );
+          })
+          .map((day) => ({
+            event_date:
+              day.event_date,
+
+            start_time:
+              day.start_time,
+
+            end_time:
+              day.end_time,
+
+            duration_hours:
+              day.duration_hours,
+
+            time_zone:
+              day.time_zone ||
+              null,
+          }));
+
+        let eventLocation =
+          shoot.event_location ||
+          null;
+
+        if (
+          typeof eventLocation ===
+            'string' &&
+          (eventLocation.startsWith(
+            '{'
+          ) ||
+            eventLocation.startsWith(
+              '['
+            ))
+        ) {
+          try {
+            const parsed =
+              JSON.parse(
+                eventLocation
+              );
+
+            eventLocation =
+              parsed.address ||
+              eventLocation;
+          } catch (_) {}
+        }
+
+        return {
+          project: {
+            stream_project_booking_id:
+              shoot.stream_project_booking_id,
+
+            project_name:
+              shoot.project_name ||
+              null,
+
+            is_active:
+              Number(
+                shoot.is_active
+              ) === 1,
+
+            status:
+              shoot.status ??
+              null,
+
+            is_cancelled:
+              Number(
+                shoot.is_cancelled ||
+                  0
+              ),
+
+            is_completed:
+              Number(
+                shoot.is_completed ||
+                  0
+              ),
+
+            event_date:
+              shoot.event_date,
+
+            start_time:
+              shoot.start_time,
+
+            end_time:
+              shoot.end_time,
+
+            time_zone:
+              shoot.time_zone ||
+              null,
+
+            duration_hours:
+              shoot.duration_hours,
+
+            booking_days:
+              bookingDays,
+
+            event_location:
+              eventLocation,
+
+            event_latitude:
+              shoot.event_latitude ??
+              null,
+
+            event_longitude:
+              shoot.event_longitude ??
+              null,
+          },
+
+          assignedCrew: (
+            Array.isArray(
+              shoot.assigned_crews
+            )
+              ? shoot.assigned_crews
+              : []
+          ).map(
+            (assignedCrew) => ({
+              project_id:
+                assignedCrew.project_id,
+
+              crew_member_id:
+                assignedCrew.crew_member_id,
+            })
+          ),
+        };
+      });
+
+    return res
+      .status(200)
+      .json({
+        error: false,
+
+        message:
+          'Global shoots retrieved successfully',
+
+        data: {
+          filters_applied: {
+            range:
+              range ||
+              'upcoming',
+
+            start_date:
+              start_date ||
+              null,
+
+            end_date:
+              end_date ||
+              null,
+
+            search:
+              search || '',
+
+            status:
+              status || 'all',
+
+            cp_assignment:
+              cp_assignment ||
+              'all',
+          },
+
+          total_records:
+            projects.length,
+
+          projects,
+        },
+      });
   } catch (error) {
-    console.error('[admin/global-shoots] Failed to retrieve shoots:', error);
-    return res.status(500).json({
-      error: true,
-      message: 'Failed to retrieve global shoots.',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
+    console.error(
+      '[admin/global-shoots] Failed to retrieve shoots:',
+      error
+    );
+
+    return res
+      .status(500)
+      .json({
+        error: true,
+
+        message:
+          'Failed to retrieve global shoots.',
+
+        details:
+          process.env.NODE_ENV ===
+          'development'
+            ? error.message
+            : undefined,
+      });
   }
 };
 
@@ -5375,6 +5903,29 @@ const getCalendarShoots = (view) => async (req, res) => {
     }
 
     const paidFilter = await getPaidCalendarFilter(req);
+    let filteredBookingIds = null;
+    let projectDetailsByBookingId = new Map();
+
+    const projectSnapshot = await invokeProjectsBoardSnapshot(req, {
+      range: undefined,
+      start_date: range.start,
+      end_date: range.end,
+      date_on: undefined,
+      limit: undefined,
+      page: undefined,
+      summary_only: undefined,
+      board_view: undefined,
+    });
+    projectDetailsByBookingId = new Map(
+      (projectSnapshot?.data?.projects || []).map((entry) => [
+        Number(entry?.project?.stream_project_booking_id),
+        entry,
+      ])
+    );
+    filteredBookingIds = new Set(
+      [...projectDetailsByBookingId.keys()]
+        .filter((bookingId) => Number.isInteger(bookingId) && bookingId > 0)
+    );
 
     const fetchShoots = (isActive) => stream_project_booking.findAll({
       attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'start_time', 'end_time', 'time_zone', 'is_active'],
@@ -5382,25 +5933,61 @@ const getCalendarShoots = (view) => async (req, res) => {
         ...paidFilter,
         is_active: isActive,
         event_date: { [Op.between]: [range.start, range.end] },
+        ...(filteredBookingIds ? {
+          stream_project_booking_id: {
+            [Op.in]: filteredBookingIds.size ? [...filteredBookingIds] : [-1],
+          },
+        } : {}),
       },
       order: [['event_date', 'ASC'], ['start_time', 'ASC'], ['stream_project_booking_id', 'ASC']],
       raw: true,
     });
 
-    const formatShoot = (shoot) => ({
-      id: shoot.stream_project_booking_id,
-      title: shoot.project_name || 'Untitled Shoot',
-      date: shoot.event_date,
-      start_time: shoot.start_time,
-      end_time: shoot.end_time,
-      time_zone: shoot.time_zone,
-      is_active: Number(shoot.is_active) === 1,
-    });
+    const formatShoot = (shoot) => {
+      const detail = projectDetailsByBookingId.get(Number(shoot.stream_project_booking_id));
+      const project = detail?.project || {};
+      const assignedCrew = Array.isArray(detail?.assignedCrew) ? detail.assignedCrew : [];
+      const assignedEquipment = Array.isArray(detail?.assignedEquipment) ? detail.assignedEquipment : [];
+      const assignedPostProductionMembers = Array.isArray(detail?.assignedPostProductionMembers)
+        ? detail.assignedPostProductionMembers
+        : [];
+      const selectedCrewIds = Array.isArray(project.selected_crew_ids) ? project.selected_crew_ids : [];
+      const assignedCrewIds = assignedCrew
+        .map((member) => Number(member?.crew_member_id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+      const hasAssignedCp = assignedCrewIds.length > 0 || selectedCrewIds.length > 0;
+
+      return {
+        id: shoot.stream_project_booking_id,
+        title: shoot.project_name || 'Untitled Shoot',
+        date: shoot.event_date,
+        start_time: shoot.start_time,
+        end_time: shoot.end_time,
+        time_zone: shoot.time_zone,
+        is_active: Number(shoot.is_active) === 1,
+        status: project.timeline_label || project.status || null,
+        status_code: project.status ?? null,
+        category: project.event_type_labels || project.content_type || project.event_type || project.shoot_type || null,
+        payment_status: project.payment_status || null,
+        paid_amount: project.paid_amount ?? null,
+        pending_amount: project.pending_amount ?? null,
+        cp_assignment: hasAssignedCp ? 'assigned' : 'not_assigned',
+        has_assigned_cp: hasAssignedCp,
+        assigned_crew_ids: assignedCrewIds.length ? assignedCrewIds : selectedCrewIds,
+        // Keep the same detailed project and assignment payload used by the shoots table.
+        project,
+        assignedCrew,
+        assignedEquipment,
+        assignedPostProductionMembers,
+      };
+    };
 
     const [activeRows, deletedRows, meetings] = await Promise.all([
       fetchShoots(1),
       fetchShoots(0),
-      fetchCalendarMeetings(req, range),
+      fetchCalendarMeetings(req, range).then((rows) => filteredBookingIds
+        ? rows.filter((meeting) => filteredBookingIds.has(Number(meeting.booking_id)))
+        : rows),
     ]);
 
     return res.status(200).json({
@@ -5408,6 +5995,14 @@ const getCalendarShoots = (view) => async (req, res) => {
       data: {
         view,
         range,
+        filters_applied: {
+          search: req.query.search || '',
+          status: req.query.status || 'all',
+          category: req.query.category || 'all',
+          payment_filter: req.query.payment_filter || 'all',
+          production_filter: req.query.production_filter || 'all',
+          cp_assignment: req.query.cp_assignment || 'all',
+        },
         active_shoots: activeRows.map(formatShoot),
         deleted_shoots: deletedRows.map(formatShoot),
         meetings,
@@ -5622,6 +6217,7 @@ exports.exportShootsCsv = async (req, res) => {
       cp_assignment,
       production_filter,
       post_production_user_id,
+      post_production_assignment,
     } = req.query;
     const isDeletedStatus = normalizeStatusFilterValue(status) === 'deleted';
 
@@ -6017,6 +6613,33 @@ exports.exportShootsCsv = async (req, res) => {
       .filter((project) => matchesCategoryFilter(project))
       .filter((project) => matchesSearchFilter(project))
       .filter((project) => matchesCpAssignmentFilter(project));
+
+    const normalizedPostProductionAssignment = String(post_production_assignment || '').trim().toLowerCase();
+    if (normalizedPostProductionAssignment === 'assigned' || normalizedPostProductionAssignment === 'not_assigned') {
+      const exportBookingIds = filteredProjects
+        .map((project) => Number(project?.stream_project_booking_id || 0))
+        .filter((id) => Number.isInteger(id) && id > 0);
+
+      const postProdAssignedRows = exportBookingIds.length
+        ? await assigned_post_production_member.findAll({
+            where: {
+              project_id: { [Op.in]: exportBookingIds },
+              is_active: 1
+            },
+            attributes: ['project_id'],
+            raw: true
+          })
+        : [];
+
+      const postProdAssignedSet = new Set(
+        postProdAssignedRows.map((row) => Number(row.project_id))
+      );
+
+      filteredProjects = filteredProjects.filter((project) => {
+        const hasPostProd = postProdAssignedSet.has(Number(project?.stream_project_booking_id));
+        return normalizedPostProductionAssignment === 'assigned' ? hasPostProd : !hasPostProd;
+      });
+    }
 
     if (normalizedProductionFilter && normalizedProductionFilter !== 'all') {
       const authHeader = req.headers?.authorization || null;
@@ -13323,6 +13946,7 @@ exports.getProjectHistory = async (req, res) => {
             'post_production_member_assigned',
             'post_production_member_removed',
             'project_name_updated',
+            'project_description_updated',
             'schedule_location_updated',
             'chat_room_created',
             'meeting_created',   
@@ -16298,10 +16922,8 @@ exports.assignProjectCrewBulk = async (req, res) => {
             }
 
             try {
-              if (deferNewShootRequestEmail) {
-                return;
-              }
-              const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+              if (!deferNewShootRequestEmail) {
+                const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
                 const crews = await crew_members.findAll({
                     where: { crew_member_id: createdIds },
                     attributes: ['user_id', 'first_name', 'last_name', 'email']
@@ -16337,6 +16959,7 @@ exports.assignProjectCrewBulk = async (req, res) => {
                         })
                     )
                 );
+              }
             } catch (mailErr) {
                 console.error('Mail trigger error:', mailErr);
             }
@@ -18103,7 +18726,38 @@ exports.updateRole = async (req, res) => {
     }
 
     if (hasPermissionsUpdate) {
+      const previousRolePermissions = await db.role_permissions.findAll({
+        where: {
+          role_id,
+          is_active: 1
+        },
+        attributes: ['permission_id'],
+        transaction
+      });
+
       await syncRolePermissions(role_id, permissions, transaction);
+
+      const updatedRolePermissions = await db.role_permissions.findAll({
+        where: {
+          role_id,
+          is_active: 1
+        },
+        attributes: ['permission_id'],
+        transaction
+      });
+
+      const previousPermissionIds = new Set(
+        previousRolePermissions.map((item) => Number(item.permission_id))
+      );
+      const updatedPermissionIds = new Set(
+        updatedRolePermissions.map((item) => Number(item.permission_id))
+      );
+      const changedPermissionIds = [
+        ...new Set([
+          ...[...previousPermissionIds].filter((permissionId) => !updatedPermissionIds.has(permissionId)),
+          ...[...updatedPermissionIds].filter((permissionId) => !previousPermissionIds.has(permissionId))
+        ])
+      ];
 
       const roleUsers = await db.users.findAll({
         where: {
@@ -18114,9 +18768,27 @@ exports.updateRole = async (req, res) => {
         transaction
       });
 
-      await Promise.all(
-        roleUsers.map((user) => syncUserPermissionsFromRole(user.id, role_id, transaction))
-      );
+      const roleUserIds = roleUsers.map((user) => Number(user.id));
+
+      // A role change must win for the permission being changed:
+      // - removing it clears every explicit user grant for that role;
+      // - adding it clears every explicit deny so all role users inherit it.
+      // Unrelated individual overrides remain untouched.
+      if (roleUserIds.length && changedPermissionIds.length) {
+        await db.user_permissions.update(
+          {
+            is_active: 0,
+            is_allowed: 0
+          },
+          {
+            where: {
+              user_id: { [Op.in]: roleUserIds },
+              permission_id: { [Op.in]: changedPermissionIds }
+            },
+            transaction
+          }
+        );
+      }
 
       // Force affected users to log in again so their token cannot retain old permissions.
       await db.users.update(

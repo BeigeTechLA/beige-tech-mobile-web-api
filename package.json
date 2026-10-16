@@ -14,6 +14,7 @@
     "db:setup": "npm run db:init && npm run db:seed:full",
     "db:backfill:clients": "node scripts/backfill-clients-from-users.js",
     "db:backfill:crew-coordinates": "node scripts/backfill-crew-coordinates.js",
+    "calendar:sync-google": "node scripts/sync-creator-google-calendars.js",
     "db:backfill:shoot-coordinates": "node scripts/backfill-stream-project-booking-coordinates.js"
   },
   "keywords": [
