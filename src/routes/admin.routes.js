@@ -3,6 +3,7 @@ const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
 const { authMiddleware } = require('../middleware/auth');
+const db = require('../models');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const shiftManagementRoutes = require('./shifts.routes');
 const assignmentHistoryRoutes = require('./assignment-history.routes');
@@ -125,6 +126,35 @@ const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
 const adminUsersView = requireAnyPermission(['admin_users_all_users.view']);
 const adminClientsView = requireAnyPermission(['admin_users_clients.view']);
 const adminClientsEdit = requireAnyPermission(['admin_users_clients.edit']);
+const requireSuperAdminForClientEdit = async (req, res, next) => {
+  const userId = Number(req.user?.userId);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(401).json({ success: false, message: 'Authentication required' });
+  }
+
+  try {
+    const actor = await db.users.findOne({
+      where: { id: userId, is_active: 1 },
+      attributes: ['id', 'user_type'],
+      include: [{
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['user_role'],
+        where: { is_active: 1 },
+        required: true
+      }]
+    });
+    const role = String(actor?.userType?.user_role || '')
+      .trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (Number(actor?.user_type) !== 8 || !['super_admin', 'superadmin'].includes(role)) {
+      return res.status(403).json({ success: false, message: 'Only Super Admin can edit client profiles' });
+    }
+    return next();
+  } catch (error) {
+    console.error('Client edit authorization error:', error);
+    return res.status(500).json({ success: false, message: 'Authorization error' });
+  }
+};
 const adminClientsDelete = requireAnyPermission(['admin_users_clients.delete']);
 const adminCreativePartnersView = requireAnyPermission([
   'admin_users_creative_partners.view',
@@ -305,7 +335,7 @@ router.get(
 );
 router.get('/archive-history', authMiddleware, adminUsersView, admin.getArchiveHistory);
 router.get('/login-history', authMiddleware, rolesPermissionsView, admin.getLoginHistory);
-router.put('/edit-client/:client_id', admin.editClient);
+router.put('/edit-client/:client_id', authMiddleware, requireSuperAdminForClientEdit, admin.editClient);
 router.delete('/delete-client/:client_id', authMiddleware, adminClientsDelete, admin.deleteClient);
 router.post('/restore-client/:client_id', authMiddleware, adminClientsDelete, admin.restoreClient);
 router.post('/convert-client-to-creative-partner/:client_id', authMiddleware, adminClientsEdit, admin.convertClientToCreativePartner);

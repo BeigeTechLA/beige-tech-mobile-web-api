@@ -13394,76 +13394,210 @@ exports.exportClientsCsv = async (req, res) => {
 
 
 exports.editClient = async (req, res) => {
-  try {
-    const { client_id } = req.params;
-    const { name, email, phone_number } = req.body;
+  // Defense in depth: reject direct handler invocation by non-Super Admin roles.
+  if (Number(req.user?.userTypeId) !== 8 || !isSuperAdminRequest(req)) {
+    return res.status(403).json({ error: true, message: 'Only Super Admin can edit client profiles' });
+  }
 
-    if (!name || !email || !phone_number) {
-      return res.status(400).json({
-        error: true,
-        message: 'Name, email, and phone number are required'
-      });
+  const clientId = Number(req.params.client_id);
+  if (!Number.isInteger(clientId) || clientId <= 0) {
+    return res.status(400).json({ error: true, message: 'A valid client ID is required' });
+  }
+
+  const body = req.body || {};
+  const permittedFields = ['name', 'email', 'phone_number'];
+  const fieldsToUpdate = permittedFields.filter((field) =>
+    Object.prototype.hasOwnProperty.call(body, field)
+  );
+
+  if (!fieldsToUpdate.length) {
+    return res.status(400).json({ error: true, message: 'No profile changes were provided' });
+  }
+
+  const changes = {};
+  if (fieldsToUpdate.includes('name')) {
+    if (typeof body.name !== 'string') {
+      return res.status(400).json({ error: true, message: 'Client name is invalid' });
     }
+    changes.name = body.name.trim().replace(/\s+/g, ' ');
+    if (!changes.name || changes.name.length > 200) {
+      return res.status(400).json({ error: true, message: 'Name must be between 1 and 200 characters' });
+    }
+  }
+
+  if (fieldsToUpdate.includes('email')) {
+    if (typeof body.email !== 'string') {
+      return res.status(400).json({ error: true, message: 'Email address is invalid' });
+    }
+    changes.email = body.email.trim().toLowerCase();
+    if (changes.email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(changes.email)) {
+      return res.status(400).json({ error: true, message: 'A valid email address is required' });
+    }
+  }
+
+  if (fieldsToUpdate.includes('phone_number')) {
+    if (body.phone_number !== null && typeof body.phone_number !== 'string') {
+      return res.status(400).json({ error: true, message: 'Phone number is invalid' });
+    }
+    const phone = String(body.phone_number || '').trim();
+    const digits = phone.replace(/\D/g, '');
+    if (phone && (phone.length > 20 || digits.length < 7 || digits.length > 15 || /[^\d+().\s-]/.test(phone))) {
+      return res.status(400).json({ error: true, message: 'Phone number must contain 7 to 15 digits' });
+    }
+    changes.phone_number = phone || null;
+  }
+
+  let transaction;
+  try {
+    transaction = await db.sequelize.transaction();
 
     const client = await clients.findOne({
-      where: { client_id, is_active: 1 }
+      where: { client_id: clientId, is_active: 1 },
+      transaction
     });
 
     if (!client) {
-      return res.status(404).json({
+      await transaction.rollback();
+      return res.status(404).json({ error: true, message: 'Client not found or archived' });
+    }
+
+    const user = client.user_id
+      ? await users.findOne({ where: { id: client.user_id, is_active: 1 }, transaction })
+      : null;
+
+    if (client.user_id && !user) {
+      await transaction.rollback();
+      return res.status(409).json({
         error: true,
-        message: 'Client not found or inactive'
+        message: 'The linked user account is inactive or missing. Restore the account before editing.'
       });
     }
 
-    const user = await users.findOne({
-      where: { id: client.user_id, is_active: 1 }
-    });
+    const changingEmail = changes.email && changes.email !== String(client.email || '').trim().toLowerCase();
+    const changingPhone = Object.prototype.hasOwnProperty.call(changes, 'phone_number') &&
+      changes.phone_number !== (client.phone_number || null);
 
-    if (!user) {
-      return res.status(404).json({
-        error: true,
-        message: 'Associated user not found or inactive'
+    if (user && (changingEmail || changingPhone)) {
+      const linkedCreativePartner = await crew_members.findOne({
+        where: { user_id: client.user_id, is_active: 1 },
+        attributes: ['crew_member_id'],
+        transaction
       });
+      if (linkedCreativePartner) {
+        await transaction.rollback();
+        return res.status(409).json({
+          error: true,
+          message: 'This client has an active Creative Partner profile. Shared account contact details cannot be changed from the Client editor.'
+        });
+      }
     }
 
-    const updatedClient = await clients.update(
-      {
-        name,
-        email,
-        phone_number
-      },
-      {
-        where: { client_id }
-      }
-    );
+    if (changingEmail) {
+      const [existingClient, existingUser] = await Promise.all([
+        clients.findOne({
+          where: {
+            [Op.and]: [
+              { client_id: { [Op.ne]: clientId } },
+              Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('email')), changes.email)
+            ]
+          },
+          attributes: ['client_id'],
+          transaction
+        }),
+        users.findOne({
+          where: {
+            [Op.and]: [
+              ...(client.user_id ? [{ id: { [Op.ne]: client.user_id } }] : []),
+              Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('email')), changes.email)
+            ]
+          },
+          attributes: ['id'],
+          transaction
+        })
+      ]);
 
-    const updatedUser = await users.update(
-      {
-        name,
-        email,
-        phone_number
-      },
-      {
-        where: { id: client.user_id }
+      if (existingClient || existingUser) {
+        await transaction.rollback();
+        return res.status(409).json({ error: true, message: 'This email address is already in use' });
       }
-    );
 
+      // Guest bookings and finance records are identified by email rather than user_id.
+      // Refuse to silently break these relationships by changing their lookup key.
+      if (!client.user_id) {
+        const guestEmail = String(client.email || '').trim().toLowerCase();
+        const guestReferences = [
+          { model: stream_project_booking, column: 'guest_email' },
+          { model: quotes, column: 'guest_email' },
+          { model: client_leads, column: 'guest_email' },
+          { model: sales_leads, column: 'guest_email' },
+          { model: payment_transactions, column: 'guest_email' },
+          { model: db.account_credit_ledger, column: 'guest_email' },
+          { model: db.sales_quotes, column: 'client_email' }
+        ];
+
+        for (const { model, column } of guestReferences) {
+          const matchingRecord = await model.findOne({
+            where: Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col(column)),
+              guestEmail
+            ),
+            attributes: [model.primaryKeyAttribute],
+            transaction
+          });
+          if (matchingRecord) {
+            await transaction.rollback();
+            return res.status(409).json({
+              error: true,
+              message: 'This guest has linked bookings, quotes, or financial history. Email cannot be changed without migrating those records.'
+            });
+          }
+        }
+      }
+    }
+
+    const updatedAt = new Date();
+    await client.update({ ...changes, updated_at: updatedAt }, { transaction });
+
+    if (user) {
+      const userChanges = { ...changes, updated_at: updatedAt };
+      if (changingEmail) {
+        userChanges.email_verified = 0;
+        userChanges.verification_code = null;
+      }
+      await user.update(userChanges, { transaction });
+    }
+
+    await transaction.commit();
     return res.status(200).json({
       error: false,
-      message: 'Client and user updated successfully',
+      success: true,
+      message: 'Client profile updated successfully',
       data: {
-        client: updatedClient,
-        user: updatedUser
+        client: {
+          client_id: client.client_id,
+          user_id: client.user_id,
+          name: client.name,
+          email: client.email,
+          phone_number: client.phone_number,
+          is_active: client.is_active
+        },
+        user: user ? {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone_number: user.phone_number
+        } : null
       }
     });
-
   } catch (error) {
-    console.error("Error updating client:", error);
-    return res.status(500).json({
-      error: true,
-      message: 'Internal server error'
-    });
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(409).json({ error: true, message: 'Email address or phone number is already in use' });
+    }
+    console.error('Edit Client Error:', error);
+    return res.status(500).json({ error: true, message: 'Failed to update client profile' });
   }
 };
 
