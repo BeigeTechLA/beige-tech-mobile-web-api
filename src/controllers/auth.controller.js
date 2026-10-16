@@ -744,21 +744,23 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Check if user already exists
-    const conditions = [];
-    if (email) conditions.push({ email });
-    if (phone_number) conditions.push({ phone_number });
-    if (instagram_handle) conditions.push({ instagram_handle });
+    // Check each identifier separately so the conflict message can name it.
+    // The default scope excludes inactive users, matching the prior combined check.
+    const [existingEmailUser, existingPhoneUser, existingInstagramUser] = await Promise.all([
+      email ? User.findOne({ where: { email } }) : null,
+      phone_number ? User.findOne({ where: { phone_number } }) : null,
+      instagram_handle ? User.findOne({ where: { instagram_handle } }) : null
+    ]);
 
-    // by default it adds is_active = 1 condition using defaultScope
-    const userExists = await User.findOne({
-      where: { [Op.or]: conditions }
-    });
+    if (existingEmailUser || existingPhoneUser || existingInstagramUser) {
+      const duplicateIdentifiers = [];
+      if (existingEmailUser) duplicateIdentifiers.push('email');
+      if (existingPhoneUser) duplicateIdentifiers.push('phone number');
+      if (existingInstagramUser) duplicateIdentifiers.push('Instagram handle');
 
-    if (userExists) {
       return res.status(409).json({
         success: false,
-        message: 'User already exists'
+        message: `${duplicateIdentifiers.join(' and ')} already exists`
       });
     }
 
@@ -2729,20 +2731,25 @@ exports.registerCrewMemberStep1 = [
       const archivedClient = existingUser ? await findArchivedClientForUser(existingUser, transaction) : null;
       const canReuseArchivedClientUser = Boolean(existingUser && archivedClient);
 
-      if (existingUser && !canReuseArchivedClientUser) {
-        await transaction.rollback();
-        transaction = null;
-        return res.status(409).json({ success: false, message: 'Email already exists.' });
-      }
-
       const existingPhoneUser = phone_number
         ? await User.findOne({ where: { phone_number }, transaction })
         : null;
 
-      if (existingPhoneUser && (!existingUser || Number(existingPhoneUser.id) !== Number(existingUser.id))) {
+      const emailAlreadyExists = Boolean(existingUser && !canReuseArchivedClientUser);
+      const phoneAlreadyExists = Boolean(
+        existingPhoneUser && (!existingUser || Number(existingPhoneUser.id) !== Number(existingUser.id))
+      );
+
+      if (emailAlreadyExists || phoneAlreadyExists) {
         await transaction.rollback();
         transaction = null;
-        return res.status(409).json({ success: false, message: 'Phone number already exists.' });
+        const duplicateIdentifiers = [];
+        if (emailAlreadyExists) duplicateIdentifiers.push('Email');
+        if (phoneAlreadyExists) duplicateIdentifiers.push('phone number');
+        const message = duplicateIdentifiers.length === 2
+          ? 'Email and phone number already exist.'
+          : `${duplicateIdentifiers[0]} already exists.`;
+        return res.status(409).json({ success: false, message });
       }
 
       const existingCrew = await crew_members.findOne({ where: { email }, transaction });
