@@ -480,9 +480,11 @@ router.get('/quotes/shoot-types/:content_type', authenticate, adminMasterPricing
 router.post('/quotes/shoot-types', authenticate, adminMasterPricingCreate, salesQuotesController.createShootType);
 router.put('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingEdit, salesQuotesController.updateShootType);
 router.delete('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteShootType);
+router.post('/quotes/types/bulk-delete', authenticate, adminMasterPricingDelete, salesQuotesController.bulkDeleteTypes);
 router.post('/quotes/catalog', authenticate, adminMasterPricingCreate, salesQuotesController.createCatalogItem);
 router.put('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingEdit, salesQuotesController.updateCatalogItem);
 router.delete('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteCatalogItem);
+router.post('/quotes/catalog/bulk-delete', authenticate, adminMasterPricingDelete, salesQuotesController.bulkDeleteCatalogItems);
 
 router.get('/quotes/dashboard', authenticate, adminQuotesView, salesQuotesController.getQuoteDashboard);
 router.get('/quotes/analytics/filters', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalyticsFilters);

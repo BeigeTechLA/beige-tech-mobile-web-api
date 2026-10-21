@@ -48,7 +48,7 @@ const errorHandler = (err, req, res, next) => {
   if (err.name === 'SequelizeConnectionError') {
     return res.status(503).json({
       error: true,
-      message: 'Database connection error'
+      message: 'The service is temporarily unavailable. Please try again later.'
     });
   }
 
@@ -65,8 +65,7 @@ const errorHandler = (err, req, res, next) => {
   if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
     return res.status(401).json({
       error: true,
-      message: 'Authentication error',
-      details: err.message
+      message: 'Please sign in again.'
     });
   }
 
@@ -74,16 +73,17 @@ const errorHandler = (err, req, res, next) => {
   if (err.statusCode) {
     return res.status(err.statusCode).json({
       error: true,
-      message: err.message,
-      details: err.details
+      message: err.statusCode >= 500
+        ? 'Something went wrong. Please try again later.'
+        : err.message,
+      ...(err.statusCode < 500 && err.details ? { details: err.details } : {})
     });
   }
 
   // Default internal server error
   res.status(500).json({
     error: true,
-    message: 'Internal server error',
-    details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    message: 'Something went wrong. Please try again later.'
   });
 };
 
