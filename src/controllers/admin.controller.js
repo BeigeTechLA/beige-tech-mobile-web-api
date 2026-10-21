@@ -5371,9 +5371,16 @@ exports.getGlobalShoots = async (req, res) => {
   try {
     const {range, start_date, end_date, search, status, cp_assignment, post_production_user_id, } = req.query;
 
-    const paidFilter = await getPaidCalendarFilter(req);
+    const paidFilter = req.myProducerScope ? {} : await getPaidCalendarFilter(req);
 
     let whereConditions = { ...paidFilter, is_active: 1};
+    if (req.myProducerScope) {
+      const userId = Number(req.user?.userId);
+      if (!Number.isInteger(userId) || userId <= 0) {
+        return res.status(401).json({ error: true, message: 'Authentication required' });
+      }
+      whereConditions.producer_user_id = userId;
+    }
 
     const andConditions = buildGlobalShootRangeFilter(range, start_date, end_date);
     const appendAndCondition = (
@@ -5491,6 +5498,7 @@ exports.getGlobalShoots = async (req, res) => {
           attributes: [
             'stream_project_booking_id',
             'project_name',
+            'shoot_type',
             'is_active',
             'status',
             'is_cancelled',
@@ -5702,6 +5710,8 @@ exports.getGlobalShoots = async (req, res) => {
             project_name:
               shoot.project_name ||
               null,
+
+            shoot_type: shoot.shoot_type || null,
 
             is_active:
               Number(
@@ -12258,6 +12268,11 @@ exports.getPostProductionTeamOptions = async (req, res) => {
     // who are already actively assigned to that shoot.
     let assignedEmails = new Set();
     if (Number.isInteger(projectId) && projectId > 0) {
+      const project = await stream_project_booking.findByPk(projectId, { attributes: ['producer_user_id'] });
+      if (project?.producer_user_id) {
+        const producer = await users.findByPk(project.producer_user_id, { attributes: ['email'] });
+        if (producer?.email) assignedEmails.add(String(producer.email).trim().toLowerCase());
+      }
       const assignedMembers = await assigned_post_production_member.findAll({
         where: { project_id: projectId, is_active: 1 },
         attributes: [],
@@ -12270,11 +12285,10 @@ exports.getPostProductionTeamOptions = async (req, res) => {
         raw: true
       });
 
-      assignedEmails = new Set(
-        assignedMembers
-          .map((member) => String(member['post_production_member.email'] || '').trim().toLowerCase())
-          .filter(Boolean)
-      );
+      assignedMembers.forEach((member) => {
+        const email = String(member['post_production_member.email'] || '').trim().toLowerCase();
+        if (email) assignedEmails.add(email);
+      });
     }
 
     const availableUsers = activeUsers.filter(
@@ -12297,6 +12311,45 @@ exports.getPostProductionTeamOptions = async (req, res) => {
       success: false,
       message: 'Failed to fetch post-production team options'
     });
+  }
+};
+
+exports.getMyProducerShoots = (req, res) => {
+  req.myProducerScope = true;
+  return exports.getGlobalShoots(req, res);
+};
+
+exports.setShootProducer = async (req, res) => {
+  try {
+    const projectId = Number(req.params.project_id);
+    const producerId = req.body.producer_user_id == null ? null : Number(req.body.producer_user_id);
+    if (!Number.isInteger(projectId) || projectId <= 0 || (producerId !== null && (!Number.isInteger(producerId) || producerId <= 0))) {
+      return res.status(400).json({ success: false, message: 'Valid project and producer IDs are required' });
+    }
+    const project = await stream_project_booking.findOne({ where: { stream_project_booking_id: projectId, is_active: 1 } });
+    if (!project) return res.status(404).json({ success: false, message: 'Shoot not found' });
+
+    if (producerId !== null) {
+      const producer = await users.findOne({
+        where: { id: producerId, is_active: 1 },
+        attributes: ['id', 'name', 'email'],
+        include: [{ model: db.user_type, as: 'userType', attributes: ['user_role'], required: true,
+          where: { user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES }, is_active: 1 } }]
+      });
+      if (!producer) return res.status(400).json({ success: false, message: 'Producer is not an active eligible team member' });
+      const assignments = await assigned_post_production_member.findAll({
+        where: { project_id: projectId, is_active: 1 },
+        include: [{ model: post_production_members, as: 'post_production_member', attributes: ['email'], required: true }]
+      });
+      if (assignments.some((item) => String(item.post_production_member?.email || '').trim().toLowerCase() === String(producer.email || '').trim().toLowerCase())) {
+        return res.status(409).json({ success: false, message: 'This person is already on the post production team' });
+      }
+    }
+    await project.update({ producer_user_id: producerId });
+    return res.status(200).json({ success: true, data: { producer_user_id: producerId } });
+  } catch (error) {
+    console.error('Set shoot producer failed:', error);
+    return res.status(500).json({ success: false, message: 'Failed to update shoot producer' });
   }
 };
 
@@ -12434,6 +12487,13 @@ exports.assignPostProductionMember = async (req, res) => {
         error: true,
         message: 'Project not found or inactive',
       });
+    }
+
+    if (project.producer_user_id) {
+      const producer = await users.findByPk(project.producer_user_id, { attributes: ['email'] });
+      if (producer?.email && String(producer.email).trim().toLowerCase() === String(selectedUserJson.email || '').trim().toLowerCase()) {
+        return res.status(409).json({ error: true, message: 'This person is already the shoot producer' });
+      }
     }
 
     // Prevent duplicate active assignment of the same member for this project.
