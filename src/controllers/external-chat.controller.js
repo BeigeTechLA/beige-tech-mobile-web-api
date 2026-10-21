@@ -1,5 +1,6 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
+const appNotificationService = require('../services/app-notification.service');
 const { runChatMessageEmailDigestJob } = require('../services/chat-message-email-digest.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
