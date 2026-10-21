@@ -1911,8 +1911,16 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const tx = await db.sequelize.transaction();
         try {
             if (booking_id) {
-                booking = await stream_project_booking.findByPk(booking_id);
+                booking = await stream_project_booking.findByPk(booking_id, {
+                    transaction: tx,
+                    lock: tx.LOCK.UPDATE
+                });
                 if (booking) {
+                    if (Number(booking.is_draft) !== 1 || booking.payment_id || booking.payment_completed_at) {
+                        const conflict = new Error('This booking is no longer a draft.');
+                        conflict.code = 'BOOKING_NOT_DRAFT';
+                        throw conflict;
+                    }
                     const updateData = { ...bookingData };
                     if (!hasScheduleFields) {
                         delete updateData.event_date;
@@ -2080,6 +2088,9 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         });
 
     } catch (error) {
+        if (error.code === 'BOOKING_NOT_DRAFT') {
+            return res.status(409).json({ success: false, message: error.message });
+        }
         console.error('Error in trackEarlyBookingInterest:', error);
         return res.status(500).json({ 
             success: false, 
