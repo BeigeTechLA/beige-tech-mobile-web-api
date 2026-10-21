@@ -53,6 +53,7 @@ const userExportService = require('../services/user-export.service');
 const detailsPendingCpService = require('../services/details-pending-cp.service');
 const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 const passwordExpiryService = require('../services/internal-password-expiry.service');
+const { describeSignupConflicts } = require('../utils/signup-conflicts');
 const { ipType, deviceDetails, sessionDetails } = require('../utils/login-session-details');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
@@ -13394,75 +13395,96 @@ exports.exportClientsCsv = async (req, res) => {
 
 
 exports.editClient = async (req, res) => {
+  if (!isSuperAdminRequest(req)) {
+    return res.status(403).json({ success: false, message: 'Only super admins can edit clients.' });
+  }
+
+  const name = String(req.body?.name || '').trim();
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const phone_number = String(req.body?.phone_number || '').trim();
+  const clientId = Number(req.params.client_id);
+  if (!Number.isInteger(clientId) || clientId <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid client.' });
+  }
+  if (!name || !email || !phone_number) {
+    return res.status(400).json({ success: false, message: 'Name, email, and phone number are required.' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ success: false, message: 'Enter a valid email address.' });
+  }
+  if (!/^[0-9+\-\s()]{7,20}$/.test(phone_number)) {
+    return res.status(400).json({ success: false, message: 'Enter a valid phone number.' });
+  }
+
+  const transaction = await db.sequelize.transaction();
   try {
-    const { client_id } = req.params;
-    const { name, email, phone_number } = req.body;
-
-    if (!name || !email || !phone_number) {
-      return res.status(400).json({
-        error: true,
-        message: 'Name, email, and phone number are required'
-      });
-    }
-
     const client = await clients.findOne({
-      where: { client_id, is_active: 1 }
+      where: { client_id: clientId, is_active: 1 }, transaction
     });
 
     if (!client) {
-      return res.status(404).json({
-        error: true,
-        message: 'Client not found or inactive'
-      });
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Client not found or inactive.' });
     }
 
-    const user = await users.findOne({
-      where: { id: client.user_id, is_active: 1 }
+    const user = client.user_id
+      ? await users.scope('all').findOne({ where: { id: client.user_id }, transaction })
+      : null;
+
+    if (client.user_id && !user) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Associated user not found.' });
+    }
+
+    const matchingUsers = await users.scope('all').findAll({
+      where: {
+        [Op.or]: [{ email }, { phone_number }],
+        ...(user ? { id: { [Op.ne]: user.id } } : {})
+      },
+      attributes: ['email', 'phone_number'], transaction
     });
-
-    if (!user) {
-      return res.status(404).json({
-        error: true,
-        message: 'Associated user not found or inactive'
-      });
+    const matchingClients = await clients.findAll({
+      where: { [Op.or]: [{ email }, { phone_number }], client_id: { [Op.ne]: clientId } },
+      attributes: ['email', 'phone_number'], transaction
+    });
+    const conflict = describeSignupConflicts(
+      [...matchingUsers, ...matchingClients],
+      { email, phone_number }
+    );
+    if (conflict) {
+      await transaction.rollback();
+      return res.status(409).json(conflict);
     }
 
-    const updatedClient = await clients.update(
-      {
-        name,
-        email,
-        phone_number
-      },
-      {
-        where: { client_id }
-      }
-    );
-
-    const updatedUser = await users.update(
-      {
-        name,
-        email,
-        phone_number
-      },
-      {
-        where: { id: client.user_id }
-      }
-    );
+    const updated_at = new Date();
+    await client.update({ name, email, phone_number, updated_at }, { transaction });
+    if (user) await user.update({ name, email, phone_number, updated_at }, { transaction });
+    await transaction.commit();
 
     return res.status(200).json({
-      error: false,
-      message: 'Client and user updated successfully',
-      data: {
-        client: updatedClient,
-        user: updatedUser
-      }
+      success: true,
+      message: 'Client details updated successfully.',
+      data: { client: { client_id: client.client_id, name, email, phone_number } }
     });
 
   } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
     console.error("Error updating client:", error);
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      const fields = new Set([
+        ...Object.keys(error.fields || {}),
+        ...(error.errors || []).map((detail) => detail.path)
+      ]);
+      const conflict = describeSignupConflicts([
+        { email: fields.has('email') ? email : null, phone_number: fields.has('phone_number') ? phone_number : null }
+      ], { email, phone_number });
+      return res.status(409).json(conflict || {
+        success: false, message: 'Email or phone number already exists. Please check the details and try again.'
+      });
+    }
     return res.status(500).json({
-      error: true,
-      message: 'Internal server error'
+      success: false,
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
