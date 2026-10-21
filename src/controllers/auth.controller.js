@@ -574,13 +574,13 @@ async function getCreatorCrewMemberForUser(user) {
 
   let crewMember = await CrewMember.findOne({
     where: { user_id: user.id },
-    attributes: ['crew_member_id', 'is_crew_verified', 'is_registration_complete', 'location', 'old_location']
+    attributes: ['crew_member_id', 'is_active', 'is_crew_verified', 'is_registration_complete', 'location', 'old_location']
   });
 
   if (!crewMember && user.email) {
     crewMember = await CrewMember.findOne({
       where: { email: user.email },
-      attributes: ['crew_member_id', 'is_crew_verified', 'is_registration_complete', 'location', 'old_location', 'user_id']
+      attributes: ['crew_member_id', 'user_id', 'is_active', 'is_crew_verified', 'is_registration_complete', 'location', 'old_location']
     });
   }
 
@@ -1360,6 +1360,12 @@ exports.login = async (req, res) => {
 
       if (user.userType && user.userType.user_type_id === 2) {
         const crew = await getCreatorCrewMemberForUser(user);
+        if (!crew || Number(crew.is_active) !== 1) {
+          return res.status(403).json({
+            success: false,
+            message: 'This creative account is inactive.'
+          });
+        }
         crew_member_id = crew ? crew.crew_member_id : null;
         is_crew_verified = crew ? crew.is_crew_verified : null;
         is_registration_complete = crew ? crew.is_registration_complete : null;
@@ -1515,6 +1521,13 @@ exports.login = async (req, res) => {
 
       if (user.userType && user.userType.user_type_id === 2) {
         const crew = await getCreatorCrewMemberForUser(user);
+
+        if (!crew || Number(crew.is_active) !== 1) {
+          return res.status(403).json({
+            success: false,
+            message: 'This creative account is inactive.'
+          });
+        }
 
         crew_member_id = crew ? crew.crew_member_id : null;
         is_crew_verified = crew ? crew.is_crew_verified : null;

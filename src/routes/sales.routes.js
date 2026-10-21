@@ -252,6 +252,7 @@ router.put('/leads/:id/status', authenticate, adminSalesRepresentativeEdit, sale
 router.put('/client-leads/:id/status', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadStatus);
 router.post('/leads/manual-payment/upload-proof', authenticate, quoteOrSalesPaymentEdit, ...salesLeadsController.uploadManualPaymentProof);
 router.post('/leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordManualPayment);
+router.put('/leads/:id/manual-payment/:paymentId', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.editManualPaymentAmount);
 router.post('/client-leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordClientManualPayment);
 router.post('/availability', authenticate, salesRepAvailabilityView, salesAvailabilityController.getSalesRepAvailability);
 router.post('/add-availability', authenticate, salesRepAvailabilityCreate, salesAvailabilityController.setSalesRepAvailability);
@@ -477,9 +478,11 @@ router.get('/quotes/shoot-types/:content_type', authenticate, adminMasterPricing
 router.post('/quotes/shoot-types', authenticate, adminMasterPricingCreate, salesQuotesController.createShootType);
 router.put('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingEdit, salesQuotesController.updateShootType);
 router.delete('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteShootType);
+router.post('/quotes/types/bulk-delete', authenticate, adminMasterPricingDelete, salesQuotesController.bulkDeleteTypes);
 router.post('/quotes/catalog', authenticate, adminMasterPricingCreate, salesQuotesController.createCatalogItem);
 router.put('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingEdit, salesQuotesController.updateCatalogItem);
 router.delete('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteCatalogItem);
+router.post('/quotes/catalog/bulk-delete', authenticate, adminMasterPricingDelete, salesQuotesController.bulkDeleteCatalogItems);
 
 router.get('/quotes/dashboard', authenticate, adminQuotesView, salesQuotesController.getQuoteDashboard);
 router.get('/quotes/analytics/filters', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalyticsFilters);
