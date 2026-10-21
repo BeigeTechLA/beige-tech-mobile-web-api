@@ -12,7 +12,8 @@ exports.authenticate = async (req, res, next) => {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
         success: false,
-        message: 'No authentication token provided'
+        code: 'AUTH_REQUIRED',
+        message: 'Please sign in to continue.'
       });
     }
 
@@ -43,14 +44,16 @@ exports.authenticate = async (req, res, next) => {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({
         success: false,
-        message: 'Invalid token'
+        code: 'SESSION_INVALID',
+        message: 'Please sign in again.'
       });
     }
 
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,
-        message: 'Token expired'
+        code: 'SESSION_EXPIRED',
+        message: 'Your session has expired. Please sign in again.'
       });
     }
 
@@ -58,20 +61,20 @@ exports.authenticate = async (req, res, next) => {
       error.message === 'PERMISSION_CHANGED' ||
       error.message === 'USER_NOT_FOUND' ||
       error.message === 'SESSION_REVOKED' ||
+      error.message === 'EMAIL_NOT_VERIFIED' ||
       error.message === 'INVALID_TOKEN_TYPE'
     ) {
       return res.status(401).json({
         success: false,
         force_logout: true,
-        message: 'Please login again.'
+        message: 'Please sign in again.'
       });
     }
 
     console.error('Authentication Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Authentication error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -85,14 +88,14 @@ exports.authorize = (...roles) => {
     if (!req.userRole) {
       return res.status(401).json({
         success: false,
-        message: 'Not authenticated'
+        message: 'Please sign in to continue.'
       });
     }
 
     if (!roles.includes(req.userRole)) {
       return res.status(403).json({
         success: false,
-        message: 'Insufficient permissions'
+        message: 'You do not have access to this page.'
       });
     }
 
