@@ -251,7 +251,7 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
 
       return res.status(403).json({
         success: false,
-        message: 'Insufficient permissions'
+        message: 'You do not have access to this page.'
       });
     } catch (error) {
       console.error('Permission authorization error:', error);

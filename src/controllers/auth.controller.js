@@ -26,6 +26,51 @@ const shiftManagementService = require('../services/shift-management.service');
 // Import new utilities
 const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
+const { findSignupConflicts, describeSignupConflicts } = require('../utils/signup-conflicts');
+
+async function resolveSignupUniqueConflict(error, submitted) {
+  if (error.name !== 'SequelizeUniqueConstraintError') return null;
+  try {
+    const conflict = await findSignupConflicts(User, submitted);
+    if (conflict) return conflict;
+  } catch (lookupError) {
+    console.error('Signup duplicate lookup failed:', lookupError);
+  }
+  const labels = [
+    submitted.email && 'email',
+    submitted.phone_number && 'phone number',
+    submitted.instagram_handle && 'Instagram handle'
+  ].filter(Boolean);
+  const details = labels.length > 1
+    ? `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`
+    : labels[0] || 'account details';
+  return { success: false, code: 'ACCOUNT_DETAILS_EXIST',
+    message: `These account details are already in use. Please check your ${details}.` };
+}
+
+// A password-authenticated user may return long after the signup code expired.
+// Keep an unexpired code valid so repeated login attempts do not flood the inbox.
+async function ensureLoginVerificationOTP(user) {
+  if (user.verification_code && !otpService.isOTPExpired(user.otp_expiry)) {
+    const sentAt = new Date(user.otp_expiry).getTime() - 10 * 60 * 1000;
+    const retryAfterSeconds = Math.max(0, Math.ceil((sentAt + 60 * 1000 - Date.now()) / 1000));
+    return { sent: false, retryAfterSeconds };
+  }
+
+  const otp = otpService.generateOTP();
+  await User.update({ verification_code: otp, otp_expiry: otpService.generateOTPExpiry(10) },
+    { where: { id: user.id, email_verified: 0 } });
+  try {
+    const result = await emailService.sendVerificationOTP({ name: user.name, email: user.email }, otp);
+    if (result.success) return { sent: true, retryAfterSeconds: 60 };
+    console.error('Login verification email failed:', result.error);
+  } catch (error) {
+    console.error('Login verification email failed:', error);
+  }
+  await User.update({ verification_code: null },
+    { where: { id: user.id, verification_code: otp, email_verified: 0 } });
+  return { sent: false, retryAfterSeconds: 0, deliveryFailed: true };
+}
 const { OAuth2Client } = require('google-auth-library');
 const {
   buildEmptyOnboardingSummary,
@@ -744,23 +789,8 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Check if user already exists
-    const conditions = [];
-    if (email) conditions.push({ email });
-    if (phone_number) conditions.push({ phone_number });
-    if (instagram_handle) conditions.push({ instagram_handle });
-
-    // by default it adds is_active = 1 condition using defaultScope
-    const userExists = await User.findOne({
-      where: { [Op.or]: conditions }
-    });
-
-    if (userExists) {
-      return res.status(409).json({
-        success: false,
-        message: 'User already exists'
-      });
-    }
+    const conflict = await findSignupConflicts(User, { email, phone_number, instagram_handle });
+    if (conflict) return res.status(409).json(conflict);
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -873,6 +903,8 @@ exports.register = async (req, res) => {
 
       if (!emailResult.success) {
         console.error('Failed to send verification email:', emailResult.error);
+        await User.update({ verification_code: null },
+          { where: { id: newUser.id, verification_code: otp, email_verified: 0 } });
       }
     }
 
@@ -912,10 +944,11 @@ exports.register = async (req, res) => {
 
   } catch (error) {
     console.error('Register Error:', error);
+    const conflict = await resolveSignupUniqueConflict(error, req.body);
+    if (conflict) return res.status(409).json(conflict);
     return res.status(500).json({
       success: false,
-      message: 'Server error during registration',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -948,7 +981,7 @@ exports.sendOTP = async (req, res) => {
     }
 
     // Check if already verified
-    if (user.email_verified === 1) {
+    if (Number(user.email_verified) === 1) {
       return res.status(400).json({
         success: false,
         message: 'Email already verified'
@@ -956,7 +989,9 @@ exports.sendOTP = async (req, res) => {
     }
 
     // Check rate limiting
-    const rateLimit = otpService.checkOTPRateLimit(user.otp_expiry, 1);
+    const lastSentAt = user.verification_code && user.otp_expiry
+      ? new Date(new Date(user.otp_expiry).getTime() - 10 * 60 * 1000) : null;
+    const rateLimit = otpService.checkOTPRateLimit(lastSentAt, 1);
     if (!rateLimit.allowed) {
       return res.status(429).json({
         success: false,
@@ -985,9 +1020,11 @@ exports.sendOTP = async (req, res) => {
     );
 
     if (!emailResult.success) {
+      await User.update({ verification_code: null },
+        { where: { id: user.id, verification_code: otp, email_verified: 0 } });
       return res.status(500).json({
         success: false,
-        message: 'Failed to send verification email'
+        message: 'We could not send the verification code. Please try again.'
       });
     }
 
@@ -1000,8 +1037,7 @@ exports.sendOTP = async (req, res) => {
     console.error('Send OTP Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error sending OTP',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -1024,12 +1060,14 @@ exports.resendOTP = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    if (user.email_verified === 1) {
+    if (Number(user.email_verified) === 1) {
       return res.status(400).json({ success: false, message: 'Email already verified' });
     }
 
 
-    const rateLimit = otpService.checkOTPRateLimit(user.updatedAt, 1); 
+    const lastSentAt = user.verification_code && user.otp_expiry
+      ? new Date(new Date(user.otp_expiry).getTime() - 10 * 60 * 1000) : null;
+    const rateLimit = otpService.checkOTPRateLimit(lastSentAt, 1);
     
     if (!rateLimit.allowed) {
       return res.status(429).json({
@@ -1057,9 +1095,11 @@ exports.resendOTP = async (req, res) => {
     );
 
     if (!emailResult.success) {
+      await User.update({ verification_code: null },
+        { where: { id: user.id, verification_code: otp, email_verified: 0 } });
       return res.status(500).json({
         success: false,
-        message: 'Failed to send verification email'
+        message: 'We could not send the verification code. Please try again.'
       });
     }
 
@@ -1072,7 +1112,7 @@ exports.resendOTP = async (req, res) => {
     console.error('Resend OTP Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error resending OTP'
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -1103,7 +1143,7 @@ exports.verifyEmail = async (req, res) => {
     }
 
     // Check if already verified
-    if (user.email_verified === 1) {
+    if (Number(user.email_verified) === 1) {
       return res.status(400).json({
         success: false,
         message: 'Email already verified'
@@ -1168,7 +1208,11 @@ exports.verifyEmail = async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: role
+        role: role,
+        user_type_id: user.user_type,
+        is_internal_member: Number(userTypeRecord?.is_internal_member || 0) === 1,
+        email_verified: 1,
+        permissions_version: user.permissions_version
       },
       token,
         permissions
@@ -1178,8 +1222,7 @@ exports.verifyEmail = async (req, res) => {
     console.error('Verify Email Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error verifying email',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -1342,6 +1385,20 @@ exports.login = async (req, res) => {
         });
       }
 
+      if (user.email && Number(user.email_verified) !== 1) {
+        const verification = await ensureLoginVerificationOTP(user);
+        return res.status(403).json({
+          success: false,
+          code: 'EMAIL_NOT_VERIFIED',
+          message: verification.deliveryFailed
+            ? 'Please request a verification code to continue.'
+            : 'Please verify your email with the code we sent before logging in.',
+          email: user.email,
+          otp_sent: verification.sent,
+          retry_after_seconds: verification.retryAfterSeconds
+        });
+      }
+
       if (!user.timezone && loginTimezone) {
         await user.update({ timezone: loginTimezone, updated_at: new Date() });
       }
@@ -1434,6 +1491,11 @@ exports.login = async (req, res) => {
           });
         }
 
+        if (user.email && Number(user.email_verified) !== 1) {
+          return res.status(403).json({ success: false, code: 'EMAIL_NOT_VERIFIED',
+            message: 'Please verify your email before logging in.', email: user.email });
+        }
+
         // Generate and save OTP
         const generatedOTP = otpService.generateOTP();
         const otpExpiry = otpService.generateOTPExpiry(10);
@@ -1475,6 +1537,11 @@ exports.login = async (req, res) => {
           success: false,
           message: 'User not found'
         });
+      }
+
+      if (user.email && Number(user.email_verified) !== 1) {
+        return res.status(403).json({ success: false, code: 'EMAIL_NOT_VERIFIED',
+          message: 'Please verify your email before logging in.', email: user.email });
       }
 
       if (await isArchivedClientOnlyAccount(user)) {
@@ -1591,8 +1658,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
     console.error('Login Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error during login',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -2290,7 +2356,7 @@ exports.getCurrentUser = async (req, res) => {
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: 'Not authenticated'
+        message: 'Please sign in to continue.'
       });
     }
 
@@ -2363,7 +2429,7 @@ exports.updateTimezone = async (req, res) => {
     const timezone = normalizeIanaTimezone(req.body?.timezone);
     const onlyIfMissing = req.body?.only_if_missing === true;
 
-    if (!userId) return res.status(401).json({ success: false, message: 'Not authenticated' });
+    if (!userId) return res.status(401).json({ success: false, message: 'Please sign in to continue.' });
     if (!timezone) return res.status(400).json({ success: false, message: 'timezone must be a valid IANA timezone' });
 
     const user = await User.findByPk(userId);
@@ -2425,7 +2491,7 @@ exports.confirmCpEventLocation = async (req, res) => {
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: 'Not authenticated'
+        message: 'Please sign in to continue.'
       });
     }
 
@@ -2523,53 +2589,18 @@ exports.confirmCpEventLocation = async (req, res) => {
  */
 exports.quickRegister = async (req, res) => {
   try {
-    const { name, email, phone_number } = req.body;
+    const { name, email, password } = req.body;
+    const phone_number = req.body.phone_number || req.body.phone;
 
-    if (!name || (!email && !phone_number)) {
+    if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Name and either email or phone number are required'
+        message: 'Name, email, and password are required'
       });
     }
 
-    // Check if user already exists
-    const conditions = [];
-    if (email) conditions.push({ email });
-    if (phone_number) conditions.push({ phone_number });
-
-    const existingUser = await User.findOne({
-      where: { [Op.or]: conditions },
-      include: [{
-        model: UserType,
-        as: 'userType',
-        attributes: ['user_type_id', 'user_role', 'is_internal_member']
-      }]
-    });
-
-    // If user exists, return user info
-    if (existingUser) {
-      // Internal accounts must authenticate, never receive tokens via a booking signup.
-      if (Number(existingUser.userType?.is_internal_member || 0) === 1) {
-        return res.status(409).json({ success: false, message: 'Please sign in to your existing account.' });
-      }
-      const role = existingUser.userType?.user_role || 'client';
-      const { token } = generateTokens(existingUser.id, role);
-      const permissions = getPermissionsForRole(role);
-
-      return res.status(200).json({
-        success: true,
-        message: 'User already exists',
-        user: {
-          id: existingUser.id,
-          name: existingUser.name,
-          email: existingUser.email,
-          phone_number: existingUser.phone_number,
-          role: role
-        },
-        token,
-            permissions
-      });
-    }
+    const conflict = await findSignupConflicts(User, { email, phone_number });
+    if (conflict) return res.status(409).json(conflict);
 
     // Get client role user_type_id
     const clientType = await user_type.findOne({
@@ -2583,9 +2614,8 @@ exports.quickRegister = async (req, res) => {
       });
     }
 
-    // Create temporary password (user can set later)
-    const tempPassword = Math.random().toString(36).slice(-8);
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const otp = otpService.generateOTP();
 
     // Create new client user
     const newUser = await User.create({
@@ -2595,7 +2625,9 @@ exports.quickRegister = async (req, res) => {
       password_hash: hashedPassword,
       user_type: clientType.user_type_id,
       is_active: 1,
-      email_verified: 0
+      email_verified: 0,
+      verification_code: otp,
+      otp_expiry: otpService.generateOTPExpiry(10)
     });
 
     // Auto-create affiliate account
@@ -2619,33 +2651,32 @@ exports.quickRegister = async (req, res) => {
       email
     });
 
-    // Generate tokens
-    const { token } = generateTokens(newUser.id, 'client');
-    const permissions = getPermissionsForRole('client');
+    const emailResult = await emailService.sendVerificationOTP({ name, email }, otp);
+    if (!emailResult.success) {
+      console.error('Quick registration verification email failed:', emailResult.error);
+      await User.update({ verification_code: null },
+        { where: { id: newUser.id, verification_code: otp, email_verified: 0 } });
+    }
 
     return res.status(201).json({
       success: true,
-      message: 'Quick registration successful',
-      user: {
-        id: newUser.id,
-        name: newUser.name,
-        email: newUser.email,
-        phone_number: newUser.phone_number,
-        role: 'client'
-      },
+      message: 'Account created. Please verify your email with the code we sent.',
+      userId: newUser.id,
+      email: newUser.email,
       affiliate: affiliateData,
-      linked_bookings_count: linkedBookingsCount,
-      token,
-        permissions,
-      tempPassword: tempPassword // Send temp password for user to set new one
+      linked_bookings_count: linkedBookingsCount
     });
 
   } catch (error) {
     console.error('Quick Register Error:', error);
+    const conflict = await resolveSignupUniqueConflict(error, {
+      email: req.body.email,
+      phone_number: req.body.phone_number || req.body.phone
+    });
+    if (conflict) return res.status(409).json(conflict);
     return res.status(500).json({
       success: false,
-      message: 'Server error during quick registration',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -2725,24 +2756,24 @@ exports.registerCrewMemberStep1 = [
         return res.status(200).json({ success: true, message: 'Step 1 updated', crew_member_id, user_id });
       }
 
-      const existingUser = await User.findOne({ where: { email }, transaction });
+      const existingUser = await User.scope('all').findOne({ where: { email }, transaction });
       const archivedClient = existingUser ? await findArchivedClientForUser(existingUser, transaction) : null;
       const canReuseArchivedClientUser = Boolean(existingUser && archivedClient);
 
-      if (existingUser && !canReuseArchivedClientUser) {
-        await transaction.rollback();
-        transaction = null;
-        return res.status(409).json({ success: false, message: 'Email already exists.' });
-      }
-
       const existingPhoneUser = phone_number
-        ? await User.findOne({ where: { phone_number }, transaction })
+        ? await User.scope('all').findOne({ where: { phone_number }, transaction })
         : null;
 
-      if (existingPhoneUser && (!existingUser || Number(existingPhoneUser.id) !== Number(existingUser.id))) {
+      const matchingUsers = [
+        ...(!canReuseArchivedClientUser && existingUser ? [existingUser] : []),
+        ...(existingPhoneUser && (!canReuseArchivedClientUser || Number(existingPhoneUser.id) !== Number(existingUser.id))
+          ? [existingPhoneUser] : [])
+      ];
+      const conflict = describeSignupConflicts(matchingUsers, { email, phone_number });
+      if (conflict) {
         await transaction.rollback();
         transaction = null;
-        return res.status(409).json({ success: false, message: 'Phone number already exists.' });
+        return res.status(409).json(conflict);
       }
 
       const existingCrew = await crew_members.findOne({ where: { email }, transaction });
@@ -2899,10 +2930,15 @@ exports.registerCrewMemberStep1 = [
       //   first_name, last_name, email, phone_number, location, working_distance
       // }).catch(err => console.error('Admin Notification Error:', err));
 
-      // await emailService.sendVerificationOTP(
-      //   { name: `${first_name} ${last_name}`, email },
-      //   otp
-      // );
+      const verificationEmail = await emailService.sendVerificationOTP(
+        { name: `${first_name} ${last_name}`, email },
+        otp
+      );
+      if (!verificationEmail.success) {
+        console.error('Creator verification email failed:', verificationEmail.error);
+        await User.update({ verification_code: null },
+          { where: { id: newUser.id, verification_code: otp, email_verified: 0 } });
+      }
 
       let affiliateData = null;
       try {
@@ -2932,14 +2968,14 @@ exports.registerCrewMemberStep1 = [
       }
       console.error('Step 1 Error:', error);
       
-      if (error.name === 'SequelizeUniqueConstraintError') {
-        return res.status(409).json({
-          success: false,
-          message: 'A record with these details already exists.'
-        });
-      }
+      const conflict = await resolveSignupUniqueConflict(error, {
+        email: req.body.email,
+        phone_number: req.body.phone_number
+      });
+      if (conflict) return res.status(409).json(conflict);
 
-      return res.status(500).json({ success: false, message: 'Server error' });
+      return res.status(500).json({ success: false,
+        message: 'Something went wrong. Please try again later.' });
     }
   }
 ];
@@ -3658,22 +3694,8 @@ exports.registerSales = async (req, res) => {
       });
     }
 
-    // 🔹 Check if user exists
-    const conditions = [];
-    if (email) conditions.push({ email });
-    if (phone_number) conditions.push({ phone_number });
-    if (instagram_handle) conditions.push({ instagram_handle });
-
-    const userExists = await User.findOne({
-      where: { [Op.or]: conditions }
-    });
-
-    if (userExists) {
-      return res.status(409).json({
-        success: false,
-        message: 'User already exists'
-      });
-    }
+    const conflict = await findSignupConflicts(User, { email, phone_number, instagram_handle });
+    if (conflict) return res.status(409).json(conflict);
 
     // 🔐 Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -3711,10 +3733,11 @@ exports.registerSales = async (req, res) => {
 
   } catch (error) {
     console.error('Register Client Simple Error:', error);
+    const conflict = await resolveSignupUniqueConflict(error, req.body);
+    if (conflict) return res.status(409).json(conflict);
     return res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -3730,21 +3753,8 @@ exports.registerSalesAdmin = async (req, res) => {
       });
     }
 
-    const conditions = [];
-    if (email) conditions.push({ email });
-    if (phone_number) conditions.push({ phone_number });
-    if (instagram_handle) conditions.push({ instagram_handle });
-
-    const userExists = await User.findOne({
-      where: { [Op.or]: conditions }
-    });
-
-    if (userExists) {
-      return res.status(409).json({
-        success: false,
-        message: 'User already exists'
-      });
-    }
+    const conflict = await findSignupConflicts(User, { email, phone_number, instagram_handle });
+    if (conflict) return res.status(409).json(conflict);
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -3778,10 +3788,11 @@ exports.registerSalesAdmin = async (req, res) => {
 
   } catch (error) {
     console.error('Register Client Simple Error:', error);
+    const conflict = await resolveSignupUniqueConflict(error, req.body);
+    if (conflict) return res.status(409).json(conflict);
     return res.status(500).json({
       success: false,
-      message: 'Server error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -3832,16 +3843,11 @@ exports.createInternalCredential = async (req, res) => {
       });
     }
 
-    const existingUser = await User.findOne({
-      where: { email: normalizedEmail }
+    const conflict = await findSignupConflicts(User, {
+      email: normalizedEmail,
+      phone_number: normalizedPhoneNumber
     });
-
-    if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: 'Email already exists'
-      });
-    }
+    if (conflict) return res.status(409).json(conflict);
 
     if (normalizedUserType === 2) {
       const existingCrewMember = await crew_members.findOne({
@@ -3851,7 +3857,9 @@ exports.createInternalCredential = async (req, res) => {
       if (existingCrewMember) {
         return res.status(409).json({
           success: false,
-          message: 'Crew member with this email already exists'
+          code: 'EMAIL_EXISTS',
+          conflicts: ['email'],
+          message: 'Email already exists.'
         });
       }
     }
@@ -3969,10 +3977,14 @@ exports.createInternalCredential = async (req, res) => {
     }
   } catch (error) {
     console.error('Create Internal Credential Error:', error);
+    const conflict = await resolveSignupUniqueConflict(error, {
+      email: req.body.email,
+      phone_number: req.body.phone_number
+    });
+    if (conflict) return res.status(409).json(conflict);
     return res.status(500).json({
       success: false,
-      message: 'Server error while creating internal credential',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
