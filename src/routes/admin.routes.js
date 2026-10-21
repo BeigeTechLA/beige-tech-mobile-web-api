@@ -305,7 +305,7 @@ router.get(
 );
 router.get('/archive-history', authMiddleware, adminUsersView, admin.getArchiveHistory);
 router.get('/login-history', authMiddleware, rolesPermissionsView, admin.getLoginHistory);
-router.put('/edit-client/:client_id', admin.editClient);
+router.put('/edit-client/:client_id', authMiddleware, admin.editClient);
 router.delete('/delete-client/:client_id', authMiddleware, adminClientsDelete, admin.deleteClient);
 router.post('/restore-client/:client_id', authMiddleware, adminClientsDelete, admin.restoreClient);
 router.post('/convert-client-to-creative-partner/:client_id', authMiddleware, adminClientsEdit, admin.convertClientToCreativePartner);

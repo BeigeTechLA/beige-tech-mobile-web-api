@@ -5,6 +5,7 @@ const sequelize = require('./db');
 const config = require('./config/config');
 const models = require('./models'); // Load all models
 const { startScheduledEmailJobs } = require('./services/scheduledEmails.service');
+const { startShootChatCpExpirationJob } = require('./services/shoot-chat-cp-expiration.service');
 
 async function start() {
   try {
@@ -26,6 +27,7 @@ async function start() {
       console.log(`Environment: ${config.nodeEnv}`);
       console.log(`Base API path: /api`);
       startScheduledEmailJobs();
+      startShootChatCpExpirationJob();
     });
   } catch (err) {
     console.error('Failed to start server:', err);
