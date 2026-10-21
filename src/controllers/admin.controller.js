@@ -7,6 +7,7 @@ const common_model = require('../utils/common_model');
 const { Op, QueryTypes } = require('sequelize');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
+const { randomUUID } = require('crypto');
 const {
   sendTaskAssignmentEmail,
   sendCPNewBookingRequestEmail,
@@ -14671,6 +14672,59 @@ exports.getArchiveHistory = async (req, res) => {
       };
     });
 
+    // Show reassignment events in the same history feed as deactivate/restore.
+    // Each row retains the previous owner, new owner, actor, and event time.
+    if (target_type === 'internal_user' && target_id) {
+      const reassignmentRows = await db.sequelize.query(
+        `SELECT h.id AS history_id, h.batch_id, h.record_type, h.record_id, h.client_name,
+                h.from_user_id, h.to_user_id, h.actor_user_id, h.created_at,
+                source.name AS previous_sales_rep, target.name AS new_sales_rep,
+                actor.name AS performed_by_name
+         FROM sales_record_reassignment_history h
+         LEFT JOIN users source ON source.id = h.from_user_id
+         LEFT JOIN users target ON target.id = h.to_user_id
+         LEFT JOIN users actor ON actor.id = h.actor_user_id
+         WHERE h.from_user_id = :targetId OR h.to_user_id = :targetId
+         ORDER BY h.created_at DESC, h.id DESC`,
+        { replacements: { targetId: Number(target_id) }, type: QueryTypes.SELECT }
+      );
+
+      const reassignmentGroups = new Map();
+      reassignmentRows.forEach((row) => {
+        // Older rows predate batch IDs. They were written by one request with
+        // the same actor, source user, and database timestamp, so group them
+        // using those fields to keep existing history readable as one action.
+        const groupKey = row.batch_id || `legacy-${row.actor_user_id}-${row.from_user_id}-${row.created_at}`;
+        if (!reassignmentGroups.has(groupKey)) {
+          reassignmentGroups.set(groupKey, {
+            history_id: `reassignment-${row.batch_id || row.history_id}`,
+            target_type: 'internal_user',
+            target_id: Number(target_id),
+            action: 'reassigned',
+            performed_by_name: row.performed_by_name,
+            created_at: row.created_at,
+            metadata: {
+              performed_by: row.performed_by_name,
+              actor_user_id: row.actor_user_id,
+              records: []
+            }
+          });
+        }
+        reassignmentGroups.get(groupKey).metadata.records.push({
+          record_type: row.record_type,
+          record_id: row.record_id,
+          client_name: row.client_name,
+          previous_sales_rep: row.previous_sales_rep,
+          new_sales_rep: row.new_sales_rep,
+          from_user_id: row.from_user_id,
+          to_user_id: row.to_user_id
+        });
+      });
+
+      data.push(...Array.from(reassignmentGroups.values()));
+      data.sort((first, second) => new Date(second.created_at || '').getTime() - new Date(first.created_at || '').getTime());
+    }
+
     return res.status(200).json({
       error: false,
       message: 'Archive history fetched successfully',
@@ -19880,6 +19934,8 @@ exports.reassignUserSalesRecords = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
   try {
+    const reassignmentBatchId = randomUUID();
+    const reassignmentCreatedAt = new Date().toISOString().slice(0, 23).replace('T', ' ');
     const historyRows = [];
     const uniqueRecordIds = new Set();
     for (const assignment of assignments) {
@@ -20010,7 +20066,7 @@ exports.reassignUserSalesRecords = async (req, res) => {
           record_type: 'post_production', record_id: `P-${projectId}`,
           client_name: project?.project_name || null,
           from_user_id: fromUserId, to_user_id: toUserId, actor_user_id: actor.id,
-          created_at: new Date().toISOString().slice(0, 23).replace('T', ' ')
+          created_at: reassignmentCreatedAt
         });
         continue;
       }
@@ -20042,15 +20098,15 @@ exports.reassignUserSalesRecords = async (req, res) => {
       historyRows.push({
         record_type: kind === 'L' ? 'lead' : 'quote', record_id: recordNumber,
         client_name: clientName, from_user_id: fromUserId, to_user_id: toUserId,
-        actor_user_id: actor.id, created_at: new Date().toISOString().slice(0, 23).replace('T', ' ')
+        actor_user_id: actor.id, created_at: reassignmentCreatedAt
       });
     }
 
     await db.sequelize.query(
       `INSERT INTO sales_record_reassignment_history
-        (record_type, record_id, client_name, from_user_id, to_user_id, actor_user_id, created_at)
-       VALUES ${historyRows.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ')}`,
-      { replacements: historyRows.flatMap((row) => [row.record_type, row.record_id, row.client_name, row.from_user_id, row.to_user_id, row.actor_user_id, row.created_at]), transaction }
+        (batch_id, record_type, record_id, client_name, from_user_id, to_user_id, actor_user_id, created_at)
+       VALUES ${historyRows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}`,
+      { replacements: historyRows.flatMap((row) => [reassignmentBatchId, row.record_type, row.record_id, row.client_name, row.from_user_id, row.to_user_id, row.actor_user_id, row.created_at]), transaction }
     );
     await transaction.commit();
     return res.status(200).json({ success: true, message: 'Sales records reassigned successfully', count: historyRows.length });

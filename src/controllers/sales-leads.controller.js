@@ -3339,6 +3339,19 @@ exports.getLeadById = async (req, res) => {
     }
 
     const leadJson = lead.toJSON();
+    const previousSalesRepRows = await db.sequelize.query(
+      `SELECT source.id, source.name
+       FROM sales_record_reassignment_history history
+       LEFT JOIN users source ON source.id = history.from_user_id
+       WHERE history.record_type = 'lead' AND history.record_id = :recordId
+       ORDER BY history.created_at DESC, history.id DESC
+       LIMIT 1`,
+      {
+        replacements: { recordId: `L-${lead.lead_id}` },
+        type: Sequelize.QueryTypes.SELECT
+      }
+    );
+    const previousSalesRep = previousSalesRepRows[0] || null;
     const linkedSalesQuote = await sales_quotes.findOne({
       where: { lead_id: lead.lead_id },
       attributes: ['sales_quote_id', 'quote_number', 'status', 'subtotal', 'discount_amount', 'total'],
@@ -3660,6 +3673,9 @@ exports.getLeadById = async (req, res) => {
       data: {
         ...leadJson,
         phone: final_phone,
+        previous_assigned_sales_rep: previousSalesRep
+          ? { id: Number(previousSalesRep.id), name: previousSalesRep.name }
+          : null,
         selected_crew_ids: selectedCrewIds,
         accepted_cp,
         rejected_ap,
@@ -4024,21 +4040,46 @@ exports.changeLeadSalesRep = async (req, res) => {
     }
 
     const previousRepId = lead.assigned_sales_rep_id;
+    const transaction = await db.sequelize.transaction();
+    try {
+      await lead.update({
+        assigned_sales_rep_id: salesRep.id
+      }, { transaction });
 
-    await lead.update({
-      assigned_sales_rep_id: salesRep.id
-    });
+      await sales_lead_activities.create({
+        lead_id: lead.lead_id,
+        activity_type: 'assigned',
+        activity_data: {
+          previous_rep_id: previousRepId,
+          new_rep_id: salesRep.id,
+          assignment_type: 'admin_change_sales_rep'
+        },
+        performed_by_user_id: req.userId
+      }, { transaction });
 
-    await sales_lead_activities.create({
-      lead_id: lead.lead_id,
-      activity_type: 'assigned',
-      activity_data: {
-        previous_rep_id: previousRepId,
-        new_rep_id: salesRep.id,
-        assignment_type: 'admin_change_sales_rep'
-      },
-      performed_by_user_id: req.userId
-    });
+      if (Number(previousRepId || 0) > 0 && Number(previousRepId) !== Number(salesRep.id) && req.userId) {
+        await db.sequelize.query(
+          `INSERT INTO sales_record_reassignment_history
+            (record_type, record_id, client_name, from_user_id, to_user_id, actor_user_id, created_at)
+           VALUES ('lead', :recordId, :clientName, :fromUserId, :toUserId, :actorUserId, CURRENT_TIMESTAMP)`,
+          {
+            replacements: {
+              recordId: `L-${lead.lead_id}`,
+              clientName: lead.client_name || lead.guest_email || null,
+              fromUserId: previousRepId,
+              toUserId: salesRep.id,
+              actorUserId: req.userId
+            },
+            transaction
+          }
+        );
+      }
+
+      await transaction.commit();
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
 
     if (lead.lead_type === 'self_serve') await businessNotifications.notifyLeadAssigned(lead, salesRep.id);
 
