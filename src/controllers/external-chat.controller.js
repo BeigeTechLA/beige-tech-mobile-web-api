@@ -1897,6 +1897,12 @@ exports.addChatParticipants = async (req, res) => {
         }),
       });
       results.push(result);
+      if (role === 'cp') {
+        await db.sequelize.query(
+          'UPDATE chat_room_mappings SET cp_expired_at = NULL WHERE room_id = :roomId',
+          { replacements: { roomId: req.params.roomId } }
+        );
+      }
     }
 
     return res.status(200).json({

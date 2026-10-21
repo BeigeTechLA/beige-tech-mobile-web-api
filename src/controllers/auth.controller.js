@@ -3843,7 +3843,21 @@ exports.createInternalCredential = async (req, res) => {
       });
     }
 
-    const conflict = await findSignupConflicts(User, {
+    const identifierConditions = [
+      { email: normalizedEmail },
+      ...(normalizedPhoneNumber ? [{ phone_number: normalizedPhoneNumber }] : [])
+    ];
+    const [userMatches, clientMatches] = await Promise.all([
+      User.scope('all').findAll({
+        where: { [Op.or]: identifierConditions },
+        attributes: ['email', 'phone_number']
+      }),
+      Clients.findAll({
+        where: { [Op.or]: identifierConditions },
+        attributes: ['email', 'phone_number']
+      })
+    ]);
+    const conflict = describeSignupConflicts([...userMatches, ...clientMatches], {
       email: normalizedEmail,
       phone_number: normalizedPhoneNumber
     });
