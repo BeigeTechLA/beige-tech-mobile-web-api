@@ -53,6 +53,7 @@ const userExportService = require('../services/user-export.service');
 const detailsPendingCpService = require('../services/details-pending-cp.service');
 const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 const passwordExpiryService = require('../services/internal-password-expiry.service');
+const { describeSignupConflicts } = require('../utils/signup-conflicts');
 const { ipType, deviceDetails, sessionDetails } = require('../utils/login-session-details');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
@@ -64,6 +65,63 @@ const getFrontendBaseUrl = () =>
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
+
+const isSuperAdminRequest = (req) => {
+  const role = normalizeAdminRole(req.user?.userRole || req.userRole);
+  return role === 'super_admin' || role === 'superadmin';
+};
+
+// A shoot is only closed once every currently assigned CP has accepted the
+// shoot and Finance has approved that CP's latest compensation submission.
+// Looking at a single approved earning here incorrectly closes a multi-CP
+// shoot as soon as Finance approves the first CP.
+const getLatestCompensationByCreator = (earnings = []) => {
+  const latestEarningByCreator = new Map();
+  [...earnings]
+    .sort((left, right) => {
+      const leftUpdatedAt = new Date(left.updated_at || left.created_at || 0).getTime();
+      const rightUpdatedAt = new Date(right.updated_at || right.created_at || 0).getTime();
+      return rightUpdatedAt - leftUpdatedAt || Number(right.creator_earning_id || 0) - Number(left.creator_earning_id || 0);
+    })
+    .forEach((earning) => {
+      const creatorId = Number(earning.creator_id);
+      if (creatorId && !latestEarningByCreator.has(creatorId)) {
+        latestEarningByCreator.set(creatorId, earning);
+      }
+    });
+
+  return latestEarningByCreator;
+};
+
+const isCpAssignmentLocked = (assignments = [], earnings = []) => {
+  const activeAssignments = assignments.filter((assignment) => Number(assignment.is_active) === 1);
+  if (!activeAssignments.length) return false;
+
+  const latestEarningByCreator = getLatestCompensationByCreator(earnings);
+
+  return activeAssignments.every((assignment) => {
+    const earning = latestEarningByCreator.get(Number(assignment.crew_member_id));
+    return Number(assignment.crew_accept) === 1 && earning?.approval_status === 'approved';
+  });
+};
+
+const getCpAssignmentLock = async (projectId) => {
+  const assignments = await assigned_crew.findAll({
+    where: { project_id: projectId, is_active: 1 },
+    attributes: ['crew_member_id', 'crew_accept', 'is_active'],
+    raw: true
+  });
+  const creatorIds = [...new Set(assignments.map((assignment) => Number(assignment.crew_member_id)).filter(Boolean))];
+  const earnings = creatorIds.length
+    ? await db.creator_earnings.findAll({
+        where: { booking_id: projectId, creator_id: { [Op.in]: creatorIds } },
+        attributes: ['creator_earning_id', 'creator_id', 'approval_status', 'created_at', 'updated_at'],
+        raw: true
+      })
+    : [];
+
+  return isCpAssignmentLocked(assignments, earnings);
+};
 
 // Roles & Permissions viewers: successful internal sign-ins with account and location details.
 exports.getLoginHistory = async (req, res) => {
@@ -189,7 +247,7 @@ exports.getLoginHistory = async (req, res) => {
 const POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES = [
   'Post Production Manager',
   'Producer',
-  // 'super_admin'
+  'super_admin'
 ];
 const normalizePhoneNumber = (number) => String(number || '').replace(/\D/g, '');
 
@@ -2828,20 +2886,18 @@ exports.getProjectDetails = async (req, res) => {
         booking_id: projectJson.stream_project_booking_id,
         approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] }
       },
-      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount', 'approval_status'],
+      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount', 'approval_status', 'created_at', 'updated_at'],
       order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
     });
 
     const cpCompensationRows = creatorCompensations.map((row) => row.toJSON());
-    const cpCompensationLocked = cpCompensationRows.some((earning) => earning.approval_status === 'approved');
+    const cpCompensationLocked = isCpAssignmentLocked(projectJson.assigned_crews || [], cpCompensationRows);
     const cpCompensationHasPending = cpCompensationRows.some((earning) => earning.approval_status === 'pending_approval');
     const compensationByCreatorId = new Map();
-    cpCompensationRows.forEach((earning) => {
+    const latestCompensationByCreator = getLatestCompensationByCreator(cpCompensationRows);
+    latestCompensationByCreator.forEach((earning, creatorId) => {
       const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
-
-      if (!compensationByCreatorId.has(Number(earning.creator_id))) {
-        compensationByCreatorId.set(Number(earning.creator_id), totalCompensation);
-      }
+      compensationByCreatorId.set(creatorId, totalCompensation);
     });
 
     // 6. Crew Processing & Fulfillment Summary
@@ -13339,75 +13395,96 @@ exports.exportClientsCsv = async (req, res) => {
 
 
 exports.editClient = async (req, res) => {
+  if (!isSuperAdminRequest(req)) {
+    return res.status(403).json({ success: false, message: 'Only super admins can edit clients.' });
+  }
+
+  const name = String(req.body?.name || '').trim();
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const phone_number = String(req.body?.phone_number || '').trim();
+  const clientId = Number(req.params.client_id);
+  if (!Number.isInteger(clientId) || clientId <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid client.' });
+  }
+  if (!name || !email || !phone_number) {
+    return res.status(400).json({ success: false, message: 'Name, email, and phone number are required.' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ success: false, message: 'Enter a valid email address.' });
+  }
+  if (!/^[0-9+\-\s()]{7,20}$/.test(phone_number)) {
+    return res.status(400).json({ success: false, message: 'Enter a valid phone number.' });
+  }
+
+  const transaction = await db.sequelize.transaction();
   try {
-    const { client_id } = req.params;
-    const { name, email, phone_number } = req.body;
-
-    if (!name || !email || !phone_number) {
-      return res.status(400).json({
-        error: true,
-        message: 'Name, email, and phone number are required'
-      });
-    }
-
     const client = await clients.findOne({
-      where: { client_id, is_active: 1 }
+      where: { client_id: clientId, is_active: 1 }, transaction
     });
 
     if (!client) {
-      return res.status(404).json({
-        error: true,
-        message: 'Client not found or inactive'
-      });
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Client not found or inactive.' });
     }
 
-    const user = await users.findOne({
-      where: { id: client.user_id, is_active: 1 }
+    const user = client.user_id
+      ? await users.scope('all').findOne({ where: { id: client.user_id }, transaction })
+      : null;
+
+    if (client.user_id && !user) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Associated user not found.' });
+    }
+
+    const matchingUsers = await users.scope('all').findAll({
+      where: {
+        [Op.or]: [{ email }, { phone_number }],
+        ...(user ? { id: { [Op.ne]: user.id } } : {})
+      },
+      attributes: ['email', 'phone_number'], transaction
     });
-
-    if (!user) {
-      return res.status(404).json({
-        error: true,
-        message: 'Associated user not found or inactive'
-      });
+    const matchingClients = await clients.findAll({
+      where: { [Op.or]: [{ email }, { phone_number }], client_id: { [Op.ne]: clientId } },
+      attributes: ['email', 'phone_number'], transaction
+    });
+    const conflict = describeSignupConflicts(
+      [...matchingUsers, ...matchingClients],
+      { email, phone_number }
+    );
+    if (conflict) {
+      await transaction.rollback();
+      return res.status(409).json(conflict);
     }
 
-    const updatedClient = await clients.update(
-      {
-        name,
-        email,
-        phone_number
-      },
-      {
-        where: { client_id }
-      }
-    );
-
-    const updatedUser = await users.update(
-      {
-        name,
-        email,
-        phone_number
-      },
-      {
-        where: { id: client.user_id }
-      }
-    );
+    const updated_at = new Date();
+    await client.update({ name, email, phone_number, updated_at }, { transaction });
+    if (user) await user.update({ name, email, phone_number, updated_at }, { transaction });
+    await transaction.commit();
 
     return res.status(200).json({
-      error: false,
-      message: 'Client and user updated successfully',
-      data: {
-        client: updatedClient,
-        user: updatedUser
-      }
+      success: true,
+      message: 'Client details updated successfully.',
+      data: { client: { client_id: client.client_id, name, email, phone_number } }
     });
 
   } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
     console.error("Error updating client:", error);
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      const fields = new Set([
+        ...Object.keys(error.fields || {}),
+        ...(error.errors || []).map((detail) => detail.path)
+      ]);
+      const conflict = describeSignupConflicts([
+        { email: fields.has('email') ? email : null, phone_number: fields.has('phone_number') ? phone_number : null }
+      ], { email, phone_number });
+      return res.status(409).json(conflict || {
+        success: false, message: 'Email or phone number already exists. Please check the details and try again.'
+      });
+    }
     return res.status(500).json({
-      error: true,
-      message: 'Internal server error'
+      success: false,
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -15448,7 +15525,7 @@ exports.searchCrewForLead = async (req, res) => {
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
-        const { lead_id, client_lead_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
+        const { lead_id, client_lead_id, crew_member_ids } = req.body;
 
         if (!lead_id && !client_lead_id) {
             return res.status(400).json({ success: false, message: "lead_id or client_lead_id is required." });
@@ -15496,31 +15573,11 @@ exports.assignCrewBulkSmart = async (req, res) => {
         }
 
         const booking = lead.booking;
-        const approvedCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: booking.stream_project_booking_id,
-            approval_status: 'approved'
-          }
-        });
-
-        if (approvedCompensationCount > 0) {
+        const cpAssignmentLocked = await getCpAssignmentLock(booking.stream_project_booking_id);
+        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
             return res.status(409).json({
                 success: false,
-                message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
-            });
-        }
-
-        const pendingCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: booking.stream_project_booking_id,
-            approval_status: 'pending_approval'
-          }
-        });
-
-        if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
-            return res.status(409).json({
-                success: false,
-                message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
+                message: "All assigned CPs have accepted and their compensation has been approved. You cannot assign more CPs."
             });
         }
 
@@ -15745,6 +15802,14 @@ exports.removeAssignedCrew = async (req, res) => {
             return res.status(404).json({ 
                 success: false, 
                 message: "This crew member is not currently assigned to this project or is already inactive." 
+            });
+        }
+
+        const cpAssignmentLocked = await getCpAssignmentLock(lead.booking_id);
+        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
+            return res.status(403).json({
+                success: false,
+                message: "All assigned CPs have accepted and their compensation has been approved. Only a Super Admin can remove a CP."
             });
         }
 
@@ -16735,7 +16800,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
         const {
           project_id,
           crew_member_ids,
-          allow_pending_compensation_assignment,
           defer_new_shoot_request_email
         } = req.body;
         const deferNewShootRequestEmail = defer_new_shoot_request_email === true || defer_new_shoot_request_email === 'true';
@@ -16781,31 +16845,11 @@ exports.assignProjectCrewBulk = async (req, res) => {
             return res.status(404).json({ success: false, message: "Project booking not found." });
         }
 
-        const approvedCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: project_id,
-            approval_status: 'approved'
-          }
-        });
-
-        if (approvedCompensationCount > 0) {
+        const cpAssignmentLocked = await getCpAssignmentLock(project_id);
+        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
             return res.status(409).json({
                 success: false,
-                message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
-            });
-        }
-
-        const pendingCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: project_id,
-            approval_status: 'pending_approval'
-          }
-        });
-
-        if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
-            return res.status(409).json({
-                success: false,
-                message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
+                message: "All assigned CPs have accepted and their compensation has been approved. You cannot assign more CPs."
             });
         }
 
@@ -17009,6 +17053,14 @@ exports.removeProjectAssignedCrew = async (req, res) => {
             return res.status(404).json({ 
                 success: false, 
                 message: "This crew member is not currently assigned to this project or is already inactive." 
+            });
+        }
+
+        const cpAssignmentLocked = await getCpAssignmentLock(project_id);
+        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
+            return res.status(403).json({
+                success: false,
+                message: "All assigned CPs have accepted and their compensation has been approved. Only a Super Admin can remove a CP."
             });
         }
 

@@ -28,6 +28,15 @@ const shootOrSalesView = requireAnyPermission([
   'sales_admin_sales_people.view',
   'sales_admin_shoots.view'
 ], allowSalesRepRoles);
+const salesRepsListView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_sales_representative_dashboard.view',
+  'admin_quotes_quote_analytics.view',
+  'sales_rep_sales.view',
+  'sales_admin_dashboard.view',
+  'sales_admin_sales_people.view',
+  'sales_admin_shoots.view'
+], allowSalesRepRoles);
 const salesAdminSalesPeopleView = requireAnyPermission([
   'sales_admin_sales_people.view'
 ], allowSalesRepRoles);
@@ -83,10 +92,23 @@ const adminQuotesView = requireAnyPermission([
   'sales_admin_quotes.view',
   'client_quotes.view'
 ], allowSalesRepAndClientRoles);
+const adminQuoteAnalyticsView = requireAnyPermission([
+  'admin_quotes_quote_analytics.view',
+  'sales_rep_quotes.view',
+  'sales_admin_quotes.view'
+], allowSalesRepRoles);
 const adminQuotesCreate = requireAnyPermission([
   'admin_quotes_all_quotes.create',
   'sales_rep_quotes.create',
   'sales_admin_quotes.create'
+], allowSalesRepRoles);
+const quoteOrSalesClientCreate = requireAnyPermission([
+  'admin_quotes_all_quotes.create',
+  'sales_rep_quotes.create',
+  'sales_admin_quotes.create',
+  'admin_sales_representative_dashboard.create',
+  'sales_rep_sales.create',
+  'sales_admin_dashboard.create'
 ], allowSalesRepRoles);
 const adminQuotesEdit = requireAnyPermission([
   'admin_quotes_all_quotes.edit',
@@ -150,6 +172,12 @@ const adminQuoteApprovalsEdit = requireAnyPermission([
 ], allowSalesRepRoles);
 const adminMasterPricingView = requireAnyPermission([
   'admin_quotes_master_pricing.view',
+  'sales_rep_quotes.view',
+  'sales_admin_quotes.view'
+], allowSalesRepRoles);
+const quoteCatalogReferenceView = requireAnyPermission([
+  'admin_quotes_master_pricing.view',
+  'admin_quotes_all_quotes.view',
   'sales_rep_quotes.view',
   'sales_admin_quotes.view'
 ], allowSalesRepRoles);
@@ -252,6 +280,7 @@ router.put('/leads/:id/status', authenticate, adminSalesRepresentativeEdit, sale
 router.put('/client-leads/:id/status', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadStatus);
 router.post('/leads/manual-payment/upload-proof', authenticate, quoteOrSalesPaymentEdit, ...salesLeadsController.uploadManualPaymentProof);
 router.post('/leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordManualPayment);
+router.put('/leads/:id/manual-payment/:paymentId', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.editManualPaymentAmount);
 router.post('/client-leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordClientManualPayment);
 router.post('/availability', authenticate, salesRepAvailabilityView, salesAvailabilityController.getSalesRepAvailability);
 router.post('/add-availability', authenticate, salesRepAvailabilityCreate, salesAvailabilityController.setSalesRepAvailability);
@@ -466,26 +495,28 @@ router.get('/dashboard/funnel', authenticate, dashboardOrSalesView, salesDashboa
 // =====================================================
 
 router.get('/client-dropdown', authenticate, adminQuotesOrFinancesOrSalesRepresentativeView, salesQuotesController.getClientDropdown);
-router.post('/create-client', authenticate, adminSalesRepresentativeCreate, salesQuotesController.createClient);
-router.get('/quotes/catalog', authenticate, adminMasterPricingView, salesQuotesController.getCatalog);
+router.post('/create-client', authenticate, quoteOrSalesClientCreate, salesQuotesController.createClient);
+router.get('/quotes/catalog', authenticate, quoteCatalogReferenceView, salesQuotesController.getCatalog);
 router.get('/quotes/master-pricing/export', authenticate, adminMasterPricingView, salesQuotesController.exportMasterPricingExcel);
-router.get('/quotes/ai-editing-types', authenticate, adminMasterPricingView, salesQuotesController.getAiEditingTypes);
+router.get('/quotes/ai-editing-types', authenticate, quoteCatalogReferenceView, salesQuotesController.getAiEditingTypes);
 router.post('/quotes/ai-editing-types', authenticate, adminMasterPricingCreate, salesQuotesController.createAiEditingType);
 router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminMasterPricingEdit, salesQuotesController.updateAiEditingType);
 router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteAiEditingType);
-router.get('/quotes/shoot-types/:content_type', authenticate, adminMasterPricingView, salesQuotesController.getShootTypes);
+router.get('/quotes/shoot-types/:content_type', authenticate, quoteCatalogReferenceView, salesQuotesController.getShootTypes);
 router.post('/quotes/shoot-types', authenticate, adminMasterPricingCreate, salesQuotesController.createShootType);
 router.put('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingEdit, salesQuotesController.updateShootType);
 router.delete('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteShootType);
+router.post('/quotes/types/bulk-delete', authenticate, adminMasterPricingDelete, salesQuotesController.bulkDeleteTypes);
 router.post('/quotes/catalog', authenticate, adminMasterPricingCreate, salesQuotesController.createCatalogItem);
 router.put('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingEdit, salesQuotesController.updateCatalogItem);
 router.delete('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteCatalogItem);
+router.post('/quotes/catalog/bulk-delete', authenticate, adminMasterPricingDelete, salesQuotesController.bulkDeleteCatalogItems);
 
 router.get('/quotes/dashboard', authenticate, adminQuotesView, salesQuotesController.getQuoteDashboard);
-router.get('/quotes/analytics/filters', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalyticsFilters);
-router.get('/quotes/analytics/quotes', authenticate, adminQuotesView, salesQuotesController.listQuoteAnalyticsCards);
-router.get('/quotes/analytics/reps/:salesRepId', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalyticsByRep);
-router.get('/quotes/analytics', authenticate, adminQuotesView, salesQuotesController.getQuoteAnalytics);
+router.get('/quotes/analytics/filters', authenticate, adminQuoteAnalyticsView, salesQuotesController.getQuoteAnalyticsFilters);
+router.get('/quotes/analytics/quotes', authenticate, adminQuoteAnalyticsView, salesQuotesController.listQuoteAnalyticsCards);
+router.get('/quotes/analytics/reps/:salesRepId', authenticate, adminQuoteAnalyticsView, salesQuotesController.getQuoteAnalyticsByRep);
+router.get('/quotes/analytics', authenticate, adminQuoteAnalyticsView, salesQuotesController.getQuoteAnalytics);
 router.get('/quotes', authenticate, adminQuotesView, salesQuotesController.listQuotes);
 router.get(
   '/quotes/export',
@@ -535,6 +566,6 @@ router.put('/leads/:id/booking-schedule', authenticate, adminSalesRepresentative
 router.put('/client-leads/:id/booking', authenticate, shootsEditOrSalesEdit, salesLeadsController.finalizeClientLeadBooking);
 router.put('/client-leads/:id/booking-schedule', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadBookingSchedule);
 router.post('/deals/finalize', authenticate, salesRepOrSalesAdminDashboardCreate, salesLeadsController.finalizeCreateDeal);
-router.get('/sales-reps', authenticate, shootOrSalesView, salesDashboardController.getSalesRepsList);
+router.get('/sales-reps', authenticate, salesRepsListView, salesDashboardController.getSalesRepsList);
 
 module.exports = router;
