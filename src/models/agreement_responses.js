@@ -8,6 +8,8 @@ module.exports = function agreementResponses(sequelize, DataTypes) {
     action: { type: DataTypes.ENUM('accepted', 'rejected'), allowNull: false },
     accepted_terms: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: 0 },
     signer_name: { type: DataTypes.STRING(255), allowNull: true },
+    signature_data_url: { type: DataTypes.TEXT('long'), allowNull: true },
+    signature_sha256: { type: DataTypes.STRING(64), allowNull: true },
     rejection_reason: { type: DataTypes.STRING(100), allowNull: true },
     comments: { type: DataTypes.TEXT, allowNull: true },
     content_hash_at_response: { type: DataTypes.STRING(64), allowNull: false },

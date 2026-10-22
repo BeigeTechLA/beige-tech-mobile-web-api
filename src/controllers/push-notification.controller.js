@@ -129,25 +129,30 @@ exports.sendTestPushToMe = async (req, res) => {
       return res.status(constants.OK.code).json({
         error: false,
         code: constants.OK.code,
-        message: 'Test notification was suppressed by inbox preferences.',
-        data: { inbox_saved: false, push_success: false, reason: 'INBOX_CATEGORY_MUTED' },
+        message: 'Test notification could not be saved.',
+        data: { inbox_saved: false, push_success: false, reason: 'INBOX_SAVE_FAILED' },
       });
     }
 
     let pushResult = null;
     let pushError = null;
     try {
-      pushResult = await pushNotificationService.sendPushToUser({
-        userId,
-        title,
-        body: message,
-        data: {
-          topic: 'system',
-          category: 'system',
-          type: 'push_module_test',
-          notification_id: String(notification.notification_id),
-        },
-      });
+      const pushAllowed = await pushNotificationService.isPushCategoryAllowedForUser({ userId, category: 'system' });
+      if (pushAllowed) {
+        pushResult = await pushNotificationService.sendPushToUser({
+          userId,
+          title,
+          body: message,
+          data: {
+            topic: 'system',
+            category: 'system',
+            type: 'push_module_test',
+            notification_id: String(notification.notification_id),
+          },
+        });
+      } else {
+        pushError = 'PUSH_CATEGORY_MUTED';
+      }
     } catch (err) {
       pushError = err.message || 'Push delivery request failed.';
     }

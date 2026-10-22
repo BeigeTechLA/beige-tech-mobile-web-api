@@ -241,13 +241,6 @@ exports.createAndPushNotification = async ({
   appUserType = null,
   dedupeWindowSeconds = 0
 }) => {
-  const notificationCenterAllowed = await pushNotificationService.isNotificationCenterAllowedForUser({
-    userId,
-    category: category || topic,
-    priority
-  });
-  if (!notificationCenterAllowed) return null;
-
   const pushData = normalizePayload({
     topic,
     category: category || topic,
@@ -306,19 +299,26 @@ exports.createAndPushNotification = async ({
 
   if (sendPush) {
     try {
-      await pushNotificationService.sendPushToUser({
+      const pushAllowed = await pushNotificationService.isPushCategoryAllowedForUser({
         userId,
-        title: pushTitle || title,
-        body: pushBody || message,
-        data: {
-          ...(pushData || {
-            topic,
-            category: category || topic,
-            type
-          }),
-          notification_id: String(webNotification.notification_id)
-        }
+        category: category || topic,
+        priority
       });
+      if (pushAllowed) {
+        await pushNotificationService.sendPushToUser({
+          userId,
+          title: pushTitle || title,
+          body: pushBody || message,
+          data: {
+            ...(pushData || {
+              topic,
+              category: category || topic,
+              type
+            }),
+            notification_id: String(webNotification.notification_id)
+          }
+        });
+      }
     } catch (err) {
       console.error('[AppNotification] Push send failed:', {
         user_id: userId,

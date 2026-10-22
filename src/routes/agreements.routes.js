@@ -18,6 +18,7 @@ router.delete('/admin/general/:templateId', authenticate, adminCancel, controlle
 router.post('/admin/general/:templateId/publish', authenticate, adminSend, controller.publishGeneralTemplate);
 
 router.get('/admin', authenticate, adminView, controller.listAdminDocuments);
+router.post('/admin/shoots/:bookingId/assign-and-send', authenticate, requireAnyPermission(['admin_shoots.edit'], { allowAdminBypass: false }), adminCreate, adminSend, controller.assignCompensateAndSend);
 router.post('/admin/shoots/:bookingId/assignments/:assignmentId', authenticate, adminCreate, controller.createShootAgreement);
 router.get('/admin/:agreementId', authenticate, adminView, controller.getAdminDocument);
 router.patch('/admin/:agreementId', authenticate, adminEdit, controller.updateShootDraft);

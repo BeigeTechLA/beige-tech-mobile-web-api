@@ -560,11 +560,9 @@ exports.updateInboxNotificationPreferences = async ({ userId, mutedCategories })
   return formatUserNotificationPreference(await modelNotificationPreferences.create(payload));
 };
 
-// A mute is an explicit choice to stop future alerts of that category. It is
-// deliberately different from a failed/disabled push: without a mute, the
-// notification is always stored in MySQL first and remains visible in the
-// dashboard. Critical alerts are never suppressed.
-exports.isNotificationCenterAllowedForUser = async ({
+// Category mutes affect browser push only. The MySQL inbox is the complete
+// history even when a category or device is muted. Critical push bypasses mute.
+exports.isPushCategoryAllowedForUser = async ({
   userId,
   category = null,
   priority = 'normal',

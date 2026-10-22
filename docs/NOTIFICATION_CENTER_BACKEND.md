@@ -22,7 +22,7 @@ change another user's notifications.
 | Mark related items read | `PATCH /v1/app-notifications/read-by-reference` | Body: `{ "reference_type": "chat_room", "reference_id": "123" }`. Call when the related chat/page opens directly. |
 | Archive | `DELETE /v1/app-notifications/:id` | Soft archive only; no notification data is deleted. |
 | Restore archive | `PATCH /v1/app-notifications/:id/restore` | Restored item returns to the active inbox. |
-| Read/update category mutes | `GET /v1/notification-preferences`, `PATCH /v1/notification-preferences/inbox` | PATCH body: `{ "muted_categories": ["files", "payments"] }`. |
+| Read/update browser-push category mutes | `GET /v1/notification-preferences`, `PATCH /v1/notification-preferences/inbox` | PATCH body: `{ "muted_categories": ["files", "payments"] }`. Inbox rows remain visible. |
 | Self-test inbox + push | `POST /v1/push-notifications/test` | Authenticated user only. Creates one `system` inbox item for that user, then sends its `notification_id` through API2. Response reports `inbox_saved`, `push_success`, token counts, and failure reason. |
 
 The list response has `items`, relative-day `grouped` sections, and
@@ -62,13 +62,15 @@ design needs.
 - Archive is reversible. The active list excludes archived rows; the archive
   screen uses `status=archived`.
 - A user may explicitly mute a category. That suppresses future non-critical
-  alerts in that category. It does **not** retroactively remove existing rows.
-  Critical/urgent notifications bypass the mute.
-- Device push preferences and inbox mutes are separate. Disabling a push token
+  **browser push** alerts in that category, but new events are still saved in
+  the MySQL inbox. Critical/urgent push alerts bypass the mute.
+- Device push preferences and category push mutes are separate. Disabling a push token
   must not hide normal notifications from the MySQL inbox.
 - A successful self-test response with `inbox_saved: true` does not imply FCM
   delivery succeeded; check `push_success` and `reason` separately. FCM success
   confirms Firebase accepted the message, not that the browser displayed it.
+  If System push is muted, the self-test saves its inbox row and reports
+  `PUSH_CATEGORY_MUTED` without attempting FCM delivery.
 
 ## Deployment prerequisite
 

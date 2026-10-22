@@ -34,8 +34,9 @@ The legacy direct shoot-response endpoints now return `409` with code `SHOOT_AGR
 - The server reads CP, shoot details and compensation from `assigned_crew`, `stream_project_booking` and `creator_earnings`. A client cannot submit or override compensation.
 - A CP can only read/respond to documents where `agreement_documents.creator_id` is their own `crew_members.crew_member_id`.
 - A shoot agreement cannot be accepted unless the CP has accepted the currently published general agreement.
-- A response needs `accepted_terms: true` to accept. A rejection needs `rejection_reason`.
-- The document SHA-256 hash, signer name, IP, user agent, response timestamp and event trail are saved with the response.
+- A response needs `accepted_terms: true`, a legal `signer_name`, and a drawn PNG `signature_data_url` to accept. A rejection needs `rejection_reason`.
+- The drawn signature, its SHA-256 hash, the document SHA-256 hash, signer name, IP, user agent, response timestamp and event trail are saved with the response. Admin and the owning CP can see the signed record through the agreement detail endpoints.
+- CP lists and detail endpoints exclude draft and cancelled agreements; only delivered agreements and their response history are visible.
 - Only the current pending version can be answered. A duplicate/stale answer gets `409`.
 - Publishing another general version does not overwrite historical acceptance. It creates a new required agreement for each CP when they next load it.
 
@@ -52,6 +53,7 @@ All admin endpoints require authentication and the matching `admin_agreements.*`
 | `POST` | `/admin/general/:templateId/publish` | send | Publish a draft; retires prior general version |
 | `GET` | `/admin` | view | List agreement documents; supports `type`, `status`, `booking_id`, `limit` |
 | `POST` | `/admin/shoots/:bookingId/assignments/:assignmentId` | create | Build a shoot agreement draft |
+| `POST` | `/admin/shoots/:bookingId/assign-and-send` | create + send + `admin_shoots.edit` | Atomically assign new CPs, submit their compensation for finance approval, and send one agreement per CP |
 | `GET` | `/admin/:agreementId` | view | Full agreement, responses and audit events |
 | `PATCH` | `/admin/:agreementId` | edit | Edit a shoot draft only |
 | `POST` | `/admin/:agreementId/send` | send | Send current draft/rejected document to CP |
@@ -87,6 +89,10 @@ All admin endpoints require authentication and the matching `admin_agreements.*`
 
 `assignmentId` is the primary key (`assigned_crew.id`), not a crew member ID. The assignment must be active, belong to `bookingId`, and be pending. Compensation must already exist in `creator_earnings` for that CP and booking.
 
+### New assignment flow
+
+The Add Creatives screen gathers CP selection and compensation locally, then opens the agreement editor. Until Save and Send, no assignment or compensation is persisted. Submit `POST /admin/shoots/:bookingId/assign-and-send` with `{ "compensation": { "booking_id": 123, "compensation_method": "equal_split", "creators": [...] }, "agreement": { "title": "Shoot Agreement", "content_html": "<section>...</section>", "content_json": { "sections": [...] } } }`. In individual mode, add an `agreements` object keyed by creator ID to override the shared agreement for each CP. Each creator must be new to this shoot. The server validates all recipients and role limits, then creates assignments, finance pending compensation, and pending agreements in one database transaction. If any database step fails, all three roll back. After commit, it sends each CP an agreement notification. Email delivery is not part of this endpoint.
+
 ## Creative Partner endpoints
 
 All resolve the CP from the access token; clients must not send a `creator_id`.
@@ -105,7 +111,8 @@ Accept body:
 ```json
 {
   "accepted_terms": true,
-  "signer_name": "CP legal name"
+  "signer_name": "CP legal name",
+  "signature_data_url": "data:image/png;base64,..."
 }
 ```
 
@@ -121,6 +128,7 @@ Reject body:
 ## Persistence
 
 Migration: `migrations/20261012_02_create_cp_agreements.sql`.
+Drawn signature evidence also requires `migrations/20261022_01_add_cp_agreement_signatures.sql` before deploying the new acceptance flow.
 
 - `agreement_templates`: admin-owned general template versions.
 - `agreement_documents`: immutable per-CP general copies and shoot agreement versions.
