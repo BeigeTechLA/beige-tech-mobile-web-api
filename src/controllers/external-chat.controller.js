@@ -837,12 +837,12 @@ const resolveChatOrderId = (payload = {}) =>
 
 const resolveChatDisplayName = (payload = {}) =>
   String(
-    payload?.chat_name ||
-      payload?.name ||
+    payload?.name ||
       payload?.display_name ||
-      payload?.data?.chat_name ||
+      payload?.chat_name ||
       payload?.data?.name ||
       payload?.data?.display_name ||
+      payload?.data?.chat_name ||
       ''
   ).trim();
 
@@ -1033,6 +1033,7 @@ const buildChatPushContent = ({ eventType, sender, messagePreview }) => {
 
 const sendChatPushNotifications = async ({
   roomId,
+  roomName = '',
   bookingId = '',
   sender,
   eventType = 'messaging_initiated',
@@ -1080,7 +1081,9 @@ const sendChatPushNotifications = async ({
         event_type: eventType === 'participant_added' ? 'participant_added' : notificationType,
         room_id: String(roomId || ''),
         chat_room_id: String(roomId || ''),
+        chat_name: String(roomName || '').trim(),
         booking_id: String(bookingId || ''),
+        message_preview: String(messagePreview || '').replace(/\s+/g, ' ').trim().slice(0, 200),
         sender_id: senderId,
         sender_name: sender?.name || sender?.email || '',
       };
@@ -1144,6 +1147,7 @@ const sendChatNotificationTemplate = async ({
     const booking = resolvedBookingId ? await getBookingRecord(resolvedBookingId) : null;
     const projectId = String(booking?.stream_project_booking_id || resolvedBookingId || '').trim();
     const shootName = String(booking?.project_name || '').trim();
+    const chatName = resolveChatDisplayName(roomPayload);
     if (projectId) {
       await saveChatRoomMapping({
         roomId,
@@ -1156,6 +1160,7 @@ const sendChatNotificationTemplate = async ({
 
     await sendChatPushNotifications({
       roomId,
+      roomName: chatName,
       bookingId: projectId,
       sender,
       eventType: eventType === 'participant_added' ? 'messaging_initiated' : eventType,
@@ -1168,7 +1173,6 @@ const sendChatNotificationTemplate = async ({
     const emailRecipients = recipientTargets.filter((recipient) => shouldUseProvidedEmail(recipient?.email));
     if (!emailRecipients.length) return;
 
-    const chatName = resolveChatDisplayName(roomPayload);
     const clientName = String(
       booking?.client_name ||
       enrichedEnvelope?.client?.name ||
@@ -2257,11 +2261,17 @@ exports.sendChatMessage = async (req, res) => {
       req.body.mentionedUsers ||
       [];
 
-    const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+    const [participantPayload, chatRoomPayload, mappedBookingId] = await Promise.all([
+      proxyRequest(`/participants/${req.params.roomId}`).catch(() => null),
+      proxyRequest(`/room/${encodeURIComponent(req.params.roomId)}`).catch(() => null),
+      getMappedBookingIdForRoom(req.params.roomId),
+    ]);
     const { envelope } = extractParticipantEnvelope(participantPayload || {});
     const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
     let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
-    const mappedBookingId = await getMappedBookingIdForRoom(req.params.roomId);
+    const rawChatRoom = toObject(chatRoomPayload?.data) || toObject(chatRoomPayload);
+    const chatRoom = await decorateChatRoom(rawChatRoom).catch(() => rawChatRoom);
+    const roomName = resolveChatDisplayName(chatRoom);
 
     if (!recipientTargets.length && mappedBookingId) {
       recipientTargets = await getChatBookingFallbackRecipients(mappedBookingId);
@@ -2271,6 +2281,7 @@ exports.sendChatMessage = async (req, res) => {
     // Store the matching MySQL dashboard record here without a second popup.
     await sendChatPushNotifications({
       roomId: req.params.roomId,
+      roomName,
       bookingId: mappedBookingId,
       sender,
       eventType: 'direct_message',
@@ -2282,6 +2293,7 @@ exports.sendChatMessage = async (req, res) => {
     if (Array.isArray(mentionedUserIds) && mentionedUserIds.length) {
       await sendChatPushNotifications({
         roomId: req.params.roomId,
+        roomName,
         bookingId: mappedBookingId,
         sender,
         eventType: 'mention',
