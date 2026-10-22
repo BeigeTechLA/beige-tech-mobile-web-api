@@ -15682,17 +15682,6 @@ exports.assignCrewBulkSmart = async (req, res) => {
             return res.status(400).json({ success: false, message: "No crew members selected." });
         }
 
-        const ROLE_GROUPS = {
-            videographer: ["9", "1"],
-            photographer: ["10", "2"],
-            cinematographer: ["11", "3"]
-        };
-
-        const ID_TO_ROLE_MAP = {};
-        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-        });
-
         const leadModel = client_lead_id ? client_leads : sales_leads;
         const activityModel = client_lead_id ? client_lead_activities : sales_lead_activities;
         const resolvedLeadId = client_lead_id || lead_id;
@@ -15720,36 +15709,6 @@ exports.assignCrewBulkSmart = async (req, res) => {
         }
 
         const booking = lead.booking;
-        const cpAssignmentLocked = await getCpAssignmentLock(booking.stream_project_booking_id);
-        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
-            return res.status(409).json({
-                success: false,
-                message: "All assigned CPs have accepted and their compensation has been approved. You cannot assign more CPs."
-            });
-        }
-
-        const requestedLimits = typeof booking.crew_roles === 'string'
-          ? JSON.parse(booking.crew_roles)
-          : (booking.crew_roles || {});
-
-        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-
-        if (booking.assigned_crews) {
-          booking.assigned_crews.forEach(ac => {
-            if (ac.crew_member?.primary_role) {
-              try {
-                const parsed = JSON.parse(ac.crew_member.primary_role);
-                const roles = Array.isArray(parsed) ? parsed : [parsed];
-                roles.forEach(id => {
-                  const roleName = ID_TO_ROLE_MAP[String(id)];
-                  if (roleName) currentCounts[roleName]++;
-                });
-              } catch (e) {
-                console.error("Parse error in existing crew", e);
-              }
-            }
-          });
-        }
         const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
 
         const newCrewDetails = await crew_members.findAll({
@@ -15757,59 +15716,17 @@ exports.assignCrewBulkSmart = async (req, res) => {
         });
 
         const assignmentsToCreate = [];
-        const errors = [];
-
         newCrewDetails.forEach(crew => {
-            let roles = [];
-            try {
-                const parsed = JSON.parse(crew.primary_role || "[]");
-                roles = Array.isArray(parsed) ? parsed : [parsed];
-            } catch (e) {
-                roles = [crew.primary_role];
-            }
-
-            let roleDetected = null;
-            roles.forEach(id => {
-                if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
+            assignmentsToCreate.push({
+                  project_id: booking.stream_project_booking_id,
+                  crew_member_id: crew.crew_member_id,
+                  assigned_date: new Date(),
+                  status: 'selected',
+                  crew_accept: 0,
+                  is_active: 1,
+                  organization_type: 1
             });
-
-            if (roleDetected) {
-              const acceptedCount = currentCounts[roleDetected];
-              const limit = requestedLimits[roleDetected];
-
-              if (limit !== undefined && acceptedCount >= limit) {
-                errors.push(`Cannot add ${crew.first_name} (${roleDetected}).Limit of ${limit} reached.`);
-              } else {
-                assignmentsToCreate.push({
-                  project_id: booking.stream_project_booking_id,
-                  crew_member_id: crew.crew_member_id,
-                  assigned_date: new Date(),
-                  status: 'selected',
-                  crew_accept: 0,
-                  is_active: 1,
-                  organization_type: 1
-                });
-              }
-            } else {
-              assignmentsToCreate.push({
-                  project_id: booking.stream_project_booking_id,
-                  crew_member_id: crew.crew_member_id,
-                  assigned_date: new Date(),
-                  status: 'selected',
-                  crew_accept: 0,
-                  is_active: 1,
-                  organization_type: 1
-              });
-          }
         });
-
-        if (errors.length > 0 && assignmentsToCreate.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Assignments failed validation.", 
-                errors: errors 
-            });
-        }
 
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
@@ -15885,7 +15802,7 @@ exports.assignCrewBulkSmart = async (req, res) => {
       return res.json({
         success: true,
         message: `${assignmentsToCreate.length} crew members assigned successfully.`,
-        errors: errors.length > 0 ? errors : undefined
+        errors: undefined
       });
 
     } catch (error) {
@@ -16987,17 +16904,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
             return res.status(400).json({ success: false, message: "No crew members selected." });
         }
 
-        const ROLE_GROUPS = {
-            videographer: ["9", "1"],
-            photographer: ["10", "2"],
-            cinematographer: ["11", "3"]
-        };
-
-        const ID_TO_ROLE_MAP = {};
-        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-        });
-
         const booking = await stream_project_booking.findOne({
           where: { stream_project_booking_id: project_id },
           include: [
@@ -17020,36 +16926,8 @@ exports.assignProjectCrewBulk = async (req, res) => {
             return res.status(404).json({ success: false, message: "Project booking not found." });
         }
 
-        const cpAssignmentLocked = await getCpAssignmentLock(project_id);
-        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
-            return res.status(409).json({
-                success: false,
-                message: "All assigned CPs have accepted and their compensation has been approved. You cannot assign more CPs."
-            });
-        }
-
         const leadId = booking.sales_leads?.[0]?.lead_id || null;
 
-        const requestedLimits = typeof booking.crew_roles === 'string'
-          ? JSON.parse(booking.crew_roles)
-          : (booking.crew_roles || {});
-
-        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-
-        if (booking.assigned_crews) {
-          booking.assigned_crews.forEach(ac => {
-            if (ac.crew_member?.primary_role) {
-              try {
-                const raw = ac.crew_member.primary_role;
-                const roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
-                roles.forEach(id => {
-                  const roleName = ID_TO_ROLE_MAP[String(id)];
-                  if (roleName) currentCounts[roleName]++;
-                });
-              } catch (e) { console.error("Parse error", e); }
-            }
-          });
-        }
 
         const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
         const existingAssignments = await assigned_crew.findAll({
@@ -17066,31 +16944,11 @@ exports.assignProjectCrewBulk = async (req, res) => {
         });
 
         const assignmentsToCreate = [];
-        const errors = [];
-
         newCrewDetails.forEach(crew => {
             if (existingCrewIds.has(Number(crew.crew_member_id))) {
               return;
             }
-            let roles = [];
-            try {
-                const raw = crew.primary_role;
-                roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
-            } catch (e) { roles = [crew.primary_role]; }
-
-            let roleDetected = null;
-            roles.forEach(id => {
-                if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
-            });
-
-            if (roleDetected) {
-              const acceptedCount = currentCounts[roleDetected];
-              const limit = requestedLimits[roleDetected] || 0;
-
-              if (limit > 0 && acceptedCount >= limit) {
-                errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
-              } else {
-                assignmentsToCreate.push({
+            assignmentsToCreate.push({
                   project_id: booking.stream_project_booking_id,
                   crew_member_id: crew.crew_member_id,
                   assigned_date: new Date(),
@@ -17098,16 +16956,8 @@ exports.assignProjectCrewBulk = async (req, res) => {
                   crew_accept: 0,
                   is_active: 1,
                   organization_type: 1
-                });
-              }
-            } else {
-                errors.push(`Crew member ${crew.first_name} has no valid role mapping.`);
-            }
+            });
         });
-
-        if (assignmentsToCreate.length === 0 && errors.length > 0) {
-            return res.status(400).json({ success: false, message: "Assignments failed validation.", errors });
-        }
 
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
@@ -17189,7 +17039,7 @@ exports.assignProjectCrewBulk = async (req, res) => {
             message: `${assignmentsToCreate.length} crew members assigned successfully.`,
             newly_assigned_creator_ids: assignmentsToCreate.map((assignment) => assignment.crew_member_id),
             new_shoot_request_email_deferred: deferNewShootRequestEmail,
-            errors: errors.length > 0 ? errors : undefined
+            errors: undefined
         });
 
     } catch (error) {

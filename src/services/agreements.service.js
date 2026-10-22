@@ -362,31 +362,6 @@ async function assignCompensateAndSend(bookingId, payload = {}, actor = {}) {
     if (partners.length !== ids.length) throw error('One or more Creative Partners were not found', 404);
     const existing = await db.assigned_crew.findAll({ where: { project_id: Number(bookingId), crew_member_id: ids, is_active: 1 }, transaction });
     if (existing.length) throw error('One or more Creative Partners are already assigned to this shoot', 409);
-    const roleGroups = { videographer: [1, 9], photographer: [2, 10], cinematographer: [3, 11] };
-    const limits = parse(booking.crew_roles, {}) || {};
-    const accepted = await db.assigned_crew.findAll({
-      where: { project_id: Number(bookingId), crew_accept: 1, is_active: 1 }, transaction
-    });
-    const acceptedPartners = accepted.length
-      ? await db.crew_members.findAll({ where: { crew_member_id: accepted.map((row) => row.crew_member_id) }, transaction })
-      : [];
-    const counts = { videographer: 0, photographer: 0, cinematographer: 0 };
-    const groupFor = (partner) => Object.keys(roleGroups).find((group) =>
-      roleIds(partner.primary_role).some((id) => roleGroups[group].includes(id))
-    );
-    for (const partner of acceptedPartners) {
-      const group = groupFor(partner);
-      if (group) counts[group] += 1;
-    }
-    for (const partner of partners) {
-      const group = groupFor(partner);
-      if (!group) throw error(`Creative Partner ${partner.crew_member_id} has no assignable role`);
-      if (Number(limits[group]) > 0 && counts[group] >= Number(limits[group])) {
-        throw error(`${group} assignment limit has been reached`, 409);
-      }
-      counts[group] += 1;
-    }
-
     const assignments = [];
     for (const creatorId of ids) {
       assignments.push(await db.assigned_crew.create({

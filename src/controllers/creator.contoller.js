@@ -195,24 +195,11 @@ const buildContentTypeFamilyWhere = (family) => Sequelize.where(
 );
 
 const getSmartPendingRequestsForCrew = async (crew_member_id, extraProjectWhere = {}) => {
-  const ROLE_GROUPS = {
-    videographer: ["9", "1"],
-    photographer: ["10", "2"],
-    cinematographer: ["11", "3"],
-  };
-  const ID_TO_ROLE_MAP = {};
-  Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-    ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-  });
-
   const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
   if (!currentCrew) return [];
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
-  const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
-
   const pendingRecords = await assigned_crew.findAll({
     where: { crew_member_id, crew_accept: 0 },
     include: [{
@@ -224,33 +211,9 @@ const getSmartPendingRequestsForCrew = async (crew_member_id, extraProjectWhere 
         event_date: { [Op.gte]: today },
         ...extraProjectWhere,
       },
-      include: [{
-        model: assigned_crew,
-        as: 'assigned_crews',
-        where: { crew_accept: 1 },
-        required: false,
-        include: [{ model: crew_members, as: 'crew_member' }]
-      }]
     }]
   });
-
-  return pendingRecords.filter((record) => {
-    const project = record.project;
-    const requestedLimits = typeof project.crew_roles === 'string' ? JSON.parse(project.crew_roles || '{}') : (project.crew_roles || {});
-    const acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-
-    if (project.assigned_crews) {
-      project.assigned_crews.forEach(ac => {
-        const acRoles = toIdArray(ac.crew_member?.primary_role || "[]");
-        const assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat =>
-          cat && acceptedCounts[cat] < (requestedLimits[cat] || 0)
-        );
-        if (assignedTo) acceptedCounts[assignedTo]++;
-      });
-    }
-
-    return myCategories.some(cat => acceptedCounts[cat] < (requestedLimits[cat] || 0));
-  });
+  return pendingRecords;
 };
 
 function parseJsonUntilStable(value) {
@@ -774,82 +737,13 @@ exports.updateRequestStatus = async (req, res) => {
     }
 
     if (decision === 1) {
-      const ROLE_GROUPS = {
-        videographer: ["9", "1"],
-        photographer: ["10", "2"],
-        cinematographer: ["11", "3"],
-      };
-
-      const ID_TO_ROLE_MAP = {};
-      Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-        ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-      });
-
-      const project = await stream_project_booking.findOne({
-        where: { stream_project_booking_id: project_id },
-        include: [
-          { 
-            model: assigned_crew, as: 'assigned_crews', 
-            where: { crew_accept: 1 }, 
-            required: false,
-            include: [{ model: crew_members, as: 'crew_member' }]
-          }
-        ]
-      });
+      const project = await stream_project_booking.findOne({ where: { stream_project_booking_id: project_id } });
 
       const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
       
       if (!project || !currentCrew) {
         return res.status(404).json({ error: true, message: "Project or Crew Member not found." });
       }
-
-      const requestedLimits = typeof project.crew_roles === 'string' 
-          ? JSON.parse(project.crew_roles) 
-          : (project.crew_roles || {});
-
-      const normalizeRoleIds = (rawRole) => {
-        let parsedRoleIds = [];
-
-        if (typeof rawRole === 'string') {
-          try {
-            parsedRoleIds = JSON.parse(rawRole);
-          } catch (e) {
-            parsedRoleIds = [rawRole];
-          }
-        } else if (rawRole != null) {
-          parsedRoleIds = rawRole;
-        }
-
-        return Array.isArray(parsedRoleIds)
-          ? parsedRoleIds
-          : (parsedRoleIds ? [parsedRoleIds] : []);
-      };
-
-      const crewRoleIds = normalizeRoleIds(currentCrew.primary_role);
-
-      const crewCategories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
-
-      let currentAcceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-      if (project.assigned_crews) {
-        project.assigned_crews.forEach(ac => {
-          const acRoles = normalizeRoleIds(ac.crew_member?.primary_role);
-          let assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat => 
-            cat && currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
-          );
-          if (assignedTo) currentAcceptedCounts[assignedTo]++;
-        });
-      }
-
-      // const availableCategory = crewCategories.find(cat => 
-      //   currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
-      // );
-
-      // if (!availableCategory) {
-      //   return res.status(200).json({
-      //     error: true,
-      //     message: `The project slots for ${crewCategories.join(' / ')} are already full.`
-      //   });
-      // }
 
       const updateResult = await assigned_crew.update(
         { 
@@ -1772,21 +1666,8 @@ exports.getDashboardRequestCounts = async (req, res) => {
       return res.status(400).json({ error: true, message: "creator_id is required" });
     }
 
-    const ROLE_GROUPS = {
-      videographer: ["9", "1"],
-      photographer: ["10", "2"],
-      cinematographer: ["11", "3"],
-    };
-    const ID_TO_ROLE_MAP = {};
-    Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-      ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-    });
-
     const currentCrew = await crew_members.findOne({ where: { crew_member_id: creator_id } });
     if (!currentCrew) return res.status(404).json({ error: true, message: "Creator not found" });
-
-    const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
-    const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
 
     const pendingRecords = await assigned_crew.findAll({
       where: { crew_member_id: creator_id, crew_accept: 0 },
@@ -1795,12 +1676,7 @@ exports.getDashboardRequestCounts = async (req, res) => {
         where: { 
           is_completed: 0,
           payment_completed_at: { [Op.ne]: null },
-        },
-        include: [{ 
-          model: assigned_crew, as: 'assigned_crews', 
-          where: { crew_accept: 1 }, required: false,
-          include: [{ model: crew_members, as: 'crew_member' }]
-        }]
+        }
       }]
     });
 
@@ -1818,24 +1694,7 @@ exports.getDashboardRequestCounts = async (req, res) => {
         }
       }
 
-      const requestedLimits = typeof project.crew_roles === 'string' ? JSON.parse(project.crew_roles || '{}') : (project.crew_roles || {});
-
-      let acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-      if (project.assigned_crews) {
-        project.assigned_crews.forEach(ac => {
-          const acRoles = toIdArray(ac.crew_member?.primary_role || "[]");
-          let assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat => 
-            cat && acceptedCounts[cat] < (requestedLimits[cat] || 0)
-          );
-          if (assignedTo) acceptedCounts[assignedTo]++;
-        });
-      }
-
-      const hasAvailableSlot = myCategories.some(cat => 
-        acceptedCounts[cat] < (requestedLimits[cat] || 0)
-      );
-
-      if (hasAvailableSlot) smartPendingCount++;
+      smartPendingCount++;
     });
 
     const confirmedRequests = await assigned_crew.count({
