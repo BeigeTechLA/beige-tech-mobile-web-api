@@ -38,6 +38,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 
 const moment = require('moment');
 const creatorCalendarService = require('../services/creator-calendar.service');
+const { getCreatorRequestCompensation } = require('../services/creator-request-compensation.service');
 
 const DEFAULT_CREATOR_TIMEZONE = 'Asia/Kolkata';
 
@@ -452,6 +453,8 @@ exports.getPendingRequests = async (req, res) => {
       });
     }
 
+    const compensationByBooking = await getCreatorRequestCompensation(crew_member_id,
+      pendingRequests.map((request) => request.project.stream_project_booking_id));
     const projectDetails = pendingRequests.map((request) => ({
       project_id: request.project.stream_project_booking_id,
       project_name: request.project.project_name,
@@ -461,6 +464,7 @@ exports.getPendingRequests = async (req, res) => {
       event_location: request.project.event_location,
       budget: request.project.budget,
       is_completed: request.project.is_completed,
+      ...(compensationByBooking.get(Number(request.project.stream_project_booking_id)) || {}),
     }));
 
     return res.status(200).json({
@@ -924,6 +928,8 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
       });
     }
 
+    const compensationByBooking = await getCreatorRequestCompensation(crew_member_id,
+      projects.map((request) => request.project.stream_project_booking_id));
     const projectDetails = projects.map((request) => ({
       project_id: request.project.stream_project_booking_id,
       project_name: request.project.project_name,
@@ -933,6 +939,7 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
       event_location: request.project.event_location,
       budget: request.project.budget,
       is_completed: request.project.is_completed,
+      ...(compensationByBooking.get(Number(request.project.stream_project_booking_id)) || {}),
     }));
 
     return res.status(200).json({
