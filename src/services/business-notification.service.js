@@ -110,13 +110,19 @@ async function notifyPaymentOwner({ bookingId, paymentId, status, amount }) {
       attributes: ['notification_id']
     });
     if (existing) return existing;
+    const numericAmount = Number(amount);
+    const formattedAmount = amount !== undefined && amount !== null && amount !== '' && Number.isFinite(numericAmount)
+      ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(numericAmount)
+      : '';
+    const message = status === 'failed' ? `Payment failed for booking #${bookingId}.`
+      : `${status === 'partial' ? 'Partial payment' : 'Payment'}${formattedAmount ? ` of ${formattedAmount}` : ''} received for booking #${bookingId}.`;
     return notify({
       userId: ownerId,
       title: status === 'failed' ? 'Booking payment failed' : status === 'partial' ? 'Partial booking payment received' : 'Booking payment received',
-      message: `Payment ${status} for booking ${bookingId}${amount ? ` (${amount})` : ''}.`,
+      message,
       topic: 'shoots', category: 'payments', type,
       referenceType: 'payment', referenceId: resolvedPaymentId,
-      payload: { booking_id: String(bookingId), payment_id: resolvedPaymentId, payment_status: status },
+      payload: { booking_id: String(bookingId), payment_id: resolvedPaymentId, payment_status: status, ...(formattedAmount ? { amount: numericAmount, currency: 'USD' } : {}) },
       priority: status === 'failed' ? 'high' : 'normal'
     });
   } catch (error) {
