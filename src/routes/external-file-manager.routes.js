@@ -65,6 +65,7 @@ router.post('/upload-policies/batch', authenticate, fileManagerCreate, externalF
 router.post('/file-uploaded', authenticate, fileManagerCreate, externalFileManagerController.notifyFileUploaded);
 router.post('/files-uploaded/batch', authenticate, fileManagerCreate, externalFileManagerController.notifyFilesUploadedBatch);
 router.post('/copy-files', authenticate, externalFileManagerController.copyFiles);
+router.post('/move-entries', authenticate, externalFileManagerController.moveEntries);
 router.post('/revision-file/review', authenticate, externalFileManagerController.reviewRevisionFile);
 router.post('/file-view-url', authenticate, fileManagerView, externalFileManagerController.getFileViewUrl);
 router.post('/file-download-url', authenticate, fileManagerView, externalFileManagerController.getFileDownloadUrl);
