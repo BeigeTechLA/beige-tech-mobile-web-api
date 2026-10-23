@@ -5275,6 +5275,39 @@ exports.copyFiles = async (req, res) => {
   }
 };
 
+exports.moveEntries = async (req, res) => {
+  try {
+    const role = getNormalizedRequestUserRole(req).replace(/\s+/g, '_');
+    if (Number(req.user?.userTypeId || req.userTypeId) !== 8 && !['super_admin', 'superadmin'].includes(role)) {
+      return res.status(403).json({ success: false, message: 'Only super admins can move files' });
+    }
+    const externalId = String(req.body.externalId || '').trim();
+    const phase = normalizeWorkspacePhase(req.body.phase, null);
+    const targetPath = String(req.body.targetPath || '').trim().replace(/^\/+|\/+$/g, '');
+    const sourcePaths = Array.isArray(req.body.sourcePaths) ? req.body.sourcePaths : [];
+    if (!externalId || !['pre', 'post'].includes(phase) || !sourcePaths.length || sourcePaths.length > 250 ||
+      sourcePaths.some((path) => typeof path !== 'string' || !path.trim()) ||
+      [targetPath, ...sourcePaths].some((path) => String(path).split('/').some((segment) => segment === '..' || segment === '.'))) {
+      return res.status(400).json({ success: false, message: 'Valid externalId, phase, targetPath and up to 250 sourcePaths are required' });
+    }
+    const result = await proxyRequest('/move-entries', {
+      method: 'POST',
+      body: JSON.stringify({ externalId, phase, targetPath, sourcePaths,
+        userId: getRequestUserId(req),
+        authorName: await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User') }),
+    });
+    if (result?.success && Array.isArray(result?.data?.items)) {
+      for (const item of result.data.items.filter((entry) => entry.success)) {
+        await deactivateSharesForDeletedPath(item.sourcePath).catch((error) => console.error('Failed to invalidate moved share:', error));
+        await deleteFaceEmbeddingRecordsByPath(item.sourcePath).catch(() => null);
+      }
+    }
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
+  }
+};
+
 exports.reviewRevisionFile = async (req, res) => {
   try {
     const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
