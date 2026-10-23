@@ -1014,8 +1014,8 @@ const buildChatPushContent = ({ eventType, sender, messagePreview }) => {
 
   if (eventType === 'mention') {
     return {
-      title: 'You were mentioned',
-      body: preview ? `${senderName}: ${preview}` : `${senderName} mentioned you.`,
+      title: `${senderName} mentioned you`,
+      body: preview || `${senderName} mentioned you in a message.`,
     };
   }
 
