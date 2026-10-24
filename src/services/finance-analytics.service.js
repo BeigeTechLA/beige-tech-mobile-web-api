@@ -1,4 +1,5 @@
 const db = require('../models');
+const financeService = require('./finance.service');
 const { getCanonicalCpEarningRows, payoutAmountsByEarningId } = require('../utils/cp-compensation-summary');
 
 const ELIGIBLE_PAYMENT_STATUSES = new Set(['paid', 'partially_paid']);
@@ -374,6 +375,514 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
   };
 }
 
+const PAYOUT_PERIODS = new Set(['last_30_days', 'this_quarter', 'this_year']);
+
+function titleCase(value) {
+  return String(value || '').trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Maps a booking onto the three options of the "type" filter in the UI.
+// If content_type is stored as a numeric id in your DB, map it here.
+function serviceTypeLabel(booking = {}) {
+  const text = [booking.content_type, booking.shoot_type, booking.event_type].filter(Boolean).join(' ').toLowerCase();
+  const photo = /photo/.test(text);
+  const video = /video|film|cinema/.test(text);
+  if (photo && video) return 'Photo + Video';
+  if (photo) return 'Photography';
+  if (video) return 'Videography';
+  return titleCase(booking.shoot_type || booking.event_type || '') || 'Other';
+}
+
+function payoutMethodLabel(payout) {
+  if (!payout) return '—';
+  if (String(payout.payout_method || '').toLowerCase() === 'stripe') return 'Stripe';
+  const mode = String(parseMetadata(payout.metadata_json).payment_mode || '').trim().toLowerCase();
+  if (!mode || ['advance_payment', 'final_payment', 'outside_platform'].includes(mode)) return 'Manual';
+  return titleCase(mode);
+}
+
+function periodRange(period, timezone, now = new Date()) {
+  if (!PAYOUT_PERIODS.has(period)) return null;
+  const today = dateKey(now, timezone);
+  const year = today.slice(0, 4);
+  const pad = (n) => String(n).padStart(2, '0');
+  if (period === 'last_30_days') return { start: addDays(today, -29), end: today };
+  if (period === 'this_year') return { start: `${year}-01-01`, end: `${year}-12-31` };
+  const month = Number(today.slice(5, 7));
+  const qStart = Math.floor((month - 1) / 3) * 3 + 1;
+  const qEnd = qStart + 2;
+  const lastDay = new Date(Date.UTC(Number(year), qEnd, 0)).getUTCDate();
+  return { start: `${year}-${pad(qStart)}-01`, end: `${year}-${pad(qEnd)}-${pad(lastDay)}` };
+}
+
+async function getCpPayoutHistory(query = {}, now = new Date()) {
+  const creatorId = Number(query.creator_id);
+  if (!Number.isInteger(creatorId) || creatorId <= 0) throw badRequest('creator_id is required');
+
+  const filters = resolveFilters(query);
+  const timezone = filters.timezone;
+  const statusFilter = String(query.status || '').trim().toLowerCase(); // completed | pending
+  const serviceFilter = String(query.service_type || '').trim();
+  const search = String(query.search || '').trim().toLowerCase().replace(/^#/, '');
+  const range = periodRange(String(query.period || '').trim(), timezone, now);
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
+
+  const [earnings, payoutRequests] = await Promise.all([
+    db.creator_earnings.findAll({ where: { creator_id: creatorId }, raw: true }),
+    db.creator_payout_requests.findAll({ where: { creator_id: creatorId }, raw: true })
+  ]);
+
+  const activeEarnings = getCanonicalCpEarningRows(earnings).filter((earning) => (
+    String(earning.status || '').toLowerCase() !== 'cancelled'
+    && ACTIVE_CP_APPROVAL_STATUSES.has(String(earning.approval_status || '').toLowerCase())
+  ));
+
+  const bookingIds = [...new Set(activeEarnings.map((e) => Number(e.booking_id)).filter(Boolean))];
+  const bookings = bookingIds.length
+    ? await db.stream_project_booking.findAll({
+        where: { stream_project_booking_id: bookingIds },
+        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date'],
+        raw: true
+      })
+    : [];
+  const bookingById = new Map(bookings.map((b) => [Number(b.stream_project_booking_id), b]));
+
+  // Latest CP-compensation payout per earning (for method + paid date)
+  const latestPayout = new Map();
+  payoutRequests
+    .filter((p) => ['processing', 'paid'].includes(String(p.status || '').toLowerCase()))
+    .forEach((p) => {
+      const meta = parseMetadata(p.metadata_json);
+      if (meta.source !== 'cp_compensation') return;
+      const earningId = Number(meta.creator_earning_id);
+      const when = new Date(p.paid_at || p.processed_at || p.created_at || 0).getTime();
+      const current = latestPayout.get(earningId);
+      if (!current || when > current.when) latestPayout.set(earningId, { payout: p, when });
+    });
+
+  // Keep each history row on the same actual-paid definition as Top CPs by
+  // Payout. Requested/approved/processing requests and advances are not paid.
+  const paidByEarning = payoutAmountsByEarningId(payoutRequests);
+
+  let rows = activeEarnings.map((earning) => {
+    const booking = bookingById.get(Number(earning.booking_id)) || {};
+    const amount = money(earning.net_earning_amount || earning.gross_amount || 0);
+    const earningId = Number(earning.creator_earning_id);
+    const recordedPaid = money(paidByEarning.get(earningId) || 0);
+    const paidAmount = String(earning.status || '').toLowerCase() === 'paid'
+      ? (recordedPaid > 0 ? Math.min(recordedPaid, amount) : amount)
+      : Math.min(recordedPaid, amount);
+    const isFullyPaid = amount > 0 && paidAmount >= amount;
+    const last = latestPayout.get(Number(earning.creator_earning_id))?.payout || null;
+    const date = isFullyPaid
+      ? (dateKey(last?.paid_at || last?.processed_at || earning.updated_at, timezone))
+      : resolveDueDate(earning, booking);
+    return {
+      id: String(earning.creator_earning_id),
+      booking_id: Number(earning.booking_id),
+      shoot_id: `#${earning.booking_id}`,
+      project_name: booking.project_name || `Shoot #${earning.booking_id}`,
+      date,
+      service_type: serviceTypeLabel(booking),
+      payout: paidAmount,
+      total_compensation: amount,
+      paid_amount: paidAmount,
+      payment_method: payoutMethodLabel(last),
+      status: isFullyPaid ? 'Completed' : 'Pending'
+    };
+  });
+
+  rows = rows.filter((row) => {
+    if (!(row.paid_amount > 0)) return false; // same rule as Top CPs By Payout
+    if (statusFilter && row.status.toLowerCase() !== statusFilter) return false;
+    if (serviceFilter && row.service_type !== serviceFilter) return false;
+    if (range && !(row.date && row.date >= range.start && row.date <= range.end)) return false;
+    if (filters.start_date && !(row.date && row.date >= filters.start_date && row.date <= filters.end_date)) return false;
+    if (search && !`${row.booking_id} ${row.project_name}`.toLowerCase().includes(search)) return false;
+    return true;
+  }).sort((a, b) => (b.date || '').localeCompare(a.date || '') || Number(b.id) - Number(a.id));
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(Math.max(parseInt(query.page, 10) || 1, 1), totalPages);
+
+  return {
+    summary: {
+      total_paid: money(rows.reduce((sum, r) => sum + r.paid_amount, 0)),
+      total_payable: money(rows.reduce((sum, r) => sum + (r.total_compensation - r.paid_amount), 0))
+    },
+    rows: rows.slice((page - 1) * limit, page * limit).map(({ paid_amount, ...row }) => row),
+    pagination: { page, limit, total, total_pages: totalPages }
+  };
+}
+
+async function getCpOverdueHistory(query = {}, now = new Date()) {
+  const creatorId = Number(query.creator_id);
+  if (!Number.isInteger(creatorId) || creatorId <= 0) throw badRequest('creator_id is required');
+
+  const filters = resolveFilters(query);
+  const timezone = filters.timezone;
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
+  const [earnings, payoutRequests] = await Promise.all([
+    db.creator_earnings.findAll({ where: { creator_id: creatorId }, raw: true }),
+    db.creator_payout_requests.findAll({ where: { creator_id: creatorId }, raw: true })
+  ]);
+  const paidByEarning = payoutAmountsByEarningId(payoutRequests);
+  const activeEarnings = getCanonicalCpEarningRows(earnings).filter((earning) => (
+    String(earning.status || '').toLowerCase() !== 'cancelled'
+    && ACTIVE_CP_APPROVAL_STATUSES.has(String(earning.approval_status || '').toLowerCase())
+  ));
+  const bookingIds = [...new Set(activeEarnings.map((earning) => Number(earning.booking_id)).filter(Boolean))];
+  const bookings = bookingIds.length
+    ? await db.stream_project_booking.findAll({
+        where: { stream_project_booking_id: bookingIds },
+        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'user_id', 'guest_email'],
+        raw: true
+      })
+    : [];
+  const bookingById = new Map(bookings.map((booking) => [Number(booking.stream_project_booking_id), booking]));
+  const userIds = [...new Set(bookings.map((booking) => Number(booking.user_id)).filter(Boolean))];
+  const users = userIds.length
+    ? await db.users.unscoped().findAll({ where: { id: userIds }, attributes: ['id', 'name', 'email'], raw: true })
+    : [];
+  const userById = new Map(users.map((user) => [Number(user.id), user]));
+  const today = dateKey(now, timezone);
+
+  let rows = activeEarnings.flatMap((earning) => {
+    const booking = bookingById.get(Number(earning.booking_id)) || {};
+    const amount = money(earning.net_earning_amount);
+    const recordedPaid = money(paidByEarning.get(Number(earning.creator_earning_id)) || 0);
+    const paidAmount = String(earning.status || '').toLowerCase() === 'paid'
+      ? (recordedPaid > 0 ? Math.min(recordedPaid, amount) : amount)
+      : Math.min(recordedPaid, amount);
+    const overdueAmount = money(Math.max(amount - paidAmount, 0));
+    const dueDate = resolveDueDate(earning, booking);
+    if (!(overdueAmount > 0) || !dueDate || dueDate >= today || !isInRange(`${dueDate}T00:00:00.000Z`, filters)) return [];
+
+    const user = userById.get(Number(booking.user_id)) || {};
+    return [{
+      id: String(earning.creator_earning_id),
+      earning_id: Number(earning.creator_earning_id),
+      booking_id: Number(earning.booking_id),
+      shoot_name: booking.project_name || `Shoot #${earning.booking_id}`,
+      category: serviceTypeLabel(booking),
+      customer_name: clientName(user, booking.guest_email),
+      amount: overdueAmount,
+      due_date: dueDate,
+      days_overdue: Math.max(0, Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${dueDate}T00:00:00Z`)) / 86400000))
+    }];
+  }).sort((a, b) => b.due_date.localeCompare(a.due_date) || b.amount - a.amount || b.earning_id - a.earning_id);
+
+  const total = rows.length;
+  const totalOverdue = money(rows.reduce((sum, row) => sum + row.amount, 0));
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(Math.max(parseInt(query.page, 10) || 1, 1), totalPages);
+  rows = rows.slice((page - 1) * limit, page * limit);
+
+  return {
+    summary: { total_overdue: totalOverdue, total_shoots: total },
+    rows,
+    pagination: { page, limit, total, total_pages: totalPages }
+  };
+}
+
+async function getPayoutScheduleHistory(query = {}, now = new Date()) {
+  const bucket = String(query.bucket_id || '').trim();
+  const bucketIds = new Set(['this_week', 'next_week', '2_4_weeks', 'overdue']);
+  if (!bucketIds.has(bucket)) throw badRequest('A valid payout bucket_id is required');
+
+  const filters = resolveFilters(query);
+  const timezone = filters.timezone;
+  const search = String(query.search || '').trim().toLowerCase().replace(/^#/, '');
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
+  const [earnings, payoutRequests] = await Promise.all([
+    db.creator_earnings.findAll({ raw: true }),
+    db.creator_payout_requests.findAll({ raw: true })
+  ]);
+  const paidByEarning = payoutAmountsByEarningId(payoutRequests);
+  const activeEarnings = getCanonicalCpEarningRows(earnings).filter((earning) => (
+    String(earning.status || '').toLowerCase() !== 'cancelled'
+    && ACTIVE_CP_APPROVAL_STATUSES.has(String(earning.approval_status || '').toLowerCase())
+  ));
+  const bookingIds = [...new Set(activeEarnings.map((earning) => Number(earning.booking_id)).filter(Boolean))];
+  const creatorIds = [...new Set(activeEarnings.map((earning) => Number(earning.creator_id)).filter(Boolean))];
+  const [bookings, creators] = await Promise.all([
+    bookingIds.length
+      ? db.stream_project_booking.findAll({
+          where: { stream_project_booking_id: bookingIds },
+          attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'budget', 'user_id', 'guest_email'],
+          raw: true
+        })
+      : [],
+    creatorIds.length
+      ? db.crew_members.findAll({
+          where: { crew_member_id: creatorIds },
+          attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'],
+          raw: true
+        })
+      : []
+  ]);
+  const userIds = [...new Set(bookings.map((booking) => Number(booking.user_id)).filter(Boolean))];
+  const users = userIds.length
+    ? await db.users.unscoped().findAll({ where: { id: userIds }, attributes: ['id', 'name', 'email'], raw: true })
+    : [];
+  const bookingById = new Map(bookings.map((booking) => [Number(booking.stream_project_booking_id), booking]));
+  const creatorById = new Map(creators.map((creator) => [Number(creator.crew_member_id), creator]));
+  const userById = new Map(users.map((user) => [Number(user.id), user]));
+  const today = dateKey(now, timezone);
+
+  let rows = activeEarnings.flatMap((earning) => {
+    const booking = bookingById.get(Number(earning.booking_id)) || {};
+    const amount = money(earning.net_earning_amount);
+    const recordedPaid = money(paidByEarning.get(Number(earning.creator_earning_id)) || 0);
+    const paidAmount = String(earning.status || '').toLowerCase() === 'paid'
+      ? (recordedPaid > 0 ? Math.min(recordedPaid, amount) : amount)
+      : Math.min(recordedPaid, amount);
+    const pendingAmount = money(Math.max(amount - paidAmount, 0));
+    if (!(pendingAmount > 0)) return [];
+
+    const dueDate = resolveDueDate(earning, booking);
+    if (!dueDate || !isInRange(`${dueDate}T00:00:00.000Z`, filters)) return [];
+    const dueDays = Math.floor((Date.parse(`${dueDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
+    const matchesBucket = bucket === 'overdue' ? dueDays < 0
+      : bucket === 'this_week' ? dueDays >= 0 && dueDays <= 6
+        : bucket === 'next_week' ? dueDays >= 7 && dueDays <= 13
+          : dueDays >= 14 && dueDays <= 27;
+    if (!matchesBucket) return [];
+
+    const creator = creatorById.get(Number(earning.creator_id)) || {};
+    const user = userById.get(Number(booking.user_id)) || {};
+    const cpName = creatorName(creator);
+    const customer = clientName(user, booking.guest_email);
+    const bookingId = Number(earning.booking_id);
+    const searchable = `${cpName} ${customer} ${bookingId} ${booking.project_name || ''}`.toLowerCase();
+    if (search && !searchable.includes(search)) return [];
+
+    const approval = String(earning.approval_status || '').toLowerCase();
+    const status = approval === 'pending_approval' ? 'Finance Approval'
+      : paidAmount > 0 ? 'Partially Paid'
+        : String(earning.status || '').toLowerCase() === 'pending' ? 'Pending' : 'Approved';
+    return [{
+      id: String(earning.creator_earning_id),
+      creator_name: cpName,
+      creator_roles: creatorRoleNames(creator.primary_role).join(' + ') || 'Creative Partner',
+      creator_id: Number(earning.creator_id),
+      shoot_id: `#${bookingId}`,
+      created_date: dateKey(earning.created_at || earning.submitted_at || earning.approved_at, timezone),
+      customer_name: customer,
+      shoot_amount: money(booking.budget),
+      cp_payout: amount,
+      pending_amount: pendingAmount,
+      due_date: dueDate,
+      status
+    }];
+  }).sort((a, b) => a.due_date.localeCompare(b.due_date) || a.creator_name.localeCompare(b.creator_name) || a.shoot_id.localeCompare(b.shoot_id));
+
+  const total = rows.length;
+  const totalPending = money(rows.reduce((sum, row) => sum + row.pending_amount, 0));
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(Math.max(parseInt(query.page, 10) || 1, 1), totalPages);
+  rows = rows.slice((page - 1) * limit, page * limit);
+  return { summary: { total_pending: totalPending, total_rows: total }, rows, pagination: { page, limit, total, total_pages: totalPages } };
+}
+
+const SHOOT_FAILED_STATUSES = new Set(['failed', 'cancelled', 'canceled', 'declined', 'expired']);
+
+function invoiceStatus(transaction) {
+  const status = String(transaction.status || '').toLowerCase();
+  if (PAID_TRANSACTION_STATUSES.has(status) || status === 'refunded') return 'Paid';
+  if (SHOOT_FAILED_STATUSES.has(status)) return 'Failed';
+  return 'Pending';
+}
+
+async function getShootHistory(query = {}, now = new Date()) {
+  const Op = db.Sequelize.Op;
+  const entityType = String(query.entity_type || '').trim().toLowerCase();
+  const entityId = String(query.entity_id || '').trim();
+  if (!['cp', 'client'].includes(entityType)) throw badRequest('entity_type must be cp or client');
+  if (!entityId) throw badRequest('entity_id is required');
+
+  const filters = resolveFilters(query);
+  const timezone = filters.timezone;
+  const statusFilter = String(query.status || '').trim().toLowerCase(); // paid | pending | failed
+  const serviceFilter = String(query.service_type || '').trim();
+  const search = String(query.search || '').trim().toLowerCase().replace(/^#/, '');
+  const range = periodRange(String(query.period || '').trim(), timezone, now);
+  const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
+
+  // 1) Which bookings belong to the selected entity
+  let bookingIds = [];
+  if (entityType === 'cp') {
+    const creatorId = Number(entityId);
+    if (!Number.isInteger(creatorId) || creatorId <= 0) throw badRequest('entity_id must be a creator id when entity_type is cp');
+    const [earnings, payoutRequests] = await Promise.all([
+      db.creator_earnings.findAll({ where: { creator_id: creatorId }, raw: true }),
+      db.creator_payout_requests.findAll({ where: { creator_id: creatorId }, raw: true })
+    ]);
+    const paidByEarning = payoutAmountsByEarningId(payoutRequests);
+    const activeEarnings = getCanonicalCpEarningRows(earnings)
+      .filter((e) => String(e.status || '').toLowerCase() !== 'cancelled'
+        && ACTIVE_CP_APPROVAL_STATUSES.has(String(e.approval_status || '').toLowerCase()));
+
+    const earningBookingIds = [...new Set(activeEarnings.map((e) => Number(e.booking_id)).filter(Boolean))];
+    const payoutTxIds = [...new Set(activeEarnings.map((e) => Number(e.finance_transaction_id)).filter(Boolean))];
+    const [earningBookings, payoutTxs] = await Promise.all([
+      earningBookingIds.length
+        ? db.stream_project_booking.findAll({ where: { stream_project_booking_id: { [Op.in]: earningBookingIds } }, attributes: ['stream_project_booking_id', 'event_date'], raw: true })
+        : [],
+      payoutTxIds.length
+        ? db.finance_transactions.findAll({ where: { finance_transaction_id: { [Op.in]: payoutTxIds } }, attributes: ['finance_transaction_id', 'transaction_date'], raw: true })
+        : []
+    ]);
+    const eventBookingById = new Map(earningBookings.map((b) => [Number(b.stream_project_booking_id), b]));
+    const payoutTxById = new Map(payoutTxs.map((t) => [Number(t.finance_transaction_id), t]));
+
+    // Same rules as the "Top CPs By Shoots" ranking: paid amount > 0, and the
+    // page date range applied to the payout date (or due date while unpaid).
+    bookingIds = [...new Set(activeEarnings.filter((e) => {
+      const amount = money(e.net_earning_amount);
+      const recorded = money(paidByEarning.get(Number(e.creator_earning_id)) || 0);
+      const paid = String(e.status || '').toLowerCase() === 'paid'
+        ? (recorded > 0 ? Math.min(recorded, amount) : amount)
+        : Math.min(recorded, amount);
+      if (!(paid > 0)) return false;
+      const isPaid = paid >= amount;
+      const dueDate = resolveDueDate(e, eventBookingById.get(Number(e.booking_id)));
+      const activity = isPaid
+        ? (payoutTxById.get(Number(e.finance_transaction_id))?.transaction_date || e.updated_at || e.approved_at || e.created_at)
+        : (dueDate ? `${dueDate}T00:00:00.000Z` : e.updated_at || e.created_at);
+      return isInRange(activity, filters);
+    }).map((e) => Number(e.booking_id)).filter(Boolean))];
+  } else {
+    const match = /^(user|guest):(.+)$/i.exec(entityId);
+    const kind = match ? match[1].toLowerCase() : 'user';
+    const value = match ? match[2] : entityId;
+    const where = { is_active: 1 };
+    if (kind === 'user') {
+      const userId = Number(value);
+      if (!Number.isInteger(userId) || userId <= 0) throw badRequest('entity_id must be user:<id> or guest:<email> when entity_type is client');
+      where.user_id = userId;
+    } else {
+      where.guest_email = value;
+    }
+    const owned = await db.stream_project_booking.findAll({ where, attributes: ['stream_project_booking_id'], raw: true });
+    bookingIds = owned.map((b) => Number(b.stream_project_booking_id)).filter(Boolean);
+  }
+
+  const emptyResult = { rows: [], pagination: { page: 1, limit, total: 0, total_pages: 1 } };
+  if (!bookingIds.length) return emptyResult;
+
+  // 2) Real data for those bookings
+  const inIds = { [Op.in]: bookingIds };
+  const [bookings, breakdowns, paymentHistoryEntries, summaries] = await Promise.all([
+    db.stream_project_booking.findAll({
+      where: { stream_project_booking_id: inIds },
+      attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'budget', 'user_id', 'guest_email', 'payment_completed_at', 'created_at'],
+      raw: true
+    }),
+    db.finance_project_breakdowns.findAll({ where: { booking_id: inIds }, raw: true }),
+    financeService.getPaymentHistoryEntriesForBookings(bookingIds),
+    db.sequelize.query(
+      `SELECT booking_id, quote_total, paid_amount, credit_used_amount, due_amount
+       FROM booking_payment_summary WHERE booking_id IN (:ids)`,
+      { replacements: { ids: bookingIds }, type: db.Sequelize.QueryTypes.SELECT }
+    )
+  ]);
+
+  const userIds = [...new Set(bookings.map((b) => Number(b.user_id)).filter(Boolean))];
+  const users = userIds.length
+    ? await db.users.unscoped().findAll({ where: { id: { [Op.in]: userIds } }, attributes: ['id', 'name', 'email'], raw: true })
+    : [];
+  const userById = new Map(users.map((u) => [Number(u.id), u]));
+  const breakdownByBooking = new Map(breakdowns.map((b) => [Number(b.booking_id), b]));
+  const summaryByBooking = new Map(summaries.map((s) => [Number(s.booking_id), s]));
+  const paymentsByBooking = new Map();
+  paymentHistoryEntries.forEach((entry) => {
+    const id = Number(entry.booking_id);
+    paymentsByBooking.set(id, [...(paymentsByBooking.get(id) || []), entry]);
+  });
+  paymentsByBooking.forEach((entries) => entries.sort((a, b) => (
+    new Date(a.paid_at || a.created_at || 0).getTime() - new Date(b.paid_at || b.created_at || 0).getTime()
+    || String(a.payment_history_id || '').localeCompare(String(b.payment_history_id || ''))
+  )));
+
+  // 3) One row per shoot
+  let rows = bookings.map((booking) => {
+    const id = Number(booking.stream_project_booking_id);
+    const breakdown = breakdownByBooking.get(id);
+    const summary = summaryByBooking.get(id) || {};
+    const payments = paymentsByBooking.get(id) || [];
+
+    if (entityType === 'client') {
+      const hasEvidence = Boolean(breakdown) || payments.length > 0
+        || Number(summary.paid_amount || 0) > 0 || Number(summary.credit_used_amount || 0) > 0;
+      if (!hasEvidence) return null;
+    }
+
+    const paidPayments = payments.filter((payment) => PAID_TRANSACTION_STATUSES.has(String(payment.status || '').toLowerCase()));
+    const paidSum = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    // Use the same recorded payment entries as /admin/finances/transactions.
+    // This history groups those transaction rows by shoot, so its total is
+    // their sum; quote totals and booking budgets are not transaction amounts.
+    const transactionTotal = payments.reduce((sum, payment) => sum + Math.abs(Number(payment.amount || 0)), 0);
+    const total = money(transactionTotal);
+    const collected = paidSum;
+
+    let status = 'Pending';
+    if (paidPayments.length > 0 && total === 0) status = 'Paid';
+    else if (collected > 0 && Math.max(total - collected, 0) <= 0) status = 'Paid';
+    else if (collected <= 0 && payments.some((payment) => SHOOT_FAILED_STATUSES.has(String(payment.status || '').toLowerCase()))) status = 'Failed';
+
+    const methods = [...new Set(paidPayments.map((payment) => payment.type === 'stripe' ? 'Stripe' : payment.method).filter((method) => method && method !== '—'))];
+    const user = userById.get(Number(booking.user_id)) || {};
+    const invoices = payments.map((payment) => ({
+      id: payment.invoice_number || payment.receipt_number || payment.payment_history_id,
+      date: dateKey(payment.paid_at || payment.created_at, timezone),
+      method: payment.type === 'stripe' ? 'Stripe' : payment.method || 'Manual',
+      status: invoiceStatus(payment),
+      amount: money(Math.abs(Number(payment.amount || 0))),
+      note: payment.external_reference ? `Ref: ${payment.external_reference}` : ''
+    }));
+
+    return {
+      id: String(id),
+      booking_id: id,
+      shoot_id: `#${id}`,
+      project_name: booking.project_name || `Shoot #${id}`,
+      client_name: clientName(user, booking.guest_email),
+      date: dateKey(booking.event_date || paidPayments[0]?.paid_at || paidPayments[0]?.created_at || booking.payment_completed_at || booking.created_at, timezone),
+      service_type: serviceTypeLabel(booking),
+      total_amount: money(total),
+      invoice_count: invoices.length,
+      payment_method: methods.length === 0 ? '—' : methods.length === 1 ? methods[0] : 'Multiple',
+      status,
+      invoices
+    };
+  }).filter(Boolean);
+
+  // 4) Filters, sort, pagination (server-side)
+  rows = rows.filter((row) => {
+    if (statusFilter && row.status.toLowerCase() !== statusFilter) return false;
+    if (serviceFilter && row.service_type !== serviceFilter) return false;
+    if (range && !(row.date && row.date >= range.start && row.date <= range.end)) return false;
+    if (entityType !== 'cp' && filters.start_date && !(row.date && row.date >= filters.start_date && row.date <= filters.end_date)) return false;
+    if (search) {
+      const haystack = `${row.booking_id} ${row.project_name} ${row.client_name} ${row.invoices.map((i) => i.id).join(' ')}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  }).sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.booking_id - a.booking_id);
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(Math.max(parseInt(query.page, 10) || 1, 1), totalPages);
+
+  return {
+    rows: rows.slice((page - 1) * limit, page * limit),
+    pagination: { page, limit, total, total_pages: totalPages }
+  };
+}
+
 async function getAnalytics(query = {}) {
   const filters = resolveFilters(query);
   const [breakdowns, transactions, earnings, disputes, payoutRequests, clientPaymentBookings] = await Promise.all([
@@ -446,4 +955,4 @@ async function getAnalytics(query = {}) {
   }, filters);
 }
 
-module.exports = { getAnalytics, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate, outstandingBalance, isOutstandingReceivable, creatorRoleNames } };
+module.exports = { getAnalytics, getCpPayoutHistory, getCpOverdueHistory, getPayoutScheduleHistory, getShootHistory, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate, outstandingBalance, isOutstandingReceivable, creatorRoleNames } };

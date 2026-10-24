@@ -3388,6 +3388,7 @@ async function markCreatorPayoutPaid(payoutRequestId, payload = {}, options = {}
 module.exports = {
   syncBookingFinance,
   listTransactions,
+  getPaymentHistoryEntriesForBookings: fetchPaymentHistoryEntriesForBookings,
   exportTransactionsCsv,
   listShootBreakdowns,
   getShootFinance,

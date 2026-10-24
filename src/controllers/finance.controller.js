@@ -16,6 +16,58 @@ exports.getAdminAnalytics = async (req, res) => {
   }
 };
 
+exports.getAdminShootHistory = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getShootHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get shoot history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch shoot history'
+    });
+  }
+};
+
+exports.getAdminCpPayoutHistory = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getCpPayoutHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get CP payout history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch CP payout history'
+    });
+  }
+};
+
+exports.getAdminCpOverdueHistory = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getCpOverdueHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get CP overdue history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch CP overdue history'
+    });
+  }
+};
+
+exports.getAdminPayoutScheduleHistory = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getPayoutScheduleHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get payout schedule history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch payout schedule'
+    });
+  }
+};
+
 exports.syncBookingFinance = async (req, res) => {
   try {
     const bookingId = parseInt(req.params.bookingId, 10);
