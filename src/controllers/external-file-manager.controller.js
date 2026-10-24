@@ -5224,6 +5224,14 @@ exports.copyFiles = async (req, res) => {
         phase,
         targetPath,
         sourcePaths,
+        ...(req.body.clientReference && typeof req.body.clientReference === 'object'
+          ? {
+              clientReference: {
+                link: String(req.body.clientReference.link || '').trim(),
+                message: String(req.body.clientReference.message || '').trim(),
+              },
+            }
+          : {}),
         userId: getRequestUserId(req),
         authorName,
       }),
@@ -5247,6 +5255,21 @@ exports.copyFiles = async (req, res) => {
     });
   }
 };
+
+// Workflow gateway consumers share the same bridge, access, and notification
+// primitives as the File Manager routes. Keeping these exports narrow avoids a
+// second implementation of the internal-service contract.
+exports.proxyRequest = proxyRequest;
+exports.ensureCreatorWorkspaceAccess = ensureCreatorWorkspaceAccess;
+exports.getRequestUserId = getRequestUserId;
+exports.getUserDisplayName = getUserDisplayName;
+exports.isAdminRole = isAdminRole;
+exports.getBookingForEditingInternalEmail = getBookingForEditingInternalEmail;
+exports.buildFilesForEditingInternalRecipients = buildFilesForEditingInternalRecipients;
+exports.sendClientFilePush = sendClientFilePush;
+exports.sendAssignedCpFilePush = sendAssignedCpFilePush;
+exports.buildAdminDashboardUrl = buildAdminDashboardUrl;
+exports.formatEditingSubmissionTime = formatEditingSubmissionTime;
 
 exports.reviewRevisionFile = async (req, res) => {
   try {

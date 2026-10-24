@@ -3768,6 +3768,7 @@ const sendFilesForEditingInternalTeamEmail = async ({ recipients = [], data = {}
       total_files: Number(data?.total_files || data?.file_count || 0) || 1,
       submitted_by: data?.submitted_by || data?.submitted_by_name || 'Client',
       submission_time: data?.submission_time || data?.submitted_at || new Date().toISOString(),
+      notes: data?.notes || '',
       dashboard_link:
         data?.dashboard_link ||
         data?.dashboardLink ||

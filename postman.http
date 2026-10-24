@@ -3853,7 +3853,7 @@ Content-Type: application/json
 
 {
   "email": "harsh.panchal@gmail.com",
-  "password": "NewPass@2026"
+  "password": "password123"
 }
 
 ###
@@ -3865,3 +3865,590 @@ Authorization: {{TOKEN}}
   "name": "Harsh Panchal",
   "phone_number": "9874562320"
 }
+
+
+
+
+### ============================================================
+### FILE MANAGER EDITOR WORKFLOW TESTING (21 Oct 2026)
+### ============================================================
+@API2 = http://localhost:5002/v1/external-file-manager
+@INTERNAL_KEY = beige-internal-dev-key
+@BID = 1517
+
+@WF = {{URL}}external-file-manager/workflow
+|
+@EDITOR_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIyNiwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzkyNTc4MTU5LCJleHAiOjE3OTI1Nzk5NTl9.pQbXaXosZ9TdEdDWEjufU1TJoYkisG7EWAsngo3iiCI
+
+
+@ADMIN_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjQsInVzZXJUeXBlSWQiOjEsInNlc3Npb25JZCI6ImFmYzQ4NjVhLTE4ZGYtNGFiNC04YmQwLTE2MDFiMGE5MGZmOCIsImlhdCI6MTc5MjU3ODAwMiwiZXhwIjoxNzkyNTc5ODAyfQ.3b8hWnbpBr_eK2lT6kA_jQFtxykwNv3Vn5Gg4dZLlec
+
+@CLIENT_TOKEN = Bearer PASTE_CLIENT_TOKEN
+
+### ---------- PHASE A: web-api-2 DIRECT (engine check) ----------
+
+### A1. Overview (workflow doc auto-create hona chahiye, status not_started)
+GET {{API2}}/workflows/{{BID}}
+x-internal-key: {{INTERNAL_KEY}}
+
+### A2. Requirements set
+PUT {{API2}}/workflows/{{BID}}/requirements
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{
+  "requirements": { "requiredCount": 3, "revisionRounds": 2, "requiredFormat": "JPG", "brief": "Test brief" },
+  "dueDate": "2026-11-01T00:00:00.000Z",
+  "producerId": "1",
+  "producerName": "Producer",
+  "editorId": "281",
+  "editorName": "Editor",
+  "editorType": "external"
+}
+
+### A3. List
+GET {{API2}}/workflows?page=1&limit=10
+x-internal-key: {{INTERNAL_KEY}}
+
+### A4. Storage usage
+GET {{API2}}/workflows-storage-usage
+x-internal-key: {{INTERNAL_KEY}}
+
+### A5. NEGATIVE: bina key (401/403 aana chahiye)
+GET {{API2}}/workflows/{{BID}}
+
+### ---------- PHASE B: GATEWAY (web-api) ----------
+
+### B1. List (editor ko sirf assigned folders)
+GET {{WF}}?page=1&limit=25
+Authorization: {{EDITOR_TOKEN}}
+
+### B2. Status filter + search
+GET {{WF}}?status=in_progress&search={{BID}}&sortBy=updatedAt&sortOrder=desc
+Authorization: {{EDITOR_TOKEN}}
+
+### B3. Storage usage (:bookingId me nahi phasna chahiye)
+GET {{WF}}/storage-usage
+Authorization: {{EDITOR_TOKEN}}
+
+### B4. Overview
+GET {{WF}}/{{BID}}
+Authorization: {{EDITOR_TOKEN}}
+
+### B5. Requirements (admin/producer)
+PUT {{WF}}/{{BID}}/requirements
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{
+  "requirements": { "requiredCount": 3, "revisionRounds": 2 },
+  "dueDate": "2026-11-01T00:00:00.000Z"
+}
+
+### B6. Send for Edits (clientReference ke saath). sourcePaths apni real Raw Footage files ke daalo
+POST {{API2}}/copy-files
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{
+  "externalId": "1517",
+  "phase": "post",
+  "targetPath": "Edits/Selected for Edits",
+  "sourcePaths": [
+    "wedding_anup_#1517/Post-Production/Raw Footage/Screenshot 2025-06-13 132325.png",
+    "wedding_anup_#1517/Post-Production/Raw Footage/Screenshot 2025-06-21 111255.png",
+    "wedding_anup_#1517/Post-Production/Raw Footage/Screenshot 2025-06-21 111351.png"
+  ],
+  "userId": "1",
+  "authorName": "Test",
+  "clientReference": { "link": "https://example.com/ref", "message": "Match this style" }
+}
+
+### B7. Next action (Start Editing dikhna chahiye)
+GET {{WF}}/{{BID}}/next-action
+Authorization: {{EDITOR_TOKEN}}
+
+### B8. Start Editing (editor)
+POST {{WF}}/{{BID}}/start-editing
+Content-Type: application/json
+Authorization: {{EDITOR_TOKEN}}
+
+{ "notes": "Editing started" }
+
+### B9. Progress (upload se pehle: uploaded 0)
+GET {{WF}}/{{BID}}/progress
+Authorization: {{EDITOR_TOKEN}}
+
+### --- STEP: Edits/Edited Deliverables me 2-3 files upload karo (UI se ya upload-policies/batch + completion) ---
+
+### B10. Progress (upload ke baad)
+GET {{WF}}/{{BID}}/progress
+Authorization: {{EDITOR_TOKEN}}
+
+### B11. Submit for Approval
+POST {{WF}}/{{BID}}/submit-approval
+Content-Type: application/json
+Authorization: {{EDITOR_TOKEN}}
+
+{ "notes": "Ready for review" }
+
+### B12. Client Request Revision (existing API). Edited Deliverables ki file ka real path daalo
+POST {{URL}}external-file-manager/revision-file/review
+Content-Type: application/json
+Authorization: {{CLIENT_TOKEN}}
+
+{
+  "externalId": "{{BID}}",
+  "filepaths": [
+    "corporate_neha_#1213/Post-Production/Edits/Edited Deliverables/FILE1.jpg"
+  ],
+  "action": "request_revision"
+}
+
+### B13. Overview (status revision_requested hona chahiye)
+GET {{WF}}/{{BID}}
+Authorization: {{EDITOR_TOKEN}}
+
+### --- STEP: Revisions/Version2 (ya jo naya Version folder bana) me revised file upload karo ---
+
+### B14. Submit Revision
+POST {{WF}}/{{BID}}/submit-revision
+Content-Type: application/json
+Authorization: {{EDITOR_TOKEN}}
+
+{ "notes": "Revision delivered" }
+
+### B15. Approve (existing API)
+POST {{URL}}external-file-manager/revision-file/review
+Content-Type: application/json
+Authorization: {{CLIENT_TOKEN}}
+
+{
+  "externalId": "{{BID}}",
+  "filepaths": [
+    "corporate_neha_#1213/Post-Production/Edits/Revisions/Version2/FILE1.jpg"
+  ],
+  "action": "approve"
+}
+
+### B16. Complete (admin)
+POST {{WF}}/{{BID}}/complete
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{ "notes": "Delivery completed" }
+
+### B17. Timeline
+GET {{WF}}/{{BID}}/timeline
+Authorization: {{EDITOR_TOKEN}}
+
+### B18. Before/After (edited file ka real path)
+GET {{WF}}/{{BID}}/before-after?path=corporate_neha_%231213/Post-Production/Edits/Edited%20Deliverables/FILE1.jpg
+Authorization: {{EDITOR_TOKEN}}
+
+### ---------- NEGATIVE TESTS ----------
+
+### N1. Bina token (401)
+GET {{WF}}/{{BID}}
+
+### N2. Editor se requirements (403)
+PUT {{WF}}/{{BID}}/requirements
+Content-Type: application/json
+Authorization: {{EDITOR_TOKEN}}
+
+{ "requirements": { "revisionRounds": 5 } }
+
+### N3. Editor se complete (403)
+POST {{WF}}/{{BID}}/complete
+Content-Type: application/json
+Authorization: {{EDITOR_TOKEN}}
+
+{}
+
+### N4. Galat status par submit-approval (400, jaise not_started ya completed me)
+POST {{WF}}/{{BID}}/submit-approval
+Content-Type: application/json
+Authorization: {{EDITOR_TOKEN}}
+
+{ "notes": "should fail" }
+
+### N5. Non-assigned user se start-editing (403). Kisi dusre CP ka token daalo
+POST {{WF}}/{{BID}}/start-editing
+Content-Type: application/json
+Authorization: Bearer PASTE_OTHER_USER_TOKEN
+
+{}
+
+### N6. Purana copy-files payload (bina clientReference) regression
+POST {{URL}}external-file-manager/copy-files
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{
+  "externalId": "{{BID}}",
+  "phase": "post",
+  "targetPath": "Edits/Selected for Edits",
+  "sourcePaths": ["corporate_neha_#1213/Post-Production/Raw Footage/FILE1.jpg"]
+}
+
+
+
+
+###
+GET {{URL}}external-file-manager/workspaces?page=1&limit=24
+Authorization: {{ADMIN_TOKEN}}
+
+###
+GET {{URL}}external-file-manager/workspace/1517/files?phase=post&path=Raw+Footage
+Authorization: {{ADMIN_TOKEN}}
+
+
+###
+GET {{API2}}/workflows/1517
+x-internal-key: {{INTERNAL_KEY}}
+
+
+
+###
+GET {{API2}}/workflows?tab=linked&orderIds[]=1517
+x-internal-key: {{INTERNAL_KEY}}
+
+###
+POST {{API2}}/workflows/1517/start-editing
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{ "by": "281", "byName": "Editor", "notes": "Editing started" }
+
+###
+POST {{URL}}external-file-manager/folder
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{ "bookingId": 1517, "phase": "post", "path": "Edits", "folderName": "Selected for Edits" }
+
+
+
+###
+GET {{API2}}/workflows/1517
+x-internal-key: {{INTERNAL_KEY}}
+
+###
+PUT {{API2}}/workflows/1517/requirements
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{
+  "requirements": { "requiredCount": 3, "revisionRounds": 2, "requiredFormat": "PNG", "brief": "Test brief" },
+  "dueDate": "2026-11-01T00:00:00.000Z",
+  "producerId": "1",
+  "producerName": "Producer",
+  "editorId": "281",
+  "editorName": "Editor",
+  "editorType": "external"
+}
+
+###
+POST {{API2}}/copy-files
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{
+  "externalId": "1517",
+  "phase": "post",
+  "targetPath": "Edits/Selected for Edits",
+  "sourcePaths": [
+    "wedding_anup_#1517/Post-Production/Raw Footage/Screenshot 2025-06-13 132325.png",
+    "wedding_anup_#1517/Post-Production/Raw Footage/Screenshot 2025-06-21 111255.png",
+    "wedding_anup_#1517/Post-Production/Raw Footage/Screenshot 2025-06-21 111351.png"
+  ],
+  "userId": "1",
+  "authorName": "Test",
+  "clientReference": { "link": "https://example.com/ref", "message": "Match this style" }
+}
+
+###
+GET {{API2}}/workflows/1517
+x-internal-key: {{INTERNAL_KEY}}
+
+
+###
+POST {{API2}}/workflows/1517/start-editing
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{ "by": "281", "byName": "Editor", "notes": "Editing started" }
+
+
+###
+POST {{URL}}external-file-manager/upload-policies/batch
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{
+  "items": [
+    { "filepath": "wedding_anup_#1517/Post-Production/Edits/Edited Deliverables/edit1.png", "fileContentType": "image/png", "fileSize": 12315 }
+  ]
+}
+
+###
+GET {{API2}}/workflows/1517/progress
+x-internal-key: {{INTERNAL_KEY}}
+
+###
+POST {{API2}}/files-uploaded/batch
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{
+  "externalId": "1517",
+  "items": [
+    { "filepath": "wedding_anup_#1517/Post-Production/Edits/Edited Deliverables/edit1.png", "fileSize": 70, "fileContentType": "image/png" },
+    { "filepath": "wedding_anup_#1517/Post-Production/Edits/Edited Deliverables/edit2.png", "fileSize": 70, "fileContentType": "image/png" },
+    { "filepath": "wedding_anup_#1517/Post-Production/Edits/Edited Deliverables/edit3.png", "fileSize": 70, "fileContentType": "image/png" }
+  ],
+  "userId": "1",
+  "authorName": "Test"
+}
+
+###
+GET {{API2}}/workflows/1517/progress
+x-internal-key: {{INTERNAL_KEY}}
+
+
+###
+GET {{API2}}/workflows/1517/next-action
+x-internal-key: {{INTERNAL_KEY}}
+
+
+###
+POST {{API2}}/workflows/1517/submit-approval
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{ "notes": "Ready for review", "by": "281", "byName": "Editor" }
+
+###
+GET {{API2}}/workflows/1517
+x-internal-key: {{INTERNAL_KEY}}
+
+
+###
+POST {{API2}}/workflows/1517/submit-approval
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{ "notes": "should fail", "by": "281", "byName": "Editor" }
+
+###
+POST {{API2}}/revision-file/review
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{
+  "externalId": "1517",
+  "filepath": "wedding_anup_#1517/Post-Production/Edits/Edited Deliverables/edit1.png",
+  "action": "request_revision"
+}
+
+
+###
+POST {{URL}}external-file-manager/folder
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{ "bookingId": 1517, "phase": "post", "path": "Edits", "folderName": "Revisions" }
+
+
+
+###
+POST {{API2}}/revision-file/review
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{
+  "externalId": "1517",
+  "filepath": "wedding_anup_#1517/Post-Production/Edits/Edited Deliverables/edit1.png",
+  "action": "request_revision"
+}
+
+
+###
+GET {{API2}}/workflows/1517
+x-internal-key: {{INTERNAL_KEY}}
+
+
+###
+POST {{API2}}/files-uploaded/batch
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{
+  "externalId": "1517",
+  "items": [
+    { "filepath": "wedding_anup_#1517/Post-Production/Edits/Revisions/Version2/edit1.png", "fileSize": 70, "fileContentType": "image/png" }
+  ],
+  "userId": "1",
+  "authorName": "Test"
+}
+
+
+
+###
+GET {{API2}}/workflows/1517/progress
+
+
+
+###
+POST {{API2}}/workflows/1517/submit-revision
+Content-Type: application/json
+x-internal-key: {{INTERNAL_KEY}}
+
+{ "notes": "Revision delivered", "by": "281", "byName": "Editor" }
+
+
+###
+GET {{API2}}/workflows/1517/progress
+x-internal-key: beige-internal-dev-key
+
+
+
+###
+POST http://localhost:5002/v1/external-file-manager/workflows/1517/submit-revision
+Content-Type: application/json
+x-internal-key: beige-internal-dev-key
+
+{ "notes": "Revision delivered", "by": "281", "byName": "Editor" }
+
+###
+POST http://localhost:5002/v1/external-file-manager/revision-file/review
+Content-Type: application/json
+x-internal-key: beige-internal-dev-key
+
+{
+  "externalId": "1517",
+  "filepath": "wedding_anup_#1517/Post-Production/Edits/Revisions/Version2/edit1.png",
+  "action": "approve"
+}
+
+###
+POST http://localhost:5002/v1/external-file-manager/workflows/1517/complete
+Content-Type: application/json
+x-internal-key: beige-internal-dev-key
+
+{ "by": "1", "byName": "Producer" }
+
+###
+GET http://localhost:5002/v1/external-file-manager/workflows/1517/timeline
+x-internal-key: beige-internal-dev-key
+
+
+
+###
+POST http://localhost:5002/v1/external-file-manager/revision-file/review
+Content-Type: application/json
+x-internal-key: beige-internal-dev-key
+
+{
+  "externalId": "1517",
+  "filepath": "wedding_anup_#1517/Post-Production/Edits/Revisions/Version2/edit1.png",
+  "action": "approve"
+}
+
+###
+GET http://localhost:5002/v1/external-file-manager/workflows/1517
+x-internal-key: beige-internal-dev-key
+
+###
+POST http://localhost:5002/v1/external-file-manager/workflows/1517/complete
+Content-Type: application/json
+x-internal-key: beige-internal-dev-key
+
+{ "by": "1", "byName": "Producer" }
+
+
+
+###
+GET {{URL}}creators/search?content_types=editor&limit=12&page=1
+
+
+###
+POST {{URL}}admin/assign-crew-from-shoot
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{ "project_id": 1517, "crew_member_ids": [2106] }
+
+###
+GET {{URL}}admin/crew-member/2106
+Authorization: {{ADMIN_TOKEN}}
+
+###
+GET {{URL}}admin/crew-member/2103
+Authorization: {{ADMIN_TOKEN}}
+
+###
+POST {{URL}}admin/assign-crew-from-shoot
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{ "project_id": 1517, "crew_member_ids": [2103] }
+
+###
+POST {{URL}}auth/login
+Content-Type: application/json
+
+{ "email": "yp@gmail.com", "password": "yp@123" }
+
+###
+GET {{WF}}?page=1&limit=25
+Authorization: {{EDITOR_TOKEN}}
+
+###
+GET {{WF}}/1517
+Authorization: {{EDITOR_TOKEN}}
+
+
+###
+PUT {{WF}}/1517/requirements
+Content-Type: application/json
+Authorization: {{EDITOR_TOKEN}}
+
+{ "requirements": { "revisionRounds": 5 } }
+
+###
+GET {{WF}}?page=1&limit=25
+Authorization: {{EDITOR_TOKEN}}
+
+###
+GET {{WF}}?page=1&limit=25
+Authorization: {{EDITOR_TOKEN}}
+
+###
+PUT {{WF}}/1517/requirements
+Content-Type: application/json
+Authorization: {{EDITOR_TOKEN}}
+
+{ "requirements": { "revisionRounds": 5 } }
+
+
+###
+GET {{API2}}/workflows?tab=linked&orderIds=
+x-internal-key: beige-internal-dev-key
+
+
+###
+POST {{URL}}admin/remove-project-crew
+Content-Type: application/json
+Authorization: {{ADMIN_TOKEN}}
+
+{ "project_id": 1517, "crew_member_id": 2106 }
+
+
+###
+GET {{WF}}?page=1&limit=25
+Authorization: {{EDITOR_TOKEN}}
+
+###
+GET {{WF}}/1517
+Authorization: {{EDITOR_TOKEN}}
