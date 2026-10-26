@@ -103,6 +103,11 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.INTEGER,
       allowNull: true
     },
+    created_by_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null
+    },
     assign_lead: {
       type: DataTypes.TINYINT,
       allowNull: false,
@@ -176,6 +181,13 @@ module.exports = function(sequelize, DataTypes) {
         using: "BTREE",
         fields: [
           { name: "google_sub" },
+        ]
+      },
+      {
+        name: "idx_users_created_by_user_id",
+        using: "BTREE",
+        fields: [
+          { name: "created_by_user_id" },
         ]
       },
     ],
