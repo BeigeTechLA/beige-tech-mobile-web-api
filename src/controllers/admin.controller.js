@@ -2925,7 +2925,10 @@ exports.getProjectDetails = async (req, res) => {
                 roleNames = allRoles.filter(r => roleIds.map(String).includes(String(r.role_id))).map(r => r.role_name);
                 
                 if (ac.crew_accept === 1) {
-                    const cat = roleIds.map(id => ID_TO_ROLE_MAP[String(id)]).find(c => fulfillmentSummary[c]);
+                    const categories = roleIds.map(id => ID_TO_ROLE_MAP[String(id)]);
+                    const cat = categories.includes('videographer') && categories.includes('photographer') && fulfillmentSummary.hybrid?.accepted < fulfillmentSummary.hybrid?.required
+                        ? 'hybrid'
+                        : categories.find(c => fulfillmentSummary[c] && fulfillmentSummary[c].accepted < fulfillmentSummary[c].required);
                     if (cat) fulfillmentSummary[cat].accepted += 1;
                 }
             } catch(e){}
@@ -3189,6 +3192,31 @@ exports.getProjectDetails = async (req, res) => {
   } catch (error) {
     console.error('Error fetching project details:', error);
     return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
+  }
+};
+
+exports.updateProjectCrewRequirements = async (req, res) => {
+  try {
+    const projectId = Number(req.params.project_id);
+    const roles = req.body?.crew_roles;
+    const allowed = ['photographer', 'videographer', 'hybrid', 'cinematographer'];
+    if (!Number.isInteger(projectId) || projectId <= 0 || !roles || typeof roles !== 'object' || Array.isArray(roles) ||
+        Object.keys(roles).some(role => !allowed.includes(role)) ||
+        allowed.some(role => roles[role] != null && (!Number.isInteger(roles[role]) || roles[role] < 0 || roles[role] > 10))) {
+      return res.status(400).json({ success: false, message: 'Invalid crew requirements' });
+    }
+    const counts = Object.fromEntries(allowed.map(role => [role, roles[role] || 0]));
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    if (total < 1 || total > 30) {
+      return res.status(400).json({ success: false, message: 'Select between 1 and 30 CPs' });
+    }
+    const booking = await stream_project_booking.findByPk(projectId);
+    if (!booking) return res.status(404).json({ success: false, message: 'Shoot not found' });
+    await booking.update({ crew_roles: JSON.stringify(counts), crew_size_needed: total });
+    return res.json({ success: true, data: { crew_roles: counts, crew_size_needed: total } });
+  } catch (error) {
+    console.error('Update project crew requirements error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to update crew requirements' });
   }
 };
 
@@ -15365,7 +15393,12 @@ exports.searchCrewForLead = async (req, res) => {
             crewWhere.is_available = true;
         }
 
-        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
+        if (requestedRoles.includes('hybrid') && !hasGlobalCrewSearch) {
+            crewWhere[Op.and] = [
+                { [Op.or]: ROLE_GROUPS.videographer.map(id => ({ primary_role: { [Op.like]: `%${id}%` } })) },
+                { [Op.or]: ROLE_GROUPS.photographer.map(id => ({ primary_role: { [Op.like]: `%${id}%` } })) }
+            ];
+        } else if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
@@ -15452,11 +15485,14 @@ exports.searchCrewForLead = async (req, res) => {
             };
         });
 
+        const roleFilteredCrew = requestedRoles.includes('hybrid')
+            ? crewWithRoles.filter(crew => crew.role_names.includes('videographer') && crew.role_names.includes('photographer'))
+            : crewWithRoles;
         const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
-            ? crewWithRoles
+            ? roleFilteredCrew
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles.sort((a, b) => {
+            : roleFilteredCrew.sort((a, b) => {
                 if (a.distance === null && b.distance === null) return 0;
                 if (a.distance === null) return 1;
                 if (b.distance === null) return -1;
@@ -16634,7 +16670,9 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
 
           const categories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
           
-          const targetCategory = categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
+          const targetCategory = categories.includes('videographer') && categories.includes('photographer') && fulfillment.hybrid?.accepted < fulfillment.hybrid?.required
+            ? 'hybrid'
+            : categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
           
           if (targetCategory) {
             fulfillment[targetCategory].accepted += 1;
@@ -16787,7 +16825,12 @@ exports.searchCrewForProject = async (req, res) => {
             crewWhere.is_available = true;
         }
 
-        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
+        if (requestedRoles.includes('hybrid') && !hasGlobalCrewSearch) {
+            crewWhere[Op.and] = [
+                { [Op.or]: ROLE_GROUPS.videographer.map(id => ({ primary_role: { [Op.like]: `%${id}%` } })) },
+                { [Op.or]: ROLE_GROUPS.photographer.map(id => ({ primary_role: { [Op.like]: `%${id}%` } })) }
+            ];
+        } else if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
@@ -16862,11 +16905,14 @@ exports.searchCrewForProject = async (req, res) => {
             };
         });
 
+        const roleFilteredCrew = requestedRoles.includes('hybrid')
+            ? crewWithRoles.filter(crew => crew.role_names.includes('videographer') && crew.role_names.includes('photographer'))
+            : crewWithRoles;
         const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
-            ? crewWithRoles
+            ? roleFilteredCrew
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles.sort((a, b) => {
+            : roleFilteredCrew.sort((a, b) => {
                 if (a.distance === null && b.distance === null) return 0;
                 if (a.distance === null) return 1;
                 if (b.distance === null) return -1;

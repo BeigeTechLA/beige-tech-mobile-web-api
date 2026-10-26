@@ -29,6 +29,31 @@ const parse = (value, fallback = null) => {
   if (typeof value === 'object') return value;
   try { return JSON.parse(value); } catch (_) { return fallback; }
 };
+const visibleText = (value) => String(value || '')
+  .replace(/<[^>]*>/g, ' ')
+  .replace(/&(?:nbsp|#160|#xA0);/gi, ' ')
+  .replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[\da-f]+);/gi, 'x')
+  .trim();
+function validateAgreementContent(contentHtml, contentJson) {
+  if (!visibleText(contentHtml)) throw error('Agreement content is required');
+  const htmlSections = String(contentHtml).match(/<section\b[^>]*>[\s\S]*?<\/section>/gi);
+  if (htmlSections) htmlSections.forEach((section, index) => {
+    const body = section.replace(/<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]>/gi, '');
+    if (!visibleText(body)) throw error(`Section ${index + 1} needs a title and content`);
+  });
+  const content = parse(contentJson);
+  if (contentJson != null) {
+    if (!content || typeof content !== 'object') throw error('Agreement sections are required');
+    if (!Array.isArray(content.sections) || !content.sections.length) {
+      throw error('Add at least one agreement section with a title and content');
+    }
+    content.sections.forEach((section, index) => {
+      if (!section || !String(section.title || '').trim() || !visibleText(section.content)) {
+        throw error(`Section ${index + 1} needs a title and content`);
+      }
+    });
+  }
+}
 const hashContent = (contentHtml, contentJson) => crypto.createHash('sha256')
   .update(`${contentHtml || ''}\n${stringify(contentJson) || ''}`)
   .digest('hex');
@@ -129,6 +154,7 @@ async function createGeneralTemplate(payload, actor) {
   if (!title || !contentHtml) throw error('title and content_html are required');
 
   const contentJson = payload.content_json || null;
+  validateAgreementContent(contentHtml, contentJson);
   return db.sequelize.transaction(async (transaction) => {
     const sourceTemplateId = Number(payload.source_template_id || 0);
     const activeTemplate = await db.agreement_templates.findOne({
@@ -184,6 +210,7 @@ async function updateGeneralTemplate(id, payload, actor) {
   const contentHtml = payload.content_html == null ? template.content_html : String(payload.content_html).trim();
   const contentJson = payload.content_json === undefined ? template.content_json : stringify(payload.content_json);
   if (!contentHtml) throw error('content_html cannot be empty');
+  validateAgreementContent(contentHtml, contentJson);
   await template.update({
     title: payload.title == null ? template.title : String(payload.title).trim(),
     description: payload.description === undefined ? template.description : payload.description,
@@ -200,6 +227,7 @@ async function publishGeneralTemplate(id, actor) {
     const template = await db.agreement_templates.findByPk(Number(id), { transaction, lock: transaction.LOCK.UPDATE });
     if (!template) throw error('Agreement template not found', 404);
     if (template.agreement_type !== GENERAL || template.status !== 'draft') throw error('Only a draft general template can be published', 409);
+    validateAgreementContent(template.content_html, template.content_json);
     const previous = await db.agreement_templates.findOne({ where: { agreement_type: GENERAL, status: 'published' }, transaction });
     const previousDocuments = previous ? await db.agreement_documents.findAll({
       where: { agreement_type: GENERAL, agreement_template_id: previous.agreement_template_id, is_current: 1 },
@@ -328,6 +356,7 @@ async function createShootAgreement(bookingId, assignmentId, payload, actor) {
     const contentHtml = String(payload.content_html || '').trim();
     if (!contentHtml) throw error('content_html is required');
     const contentJson = payload.content_json || null;
+    validateAgreementContent(contentHtml, contentJson);
     const document = await db.agreement_documents.create({
       agreement_type: SHOOT, creator_id: context.creator.crew_member_id, booking_id: Number(bookingId), assignment_id: context.assignment.id,
       creator_earning_id: context.earning.creator_earning_id, version_no: 1, display_version: 'v1', status: 'draft', is_current: 1,
@@ -352,7 +381,8 @@ async function assignCompensateAndSend(bookingId, payload = {}, actor = {}) {
   if (ids.some((id) => !Number.isInteger(id) || id <= 0) || new Set(ids).size !== ids.length) throw error('Creative partner IDs must be unique and valid');
   if (Number(compensation.booking_id) !== Number(bookingId)) throw error('Compensation booking does not match shoot');
   for (const id of ids) {
-    if (!String((payload.agreements?.[id] || agreement).content_html || '').trim()) throw error(`Agreement content is required for Creative Partner ${id}`);
+    const recipientAgreement = payload.agreements?.[id] || agreement;
+    validateAgreementContent(recipientAgreement.content_html, recipientAgreement.content_json);
   }
 
   const documents = await db.sequelize.transaction(async (transaction) => {
@@ -415,6 +445,7 @@ async function updateShootDraft(id, payload, actor) {
   const contentHtml = payload.content_html == null ? document.content_html : String(payload.content_html).trim();
   const contentJson = payload.content_json === undefined ? document.content_json : stringify(payload.content_json);
   if (!contentHtml) throw error('content_html cannot be empty');
+  validateAgreementContent(contentHtml, contentJson);
   await document.update({ title: payload.title == null ? document.title : String(payload.title).trim(), content_html: contentHtml,
     content_json: contentJson, content_hash: hashContent(contentHtml, contentJson), due_at: payload.due_at === undefined ? document.due_at : payload.due_at,
     updated_at: new Date() });
@@ -440,6 +471,7 @@ async function sendShootAgreement(id, actor) {
   const document = await db.sequelize.transaction(async (transaction) => {
     const row = await getDocument(id, { transaction, lock: transaction.LOCK.UPDATE });
     if (row.agreement_type !== SHOOT || !['draft', 'rejected'].includes(row.status)) throw error('Only a draft or rejected shoot agreement can be sent', 409);
+    validateAgreementContent(row.content_html, row.content_json);
     const assignment = await db.assigned_crew.findOne({ where: { id: row.assignment_id, crew_member_id: row.creator_id, is_active: 1 }, transaction, lock: transaction.LOCK.UPDATE });
     if (!assignment) throw error('The active crew assignment no longer exists', 409);
     await db.agreement_documents.update({ is_current: 0 }, { where: { assignment_id: row.assignment_id, agreement_document_id: { [Op.ne]: row.agreement_document_id }, is_current: 1 }, transaction });
@@ -470,6 +502,7 @@ async function reviseShootAgreement(id, payload, actor) {
     const nextVersion = Number(source.version_no) + 1;
     const contentHtml = payload.content_html == null ? source.content_html : String(payload.content_html).trim();
     const contentJson = payload.content_json === undefined ? source.content_json : stringify(payload.content_json);
+    validateAgreementContent(contentHtml, contentJson);
     const revision = await db.agreement_documents.create({
       agreement_type: SHOOT, agreement_template_id: source.agreement_template_id, creator_id: source.creator_id, booking_id: source.booking_id,
       assignment_id: source.assignment_id, creator_earning_id: source.creator_earning_id, parent_document_id: source.agreement_document_id,

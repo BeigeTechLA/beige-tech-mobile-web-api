@@ -208,6 +208,7 @@ router.post('/create-crew-member', admin.createCrewMember);
 router.post('/matchEquipments', admin.matchEquipment);
 router.post('/assignMatchEquipment', admin.saveMatchedEquipment);
 router.get('/get-project/:project_id', authMiddleware, projectDetailView, admin.getProjectDetails);
+router.put('/shoots/:project_id/crew-requirements', authMiddleware, shootsEdit, admin.updateProjectCrewRequirements);
 router.put('/shoots/update-date-location/:project_id', authMiddleware, shootsEdit, admin.updateProjectDateLocation);
 router.post('/shoots/update-onboarding-form', authMiddleware, admin.submitProjectFormByAdmin);
 router.get('/get-active-projects', admin.getActiveProjects);
