@@ -1,5 +1,6 @@
 const financeService = require('../services/finance.service');
 const financeAnalyticsService = require('../services/finance-analytics.service');
+const financeAnalyticsAuditService = require('../services/finance-analytics-audit.service');
 const accountCreditService = require('../services/account-credit.service');
 const financeDisputeService = require('../services/finance-dispute.service');
 
@@ -12,6 +13,23 @@ exports.getAdminAnalytics = async (req, res) => {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to fetch finance analytics'
+    });
+  }
+};
+
+exports.exportAdminAnalyticsAudit = async (req, res) => {
+  try {
+    const { buffer, filters } = await financeAnalyticsAuditService.exportAnalyticsAudit(req.query);
+    const range = filters.start_date ? `${filters.start_date}-to-${filters.end_date}` : 'all-time';
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="finance-analytics-reconciliation-${range}.xlsx"`);
+    return res.status(200).send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('Export finance analytics reconciliation error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to export finance analytics reconciliation'
     });
   }
 };

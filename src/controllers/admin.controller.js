@@ -13350,6 +13350,9 @@ exports.exportClientsCsv = async (req, res) => {
           '';
 
         return {
+          'Client ID': escapeClientCsvValue(
+            client.client_id || ''
+          ),
           'User ID': escapeClientCsvValue(
             client.user_id ||
             client.user?.id ||
@@ -13410,6 +13413,7 @@ exports.exportClientsCsv = async (req, res) => {
     );
 
     const fields = [
+      'Client ID',
       'User ID',
       'Name',
       'Type',

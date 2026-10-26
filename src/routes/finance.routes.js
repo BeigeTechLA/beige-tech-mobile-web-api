@@ -58,6 +58,7 @@ const cpReceiptUpload = multer({
 
 router.get('/transactions/export', authenticate, adminFinancesView, financeController.exportTransactions);
 router.get('/admin/analytics', authenticate, adminFinanceAnalyticsView, financeController.getAdminAnalytics);
+router.get('/admin/analytics/reconciliation/export', authenticate, adminFinanceAnalyticsView, financeController.exportAdminAnalyticsAudit);
 router.get('/admin/analytics/cp-payout-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminCpPayoutHistory);
 router.get('/admin/analytics/cp-overdue-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminCpOverdueHistory);
 router.get('/admin/analytics/payout-schedule-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminPayoutScheduleHistory);

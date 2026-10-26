@@ -17,6 +17,8 @@ It is a single dashboard endpoint so every card uses the same selected date rang
 GET /v1/finance/admin/analytics
 ```
 
+For the same selected range, admins can download a source-row reconciliation workbook from **Finance Analytics → Download QA reconciliation**. The authenticated download endpoint is `GET /v1/finance/admin/analytics/reconciliation/export` and accepts the same date and timezone parameters. It returns an `.xlsx` workbook with exact source rows and a Summary difference column. See [FINANCE_ANALYTICS_QA.md](FINANCE_ANALYTICS_QA.md) for the QA workflow.
+
 ### Authorization
 
 ```http
@@ -107,9 +109,9 @@ All monetary amounts are numbers, rounded to two decimal places. The current fin
 | Field | Dashboard usage | Definition |
 |---|---|---|
 | `gross_revenue.amount` | Gross Revenue card | Sum of `finance_project_breakdowns.total_amount` for `paid` and `partially_paid` shoots. |
-| `refund_amount` | Optional refund display | Paid/refunded `finance_transactions` where `transaction_type = refund`. |
-| `net_revenue.amount` | Gross Revenue card value | `gross_revenue - refund_amount`. |
-| `pending_revenue.amount` | Pending Revenue card | Sum of `outstanding_amount` from `unpaid`, `pending`, and `partially_paid` finance records. |
+| `refund_amount` | Gross Revenue card note | Successful/refunded `finance_transactions` where `transaction_type = refund` and transaction date is in range. |
+| `net_revenue.amount` | API reconciliation field | `gross_revenue - refund_amount`. |
+| `pending_revenue.amount` | Pending Revenue card | Sum of `max(total_amount - collected_amount, 0)` from non-refunded finance records. |
 | `cp_payout` | CP Payout card | CP earnings split into completed payments (`paid_amount`) and unpaid/payable earnings (`payable_amount`). |
 | `series` | Revenue Overview chart | Calendar-day values in the requested timezone. |
 
@@ -150,13 +152,13 @@ All monetary amounts are numbers, rounded to two decimal places. The current fin
 
 | Field | Dashboard usage | Definition |
 |---|---|---|
-| `top_by_payout` | Top CPs by Payout | Five CPs with highest total CP earning. `margin = CP payout / revenue of that CP's assigned shoots × 100`. |
-| `top_by_shoots` | Top CPs by Shoots | Ten CPs with the most distinct eligible bookings. |
-| `averages.payout_per_assignment` | Average CP Payout | Total CP payout ÷ CP earning/assignment count. |
-| `averages.cp_payout_percent_of_revenue` | Average CP Margin | Total CP payout ÷ total eligible shoot revenue × 100. |
-| `averages.cps_per_shoot` | Average CPs per Shoot | CP earning/assignment count ÷ distinct CP-assigned bookings. |
+| `top_by_payout` | Top CPs by Payout | Five CPs with highest **paid** CP amount. `margin = paid CP payout / revenue of that CP's distinct paid-assignment shoots × 100`. |
+| `top_by_shoots` | Top CPs by Shoots | Ten CPs with the most distinct bookings among paid CP assignments. |
+| `averages.payout_per_assignment` | Average CP Payout | Paid CP payout ÷ paid CP earning/assignment count. |
+| `averages.cp_payout_percent_of_revenue` | Average CP Margin | Paid CP payout ÷ total eligible shoot revenue × 100; this is a payout ratio, not profit margin. |
+| `averages.cps_per_shoot` | Average CPs per Shoot | Paid CP earning/assignment count ÷ distinct paid CP-assigned bookings. |
 | `payout_timeline` | CP Payout Timeline | Outstanding CP amount bucketed by due date. `this_week` = 0–6 days; `next_week` = 7–13 days; `2_4_weeks` = 14–27 days; `overdue` = before today. |
-| `top_overdue` | Top Overdue CPs | Five CPs with the largest unpaid amount past their due date. |
+| `top_overdue` | Top Overdue CPs | Up to 100 CPs with the largest remaining payable amount past their due date. |
 
 For paid CP earnings, the date filter uses the payout finance transaction date. For payable earnings, it uses the CP due date. The due date comes from `creator_earnings.metadata_json.due_date` / `payout_due_date`; if absent, it defaults to 15 days after the booking event date.
 
@@ -292,6 +294,8 @@ Manual checks:
 5. Confirm each client appears in only one payment overview bucket.
 6. Confirm a refund decreases `net_revenue` but does not change `gross_revenue`.
 7. Confirm CP overdue rows use the due date configured in CP Compensation.
+
+For the full record-level verification checklist, see [FINANCE_ANALYTICS_QA.md](FINANCE_ANALYTICS_QA.md).
 
 ## Known scope
 

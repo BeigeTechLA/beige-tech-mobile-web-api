@@ -146,7 +146,7 @@ function isOutstandingReceivable(row) {
   return String(row.payment_status || '').toLowerCase() !== 'refunded' && outstandingBalance(row) > 0;
 }
 
-function buildAnalyticsData(input, filters = resolveFilters(), now = new Date()) {
+function buildAnalyticsData(input, filters = resolveFilters(), now = new Date(), includeAudit = false) {
   const bookings = new Map((input.bookings || []).map((item) => [Number(item.stream_project_booking_id), item]));
   const users = new Map((input.users || []).map((item) => [Number(item.id), item]));
   const creators = new Map((input.creators || []).map((item) => [Number(item.crew_member_id), item]));
@@ -160,7 +160,7 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
     transactionsByBooking.set(bookingId, [...(transactionsByBooking.get(bookingId) || []), transaction]);
   });
 
-  const breakdownRows = (input.breakdowns || [])
+  const allBreakdownRows = (input.breakdowns || [])
     .map((breakdown) => {
       const bookingId = Number(breakdown.booking_id);
       const booking = bookings.get(bookingId) || {};
@@ -169,8 +169,8 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
         .sort((a, b) => new Date(a.transaction_date) - new Date(b.transaction_date));
       const activityDate = successfulPayments[0]?.transaction_date || booking.payment_completed_at || breakdown.calculated_at;
       return { ...breakdown, booking, booking_id: bookingId, activity_date: activityDate };
-    })
-    .filter((row) => isInRange(row.activity_date, filters));
+    });
+  const breakdownRows = allBreakdownRows.filter((row) => isInRange(row.activity_date, filters));
   const eligibleRevenue = breakdownRows
     .filter((breakdown) => ELIGIBLE_PAYMENT_STATUSES.has(String(breakdown.payment_status || '').toLowerCase()));
   const outstandingRows = breakdownRows.filter(isOutstandingReceivable);
@@ -179,9 +179,14 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
   const refunds = (input.transactions || [])
     .filter((transaction) => transaction.transaction_type === 'refund'
       && REFUND_TRANSACTION_STATUSES.has(String(transaction.status || '').toLowerCase())
-      && (!transaction.booking_id || eligibleBookingIds.has(Number(transaction.booking_id)))
       && isInRange(transaction.transaction_date, filters))
-    .map((transaction) => ({ date: dateKey(transaction.transaction_date, filters.timezone), amount: Math.abs(Number(transaction.gross_amount || transaction.net_amount || 0)) }));
+    .map((transaction) => ({
+      id: transaction.finance_transaction_id,
+      booking_id: transaction.booking_id,
+      status: transaction.status,
+      date: dateKey(transaction.transaction_date, filters.timezone),
+      amount: Math.abs(Number(transaction.gross_amount || transaction.net_amount || 0))
+    }));
 
   const grossRevenue = money(eligibleRevenue.reduce((sum, row) => sum + Number(row.total_amount || 0), 0));
   const pendingRevenue = money(outstandingRows.reduce((sum, row) => sum + outstandingBalance(row), 0));
@@ -203,7 +208,7 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
     }));
   refunds.forEach((refund) => revenueSeriesRows.push({ date: refund.date, gross: 0, pending: 0, cp_payout: 0, refunds: refund.amount }));
 
-  const cpRows = getCanonicalCpEarningRows(input.earnings || [])
+  const allCpRows = getCanonicalCpEarningRows(input.earnings || [])
     // CP Compensation is its own financial source of truth. A creator payout
     // can be completed before a finance_project_breakdowns row exists, so do
     // not drop valid CP records based on the client's payment data.
@@ -236,8 +241,8 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
         paid_amount: paidAmount,
         payable_amount: payableAmount
       };
-    })
-    .filter((earning) => isInRange(earning.activity_date, filters));
+    });
+  const cpRows = allCpRows.filter((earning) => isInRange(earning.activity_date, filters));
 
   cpRows.forEach((row) => revenueSeriesRows.push({
     date: dateKey(row.activity_date, filters.timezone), gross: 0, pending: 0, cp_payout: row.amount, refunds: 0
@@ -295,10 +300,10 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
   ];
   cpRows.filter((row) => !row.is_paid && row.due_date).forEach((row) => {
     const days = Math.floor((Date.parse(`${row.due_date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
-    if (days < 0) timeline[3].segments.overdue += row.amount;
-    else if (days <= 6) timeline[0].segments.upcoming += row.amount;
-    else if (days <= 13) timeline[1].segments.dueSoon += row.amount;
-    else if (days <= 27) timeline[2].segments.later += row.amount;
+    if (days < 0) timeline[3].segments.overdue += row.payable_amount;
+    else if (days <= 6) timeline[0].segments.upcoming += row.payable_amount;
+    else if (days <= 13) timeline[1].segments.dueSoon += row.payable_amount;
+    else if (days <= 27) timeline[2].segments.later += row.payable_amount;
   });
   timeline.forEach((bucket) => Object.keys(bucket.segments).forEach((key) => { bucket.segments[key] = money(bucket.segments[key]); }));
 
@@ -332,13 +337,19 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
     ...row,
     booking: bookings.get(Number(row.booking_id)) || row.booking || {},
     activity_date: row.activity_date || row.payment_completed_at || row.updated_at
-  })).filter((row) => isInRange(row.activity_date, filters));
+  })).filter((row) => ELIGIBLE_PAYMENT_STATUSES.has(String(row.payment_status || '').toLowerCase()) && isInRange(row.activity_date, filters));
   const topClientRows = makeClientRows(paidClientRows);
   const topClientsByShoots = [...topClientRows].sort((a, b) => b.shoots - a.shoots || b.spend - a.spend).slice(0, 100);
   const topClientsBySpend = [...topClientRows].sort((a, b) => b.spend - a.spend).slice(0, 100);
   const paymentOverview = ['fully_paid', 'partially_paid', 'pending'].map((id) => ({ id, label: id === 'fully_paid' ? 'Fully Paid' : id === 'partially_paid' ? 'Partially Paid' : 'Pending', clients: clientRows.filter((row) => row.status === id).length }));
   const collectedAmount = money(breakdownRows.reduce((sum, row) => sum + Number(row.collected_amount || 0), 0));
-  const recoveredRows = (input.transactions || []).filter((transaction) => transaction.transaction_type === 'client_payment' && PAID_TRANSACTION_STATUSES.has(String(transaction.status || '').toLowerCase()) && eligibleBookingIds.has(Number(transaction.booking_id)) && isInRange(transaction.transaction_date, filters)).map((transaction) => ({ date: dateKey(transaction.transaction_date, filters.timezone), value: Number(transaction.gross_amount || 0) }));
+  const recoveredRows = (input.transactions || []).filter((transaction) => transaction.transaction_type === 'client_payment' && PAID_TRANSACTION_STATUSES.has(String(transaction.status || '').toLowerCase()) && isInRange(transaction.transaction_date, filters)).map((transaction) => ({
+    id: transaction.finance_transaction_id,
+    booking_id: transaction.booking_id,
+    status: transaction.status,
+    date: dateKey(transaction.transaction_date, filters.timezone),
+    value: Number(transaction.gross_amount || 0)
+  }));
   const recoveredSeries = groupSeries(recoveredRows, 'date', ['value']).map((row) => ({ name: row.date, value: row.value }));
 
   const disputes = input.disputes || [];
@@ -371,7 +382,84 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date())
       pending: raised.filter((row) => String(row.status).toLowerCase() === 'open').length,
       active: raised.filter((row) => ['in_review', 'escalated'].includes(String(row.status).toLowerCase())).length,
       top_reasons: topReasons
-    }
+    },
+    ...(includeAudit ? { audit: {
+      as_of_date: today,
+      revenue: allBreakdownRows.map((row) => ({
+        booking_id: row.booking_id,
+        project_name: row.booking.project_name || '',
+        client_id: Number(row.client_user_id || row.booking.user_id || 0) || '',
+        guest_email: row.guest_email || row.booking.guest_email || '',
+        activity_date: dateKey(row.activity_date, filters.timezone),
+        payment_status: row.payment_status || '',
+        total_amount: Number(row.total_amount || 0),
+        collected_amount: Number(row.collected_amount || 0),
+        in_range: isInRange(row.activity_date, filters),
+        gross_contribution: isInRange(row.activity_date, filters) && ELIGIBLE_PAYMENT_STATUSES.has(String(row.payment_status || '').toLowerCase()) ? Number(row.total_amount || 0) : 0,
+        pending_contribution: isInRange(row.activity_date, filters) && isOutstandingReceivable(row) ? outstandingBalance(row) : 0
+      })),
+      refunds,
+      recovered: recoveredRows,
+      transactions: (input.transactions || []).map((row) => ({
+        id: row.finance_transaction_id,
+        booking_id: row.booking_id,
+        transaction_type: row.transaction_type || '',
+        status: row.status || '',
+        transaction_date: dateKey(row.transaction_date, filters.timezone),
+        gross_amount: Number(row.gross_amount || 0),
+        net_amount: Number(row.net_amount || 0),
+        in_range: isInRange(row.transaction_date, filters)
+      })),
+      cp: allCpRows.map((row) => ({
+        earning_id: row.creator_earning_id,
+        booking_id: row.booking_id,
+        creator_id: row.creator_id,
+        creator_name: creatorName(row.creator),
+        status: row.status,
+        approval_status: row.approval_status,
+        activity_date: dateKey(row.activity_date, filters.timezone),
+        due_date: row.due_date,
+        amount: row.amount,
+        paid_amount: row.paid_amount,
+        payable_amount: row.payable_amount,
+        in_range: isInRange(row.activity_date, filters),
+        days_until_due: row.due_date ? Math.floor((Date.parse(`${row.due_date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000) : null
+      })),
+      clients: clientRows.map((row) => ({
+        id: row.id, name: row.name, shoots: row.shoots,
+        spend: row.spend, collected: row.collected,
+        outstanding: row.outstanding, status: row.status
+      })),
+      client_rankings: topClientRows.map((row) => ({
+        id: row.id, name: row.name, shoots: row.shoots,
+        spend: row.spend, collected: row.collected,
+        outstanding: row.outstanding, status: row.status
+      })),
+      client_bookings: paidClientSourceRows.map((row) => {
+        const booking = bookings.get(Number(row.booking_id)) || row.booking || {};
+        const activityDate = row.activity_date || row.payment_completed_at || row.updated_at;
+        return {
+          booking_id: row.booking_id,
+          client_id: Number(row.client_user_id || booking.user_id || 0) || '',
+          guest_email: row.guest_email || booking.guest_email || '',
+          activity_date: dateKey(activityDate, filters.timezone),
+          payment_status: row.payment_status || '',
+          total_amount: Number(row.total_amount || 0),
+          collected_amount: Number(row.collected_amount || 0),
+          included: ELIGIBLE_PAYMENT_STATUSES.has(String(row.payment_status || '').toLowerCase()) && isInRange(activityDate, filters)
+        };
+      }),
+      disputes: disputes.map((row) => ({
+        id: row.finance_dispute_id,
+        booking_id: row.booking_id,
+        created_date: dateKey(row.created_at, filters.timezone),
+        resolved_date: dateKey(row.resolved_at, filters.timezone),
+        status: row.status || '',
+        category: row.category || 'other',
+        raised_in_range: isInRange(row.created_at, filters),
+        resolved_in_range: String(row.status || '').toLowerCase() === 'resolved' && isInRange(row.resolved_at, filters)
+      }))
+    } } : {})
   };
 }
 
@@ -883,7 +971,7 @@ async function getShootHistory(query = {}, now = new Date()) {
   };
 }
 
-async function getAnalytics(query = {}) {
+async function getAnalyticsData(query = {}, includeAudit = false) {
   const filters = resolveFilters(query);
   const [breakdowns, transactions, earnings, disputes, payoutRequests, clientPaymentBookings] = await Promise.all([
     db.finance_project_breakdowns.findAll({ raw: true }),
@@ -952,7 +1040,10 @@ async function getAnalytics(query = {}) {
   return buildAnalyticsData({
     breakdowns, transactions, earnings, disputes, bookings, creators, users, clientPaymentBookings,
     paidAmountsByEarningId: payoutAmountsByEarningId(payoutRequests)
-  }, filters);
+  }, filters, new Date(), includeAudit);
 }
 
-module.exports = { getAnalytics, getCpPayoutHistory, getCpOverdueHistory, getPayoutScheduleHistory, getShootHistory, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate, outstandingBalance, isOutstandingReceivable, creatorRoleNames } };
+const getAnalytics = (query = {}) => getAnalyticsData(query);
+const getAnalyticsAudit = (query = {}) => getAnalyticsData(query, true);
+
+module.exports = { getAnalytics, getAnalyticsAudit, getCpPayoutHistory, getCpOverdueHistory, getPayoutScheduleHistory, getShootHistory, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate, outstandingBalance, isOutstandingReceivable, creatorRoleNames } };

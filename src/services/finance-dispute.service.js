@@ -390,6 +390,7 @@ function formatDisputeRow(dispute) {
     metadata,
     cp_compensation: metadata?.cp_compensation || null,
     created_at: plain.created_at,
+    resolved_at: plain.resolved_at,
     updated_at: plain.updated_at,
     actions: buildAdminActions(plain.status)
   };
@@ -569,6 +570,34 @@ async function hydrateBookingContext(payload, transaction = null) {
   };
 }
 
+// Convert a calendar day in the analytics timezone to the UTC boundary used by SQL.
+function startOfDayInTimeZone(dateOnly, timeZone) {
+  const date = new Date(`${dateOnly}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== dateOnly) {
+    throw new Error('Invalid dispute date filter');
+  }
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  });
+  let boundary = date.getTime();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = Object.fromEntries(formatter.formatToParts(new Date(boundary)).map((part) => [part.type, part.value]));
+    const wallClock = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+    const offset = wallClock - boundary;
+    const next = date.getTime() - offset;
+    if (next === boundary) break;
+    boundary = next;
+  }
+  return new Date(boundary);
+}
+
+function nextDateOnly(dateOnly) {
+  const next = new Date(`${dateOnly}T00:00:00.000Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+}
+
 function buildWhere(filters = {}) {
   const Op = db.Sequelize.Op;
   const where = {};
@@ -582,9 +611,15 @@ function buildWhere(filters = {}) {
   if (filters.booking_id || filters.shoot_id) where.booking_id = filters.booking_id || filters.shoot_id;
   if (filters.invoice_send_history_id) where.invoice_send_history_id = filters.invoice_send_history_id;
   if (filters.date_from || filters.date_to) {
-    where.created_at = {};
-    if (filters.date_from) where.created_at[Op.gte] = new Date(filters.date_from);
-    if (filters.date_to) where.created_at[Op.lte] = new Date(filters.date_to);
+    const dateField = filters.date_field === 'resolved_at' ? 'resolved_at' : 'created_at';
+    where[dateField] = {};
+    if (filters.timezone) {
+      if (filters.date_from) where[dateField][Op.gte] = startOfDayInTimeZone(filters.date_from, filters.timezone);
+      if (filters.date_to) where[dateField][Op.lt] = startOfDayInTimeZone(nextDateOnly(filters.date_to), filters.timezone);
+    } else {
+      if (filters.date_from) where[dateField][Op.gte] = new Date(filters.date_from);
+      if (filters.date_to) where[dateField][Op.lte] = new Date(filters.date_to);
+    }
   }
 
   if (search) {
@@ -617,7 +652,7 @@ function buildWhere(filters = {}) {
 function getSort(filters = {}) {
   const sortBy = String(filters.sort_by || 'created_at');
   const sortDir = String(filters.sort_dir || filters.order || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-  const allowed = new Set(['created_at', 'updated_at', 'disputed_amount', 'payout_hold_amount', 'impacted_payout_amount', 'status']);
+  const allowed = new Set(['created_at', 'resolved_at', 'updated_at', 'disputed_amount', 'payout_hold_amount', 'impacted_payout_amount', 'status']);
   return [[allowed.has(sortBy) ? sortBy : 'created_at', sortDir]];
 }
 
@@ -1814,5 +1849,6 @@ module.exports = {
     const isRefundResolution = ['refund', 'partial_refund', 'credit_compensation', 'payout_adjustment'].includes(resolutionType);
     return closeDispute(disputeId, payload, options, isRefundResolution ? 'resolved' : 'rejected');
   },
-  escalateDispute
+  escalateDispute,
+  _private: { buildWhere, startOfDayInTimeZone }
 };
