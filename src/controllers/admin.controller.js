@@ -19428,34 +19428,42 @@ exports.updateInternalUserProfile = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Only a super admin can edit a super admin profile' });
     }
 
-    const matchingUsers = await users.scope('all').findAll({
-      where: {
-        id: { [Op.ne]: targetUserId },
-        [Op.or]: [{ email }, ...(phone_number ? [{ phone_number }] : [])]
-      },
-      attributes: ['email', 'phone_number']
-    });
-    const matchingClients = await clients.findAll({
-      where: {
-        [Op.and]: [
-          { [Op.or]: [{ email }, ...(phone_number ? [{ phone_number }] : [])] },
-          { [Op.or]: [{ user_id: null }, { user_id: { [Op.ne]: targetUserId } }] }
-        ]
-      },
-      attributes: ['email', 'phone_number']
-    });
-    const conflict = describeSignupConflicts(
-      [...matchingUsers, ...matchingClients],
-      { email, phone_number }
-    );
-    if (conflict) {
-      return res.status(409).json(conflict);
+    const emailChanged = email !== String(targetUser.email || '').trim().toLowerCase();
+    const phoneChanged = phone_number !== (normalizePhoneNumber(targetUser.phone_number) || null);
+    const conflictFields = [
+      ...(emailChanged ? [{ email }] : []),
+      ...(phoneChanged && phone_number ? [{ phone_number }] : [])
+    ];
+
+    if (conflictFields.length) {
+      const [matchingUsers, matchingClients] = await Promise.all([
+        users.scope('all').findAll({
+          where: { id: { [Op.ne]: targetUserId }, [Op.or]: conflictFields },
+          attributes: ['email', 'phone_number']
+        }),
+        clients.findAll({
+          where: {
+            [Op.and]: [
+              { [Op.or]: conflictFields },
+              { [Op.or]: [{ user_id: null }, { user_id: { [Op.ne]: targetUserId } }] }
+            ]
+          },
+          attributes: ['email', 'phone_number']
+        })
+      ]);
+      const conflict = describeSignupConflicts(
+        [...matchingUsers, ...matchingClients],
+        { email: emailChanged ? email : null, phone_number: phoneChanged ? phone_number : null }
+      );
+      if (conflict) {
+        return res.status(409).json(conflict);
+      }
     }
 
     await targetUser.update({
       name,
-      email,
-      phone_number,
+      ...(emailChanged ? { email } : {}),
+      ...(phoneChanged ? { phone_number } : {}),
       updated_at: new Date()
     });
 
@@ -19465,8 +19473,8 @@ exports.updateInternalUserProfile = async (req, res) => {
       data: {
         user_id: targetUser.id,
         name,
-        email,
-        phone_number,
+        email: targetUser.email,
+        phone_number: targetUser.phone_number,
         updated_at: targetUser.updated_at
       }
     });
