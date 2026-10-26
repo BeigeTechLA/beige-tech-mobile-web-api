@@ -17,6 +17,11 @@ const messagesCreate = requireAnyPermission([
 const messagesEdit = requireAnyPermission([
   'admin_messages.edit'
 ]);
+const superAdminOnly = (req, res, next) => {
+  const role = String(req.user?.userRole || req.userRole || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (role === 'super_admin' || role === 'superadmin') return next();
+  return res.status(403).json({ success: false, message: 'Only super admins can rename chat rooms.' });
+};
 const shootMessagesView = requireAnyPermission([
   'admin_shoots.view',
   'admin_messages.view',
@@ -65,6 +70,7 @@ router.get('/room/:bookingId', authenticate, shootMessagesView, externalChatCont
 router.post('/room/:roomId/participants', authenticate, shootMessagesEdit, externalChatController.addChatParticipants);
 router.delete('/room/:roomId/participants/:userId', authenticate, shootMessagesEdit, externalChatController.removeChatParticipant);
 router.patch('/room/:roomId/mark-read', authenticate, shootMessagesView, externalChatController.markChatRoomRead);
+router.patch('/room/:roomId/name', authenticate, superAdminOnly, messagesEdit, externalChatController.renameChatRoom);
 router.patch('/room/:roomId/status', authenticate, messageDeletePermission, externalChatController.updateChatRoomStatus);
 router.post('/messages/:roomId', authenticate, shootMessagesCreate, externalChatController.sendChatMessage);
 router.post('/digest/run', authenticate, messagesCreate, externalChatController.runChatMessageEmailDigest);

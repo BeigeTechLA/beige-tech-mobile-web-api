@@ -4,6 +4,8 @@ const appNotificationService = require('../services/app-notification.service');
 const { runChatMessageEmailDigestJob } = require('../services/chat-message-email-digest.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
+const CHAT_ROOMS_BASE_URL = process.env.EXTERNAL_CHAT_ROOMS_API_BASE_URL ||
+  DEFAULT_BASE_URL.replace(/\/external-chat\/?$/i, '/chats');
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
 const buildHeaders = () => ({
@@ -45,8 +47,8 @@ const shouldReplaceRoomName = (roomName, bookingId) => {
   return normalizedName === normalizedBookingId || normalizedName.startsWith(`${normalizedBookingId}_`);
 };
 
-const proxyRequest = async (path, options = {}) => {
-  const response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
+const proxyRequest = async (path, options = {}, baseUrl = DEFAULT_BASE_URL) => {
+  const response = await fetch(`${baseUrl}${path}`, {
     ...options,
     headers: {
       ...buildHeaders(),
@@ -2597,6 +2599,31 @@ exports.updateChatRoomStatus = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message,
+    });
+  }
+};
+
+exports.renameChatRoom = async (req, res) => {
+  try {
+    const roomId = String(req.params.roomId || '').trim();
+    const name = typeof req.body?.name === 'string' ? req.body.name : '';
+    if (!roomId) {
+      return res.status(400).json({ success: false, message: 'roomId is required' });
+    }
+    if (!name.trim()) {
+      return res.status(400).json({ success: false, message: 'Chat name is required' });
+    }
+
+    const result = await proxyRequest(`/${encodeURIComponent(roomId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }, CHAT_ROOMS_BASE_URL);
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to rename chat',
     });
   }
 };
