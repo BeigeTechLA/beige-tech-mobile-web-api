@@ -45,6 +45,8 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 const leadAssignmentService = require('../services/lead-assignment.service');
 const { extractCoordinatesFromPayload, calculateDistance, parseLocation } = require('../utils/locationHelpers');
 const db = require('../models');
+const { matchCrewToRequirements } = require('../utils/crew-requirements');
+const { closeUnavailableCrewRequests } = require('../services/crew-acceptance.service');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
@@ -2947,7 +2949,12 @@ exports.getProjectDetails = async (req, res) => {
         };
     });
 
-    Object.keys(fulfillmentSummary).forEach(k => { fulfillmentSummary[k].display = `${fulfillmentSummary[k].accepted}/${fulfillmentSummary[k].required}`; });
+    const acceptedCreators = processedCrew.filter(ac => Number(ac.crew_accept) === 1).map(ac => ac.crew_member || {});
+    const acceptedMatch = matchCrewToRequirements(projectJson, acceptedCreators);
+    Object.keys(fulfillmentSummary).forEach(k => {
+        if (acceptedMatch.fits) fulfillmentSummary[k].accepted = acceptedMatch.roles.filter(role => role === k).length;
+        fulfillmentSummary[k].display = `${fulfillmentSummary[k].accepted}/${fulfillmentSummary[k].required}`;
+    });
     projectJson.assigned_crews = processedCrew;
 
     // 7. Payment Link Logic
@@ -3210,13 +3217,24 @@ exports.updateProjectCrewRequirements = async (req, res) => {
     if (total < 1 || total > 30) {
       return res.status(400).json({ success: false, message: 'Select between 1 and 30 CPs' });
     }
-    const booking = await stream_project_booking.findByPk(projectId);
-    if (!booking) return res.status(404).json({ success: false, message: 'Shoot not found' });
-    await booking.update({ crew_roles: JSON.stringify(counts), crew_size_needed: total });
+    await db.sequelize.transaction(async transaction => {
+      const booking = await stream_project_booking.findByPk(projectId, { transaction, lock: transaction.LOCK.UPDATE });
+      if (!booking) throw Object.assign(new Error('Shoot not found'), { statusCode: 404 });
+      const accepted = await assigned_crew.findAll({
+        where: { project_id: projectId, crew_accept: 1, is_active: 1 },
+        include: [{ model: crew_members, as: 'crew_member', attributes: ['primary_role'] }],
+        transaction, lock: transaction.LOCK.UPDATE
+      });
+      if (!matchCrewToRequirements({ crew_roles: counts }, accepted.map(row => row.crew_member || {})).fits) {
+        throw Object.assign(new Error('CP requirements must include the positions already accepted'), { statusCode: 409 });
+      }
+      await booking.update({ crew_roles: JSON.stringify(counts), crew_size_needed: total }, { transaction });
+      await closeUnavailableCrewRequests(booking, transaction);
+    });
     return res.json({ success: true, data: { crew_roles: counts, crew_size_needed: total } });
   } catch (error) {
     console.error('Update project crew requirements error:', error);
-    return res.status(500).json({ success: false, message: 'Failed to update crew requirements' });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Failed to update crew requirements' });
   }
 };
 
@@ -16681,6 +16699,13 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
       });
     }
 
+    const acceptedMatch = matchCrewToRequirements(booking, (booking.assigned_crews || [])
+      .filter(ac => Number(ac.crew_accept) === 1).map(ac => ac.crew_member || {}));
+    if (acceptedMatch.fits) {
+      Object.keys(fulfillment).forEach(role => {
+        fulfillment[role].accepted = acceptedMatch.roles.filter(matched => matched === role).length;
+      });
+    }
     const result = {};
     Object.keys(fulfillment).forEach(key => {
       result[key] = `${fulfillment[key].accepted}/${fulfillment[key].required}`;

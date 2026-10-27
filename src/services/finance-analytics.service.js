@@ -1,6 +1,7 @@
 const db = require('../models');
 const financeService = require('./finance.service');
 const { getCanonicalCpEarningRows, payoutAmountsByEarningId } = require('../utils/cp-compensation-summary');
+const { acceptedCompensationWhere } = require('../utils/cp-compensation-eligibility');
 
 const ELIGIBLE_PAYMENT_STATUSES = new Set(['paid', 'partially_paid']);
 const PAID_TRANSACTION_STATUSES = new Set(['paid', 'completed', 'success', 'succeeded']);
@@ -516,7 +517,7 @@ async function getCpPayoutHistory(query = {}, now = new Date()) {
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
 
   const [earnings, payoutRequests] = await Promise.all([
-    db.creator_earnings.findAll({ where: { creator_id: creatorId }, raw: true }),
+    db.creator_earnings.findAll({ where: { ...acceptedCompensationWhere(), creator_id: creatorId }, raw: true }),
     db.creator_payout_requests.findAll({ where: { creator_id: creatorId }, raw: true })
   ]);
 
@@ -612,7 +613,7 @@ async function getCpOverdueHistory(query = {}, now = new Date()) {
   const timezone = filters.timezone;
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
   const [earnings, payoutRequests] = await Promise.all([
-    db.creator_earnings.findAll({ where: { creator_id: creatorId }, raw: true }),
+    db.creator_earnings.findAll({ where: { ...acceptedCompensationWhere(), creator_id: creatorId }, raw: true }),
     db.creator_payout_requests.findAll({ where: { creator_id: creatorId }, raw: true })
   ]);
   const paidByEarning = payoutAmountsByEarningId(payoutRequests);
@@ -684,7 +685,7 @@ async function getPayoutScheduleHistory(query = {}, now = new Date()) {
   const search = String(query.search || '').trim().toLowerCase().replace(/^#/, '');
   const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
   const [earnings, payoutRequests] = await Promise.all([
-    db.creator_earnings.findAll({ raw: true }),
+    db.creator_earnings.findAll({ where: acceptedCompensationWhere(), raw: true }),
     db.creator_payout_requests.findAll({ raw: true })
   ]);
   const paidByEarning = payoutAmountsByEarningId(payoutRequests);
@@ -804,7 +805,7 @@ async function getShootHistory(query = {}, now = new Date()) {
     const creatorId = Number(entityId);
     if (!Number.isInteger(creatorId) || creatorId <= 0) throw badRequest('entity_id must be a creator id when entity_type is cp');
     const [earnings, payoutRequests] = await Promise.all([
-      db.creator_earnings.findAll({ where: { creator_id: creatorId }, raw: true }),
+      db.creator_earnings.findAll({ where: { ...acceptedCompensationWhere(), creator_id: creatorId }, raw: true }),
       db.creator_payout_requests.findAll({ where: { creator_id: creatorId }, raw: true })
     ]);
     const paidByEarning = payoutAmountsByEarningId(payoutRequests);
@@ -976,7 +977,7 @@ async function getAnalyticsData(query = {}, includeAudit = false) {
   const [breakdowns, transactions, earnings, disputes, payoutRequests, clientPaymentBookings] = await Promise.all([
     db.finance_project_breakdowns.findAll({ raw: true }),
     db.finance_transactions.findAll({ raw: true }),
-    db.creator_earnings.findAll({ raw: true }),
+    db.creator_earnings.findAll({ where: acceptedCompensationWhere(), raw: true }),
     db.finance_disputes.findAll({ raw: true }),
     db.creator_payout_requests.findAll({ raw: true }),
     db.sequelize.query(

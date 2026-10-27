@@ -68,6 +68,7 @@ test('publishing a new general version gives prior CPs a pending document and no
 test('cancelling a pending shoot revision restores the last accepted version', async () => {
   const originals = {
     transaction: db.sequelize.transaction,
+    bookingFindByPk: db.stream_project_booking.findByPk,
     documentFindByPk: db.agreement_documents.findByPk,
     assignmentUpdate: db.assigned_crew.update,
     eventCreate: db.agreement_events.create
@@ -75,11 +76,12 @@ test('cancelling a pending shoot revision restores the last accepted version', a
   const previous = { agreement_document_id: 4, status: 'accepted', is_current: false,
     async update(values) { Object.assign(this, values); } };
   const revision = { agreement_document_id: 5, agreement_type: 'shoot', status: 'pending_acceptance',
-    parent_document_id: 4, assignment_id: 10, is_current: true,
+    parent_document_id: 4, assignment_id: 10, booking_id: 8, is_current: true,
     async update(values) { Object.assign(this, values); } };
   let assignmentChange;
   try {
     db.sequelize.transaction = async (callback) => callback({ LOCK: { UPDATE: 'UPDATE' } });
+    db.stream_project_booking.findByPk = async () => ({ stream_project_booking_id: 8 });
     db.agreement_documents.findByPk = async (id) => Number(id) === 5 ? revision : previous;
     db.assigned_crew.update = async (values) => { assignmentChange = values; return [1]; };
     db.agreement_events.create = async () => ({});
@@ -89,6 +91,7 @@ test('cancelling a pending shoot revision restores the last accepted version', a
     assert.equal(assignmentChange.crew_accept, 1);
   } finally {
     db.sequelize.transaction = originals.transaction;
+    db.stream_project_booking.findByPk = originals.bookingFindByPk;
     db.agreement_documents.findByPk = originals.documentFindByPk;
     db.assigned_crew.update = originals.assignmentUpdate;
     db.agreement_events.create = originals.eventCreate;
