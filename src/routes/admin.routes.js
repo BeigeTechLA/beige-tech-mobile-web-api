@@ -347,6 +347,7 @@ router.get('/roles/:role_id/users/export', authMiddleware, adminUsersView, admin
 router.get('/roles/:role_id', authMiddleware, rolesPermissionsView, admin.getRoleById);
 router.get('/users/roles', authMiddleware, rolesPermissionsView, admin.getUsersWithRoles);
 router.get('/users/:user_id/role-details', authMiddleware, rolesPermissionsView, admin.getUserRoleDetails);
+router.put('/users/:user_id/profile', authMiddleware, rolesPermissionsEdit, admin.updateInternalUserProfile);
 router.get('/permissions/modules', authMiddleware, rolesPermissionsView, admin.getPermissionModules);
 router.delete('/delete-user/:user_id', authMiddleware, adminUsersDelete, admin.deleteUser);
 router.get('/users/:user_id/reassignments',authMiddleware,adminUsersDelete,admin.getUserReassignments);

@@ -184,6 +184,55 @@ async function getActiveSalesReps(options = {}) {
 }
 
 /**
+ * Get active users whose role is Sales Rep or Admin (no assign_lead requirement).
+ * Used by the /sales/sales-reps list endpoint. Auto-assignment still uses getActiveSalesReps.
+ */
+async function getSalesRepsAndAdmins(options = {}) {
+  const transaction = options.transaction || null;
+  const attributes = options.attributes || ['id', 'name', 'email'];
+  const search = options.search ? String(options.search).trim() : '';
+
+  const roleTypes = await user_type.findAll({
+    where: { user_role: { [Op.in]: ['sales_rep', 'admin', 'Admin'] } },
+    attributes: ['user_type_id', 'user_role'],
+    transaction
+  });
+  const roleTypeIds = roleTypes.map((entry) => Number(entry.user_type_id)).filter(Boolean);
+
+  if (!roleTypeIds.length) {
+    return [];
+  }
+
+  const where = {
+    user_type: { [Op.in]: roleTypeIds },
+    is_active: 1
+  };
+
+  if (search) {
+    where[Op.or] = [
+      { name: { [Op.like]: `%${search}%` } },
+      { email: { [Op.like]: `%${search}%` } }
+    ];
+  }
+
+  const roleByTypeId = new Map(
+    roleTypes.map((entry) => [Number(entry.user_type_id), entry.user_role])
+  );
+
+  const matchedUsers = await users.findAll({
+    where,
+    attributes: [...new Set([...attributes, 'user_type'])],
+    order: [['name', 'ASC']],
+    transaction
+  });
+
+  return matchedUsers.map((user) => {
+    user.setDataValue('role', roleByTypeId.get(Number(user.user_type)) || user.role || null);
+    return user;
+  });
+}
+
+/**
  * Get lead count per sales rep in a given time period
  * @param {Array} salesRepIds - Array of sales rep user IDs
  * @param {number} hours - Number of hours to look back (default: 24)
@@ -798,6 +847,7 @@ async function autoAssignLead(leadId, options = {}) {
 
 module.exports = {
   getActiveSalesReps,
+  getSalesRepsAndAdmins,
   getLeadCountsPerRep,
   findRepWithFewestLeads,
   getLeadAssignmentDate,

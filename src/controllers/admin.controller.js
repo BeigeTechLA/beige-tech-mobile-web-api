@@ -19197,6 +19197,7 @@ exports.getUsersWithRoles = async (req, res) => {
         'name',
         'email',
         'user_type',
+        'created_by_user_id',
         'created_at',
         'updated_at',
         'is_active'
@@ -19250,6 +19251,23 @@ exports.getUsersWithRoles = async (req, res) => {
       userTypeMap[type.user_type_id] = type.user_role;
     });
 
+    const creatorIds = [
+      ...new Set(
+        users
+          .map((user) => Number(user.created_by_user_id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      )
+    ];
+
+    const creators = creatorIds.length
+      ? await db.users.scope('all').findAll({
+          where: { id: { [Op.in]: creatorIds } },
+          attributes: ['id', 'name', 'email'],
+          raw: true
+        })
+      : [];
+    const creatorMap = new Map(creators.map((creator) => [Number(creator.id), creator]));
+
     const formattedUsers = users.map(user => {
       const archiveHistory = archiveHistoryMap.get(Number(user.id)) || [];
       const latestArchiveEvent = archiveHistory[0] || null;
@@ -19260,6 +19278,8 @@ exports.getUsersWithRoles = async (req, res) => {
         email: user.email,
         role_id: user.user_type,
         role_name: userTypeMap[user.user_type] || null,
+        user_created_by_name: creatorMap.get(Number(user.created_by_user_id))?.name ||
+          creatorMap.get(Number(user.created_by_user_id))?.email || null,
         created_at: user.created_at,
         updated_at: user.updated_at,
         is_active: user.is_active,
@@ -19384,6 +19404,7 @@ exports.getUserRoleDetails = async (req, res) => {
         'name',
         'email',
         'user_type',
+        'phone_number',
         'created_at',
         'updated_at',
         'is_active'
@@ -19435,6 +19456,7 @@ exports.getUserRoleDetails = async (req, res) => {
           user_id: user.id,
           name: user.name,
           email: user.email,
+          phone_number: user.phone_number || null,
           user_type: user.user_type,
           user_type_name: role ? role.user_role : null,
           is_internal_member: role ? Number(role.is_internal_member || 0) : 0,
@@ -19476,6 +19498,128 @@ exports.getUserRoleDetails = async (req, res) => {
         process.env.NODE_ENV === 'development'
           ? error.message
           : undefined
+    });
+  }
+};
+
+exports.updateInternalUserProfile = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+
+    const targetUserId = Number(req.params.user_id);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid user id is required' });
+    }
+
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const normalizedPhone = normalizePhoneNumber(req.body?.phone_number ?? req.body?.number);
+    const phone_number = normalizedPhone || null;
+
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Name is required' });
+    }
+    if (name.length < 2 || name.length > 100) {
+      return res.status(400).json({ success: false, message: 'Name must be between 2 and 100 characters' });
+    }
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required' });
+    }
+    if (email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: 'Enter a valid email address' });
+    }
+    if (phone_number && !/^\d{10}$/.test(phone_number)) {
+      return res.status(400).json({ success: false, message: 'Number must be a valid 10 digit mobile number' });
+    }
+
+    const targetUser = await users.scope('all').findOne({
+      where: { id: targetUserId, is_active: 1 },
+      include: [
+        {
+          model: db.user_type,
+          as: 'userType',
+          attributes: ['user_role', 'is_internal_member'],
+          required: false
+        }
+      ]
+    });
+
+    // Only internal users can be edited from Roles & Permissions.
+    if (!targetUser || Number(targetUser.userType?.is_internal_member || 0) !== 1) {
+      return res.status(404).json({ success: false, message: 'Internal user not found' });
+    }
+
+    // Only a super admin (or the user themself) may edit a super admin.
+    const targetIsSuperAdmin = isSuperAdminRoleName(targetUser.userType?.user_role || targetUser.role);
+    if (targetIsSuperAdmin && !isSuperAdminRequest(req) && Number(authUser.id) !== targetUserId) {
+      return res.status(403).json({ success: false, message: 'Only a super admin can edit a super admin profile' });
+    }
+
+    const emailChanged = email !== String(targetUser.email || '').trim().toLowerCase();
+    const phoneChanged = phone_number !== (normalizePhoneNumber(targetUser.phone_number) || null);
+    const conflictFields = [
+      ...(emailChanged ? [{ email }] : []),
+      ...(phoneChanged && phone_number ? [{ phone_number }] : [])
+    ];
+
+    if (conflictFields.length) {
+      const [matchingUsers, matchingClients] = await Promise.all([
+        users.scope('all').findAll({
+          where: { id: { [Op.ne]: targetUserId }, [Op.or]: conflictFields },
+          attributes: ['email', 'phone_number']
+        }),
+        clients.findAll({
+          where: {
+            [Op.and]: [
+              { [Op.or]: conflictFields },
+              { [Op.or]: [{ user_id: null }, { user_id: { [Op.ne]: targetUserId } }] }
+            ]
+          },
+          attributes: ['email', 'phone_number']
+        })
+      ]);
+      const conflict = describeSignupConflicts(
+        [...matchingUsers, ...matchingClients],
+        { email: emailChanged ? email : null, phone_number: phoneChanged ? phone_number : null }
+      );
+      if (conflict) {
+        return res.status(409).json(conflict);
+      }
+    }
+
+    await targetUser.update({
+      name,
+      ...(emailChanged ? { email } : {}),
+      ...(phoneChanged ? { phone_number } : {}),
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'User profile updated successfully',
+      data: {
+        user_id: targetUser.id,
+        name,
+        email: targetUser.email,
+        phone_number: targetUser.phone_number,
+        updated_at: targetUser.updated_at
+      }
+    });
+  } catch (error) {
+    console.error('Update Internal User Profile Error:', error);
+
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(409).json({
+        success: false,
+        message: 'Email or phone number already exists. Please check the details and try again.'
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating user profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
