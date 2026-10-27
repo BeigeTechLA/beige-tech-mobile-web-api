@@ -19843,7 +19843,13 @@ exports.getUserReassignments = async (req, res) => {
             'event_date',
             'status',
             'payment_id'
-          ]
+          ],
+          include: [{
+            model: db.quotes,
+            as: 'primary_quote',
+            required: false,
+            attributes: ['total', 'price_after_discount', 'subtotal']
+          }]
         }
       ],
 
@@ -20022,7 +20028,18 @@ exports.getUserReassignments = async (req, res) => {
         event_date: data.booking?.event_date || null,
         paid_amount: Number(payment?.paid_amount || 0),
         payment_status: paymentState.paymentStatus,
-        quote_total: Number(payment?.quote_total || 0),
+        // The payment summary can be absent or stale for leads that already
+        // have quote pricing. Use the booking's primary quote as the fallback
+        // so this amount agrees with the lead/booking detail pages.
+        quote_total: Number(
+          payment?.quote_total > 0
+            ? payment.quote_total
+            : data.booking?.primary_quote?.total ??
+              data.booking?.primary_quote?.price_after_discount ??
+              data.booking?.primary_quote?.subtotal ??
+              payment?.quote_total ??
+              0
+        ),
         due_amount: Number(payment?.due_amount || 0),
         created_at: data.created_at,
         updated_at: data.updated_at
