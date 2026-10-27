@@ -148,6 +148,22 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: Sequelize.Sequelize.fn('current_timestamp')
+    },
+    finance_google_calendar_event_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    finance_google_calendar_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    finance_google_calendar_synced_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    finance_google_calendar_sync_error: {
+      type: DataTypes.TEXT,
+      allowNull: true
     }
   }, {
     sequelize,

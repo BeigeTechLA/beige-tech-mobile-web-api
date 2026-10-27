@@ -5,6 +5,7 @@ const bookingPricingService = require('./booking-pricing.service');
 const emailService = require('../utils/emailService');
 const appNotificationService = require('./app-notification.service');
 const businessNotifications = require('./business-notification.service');
+const financeGoogleCalendarService = require('./finance-google-calendar.service');
 const { getCanonicalCpEarningRows, payoutAmountsByEarningId, buildCpCompensationOverview } = require('../utils/cp-compensation-summary');
 
 const stripe = config.stripe?.secretKey
@@ -18,6 +19,19 @@ const VALID_PAYMENT_METHODS = new Set(['stripe', 'manual']);
 
 function toMoney(value) {
   return Number(Number(value || 0).toFixed(2));
+}
+
+async function syncFinanceCalendarSafely(creatorEarningId) {
+  try {
+    return await financeGoogleCalendarService.syncEarning(creatorEarningId);
+  } catch (error) {
+    // Calendar failures must never roll back an approved compensation or payment.
+    console.warn('[cp-compensation] finance Google Calendar sync failed:', {
+      creator_earning_id: creatorEarningId,
+      error: error.message
+    });
+    return { success: false, error: error.message };
+  }
 }
 
 async function notifyCompensationChange(earning, type, title, message) {
@@ -1473,6 +1487,10 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
       });
     }
 
+    if (!externalTransaction && options.approvalStatus === 'approved') {
+      await Promise.all(creators.map((creator) => syncFinanceCalendarSafely(creator.creator_earning_id)));
+    }
+
     return {
       booking_id: bookingId,
       approval_status: options.approvalStatus,
@@ -2338,6 +2356,7 @@ async function approveCompensation(creatorEarningId, payload = {}, options = {})
 
     if (!externalTransaction) await notifyCompensationChange(earning, 'creator_compensation_approved',
       'Compensation approved', `Your compensation for booking ${earning.booking_id} was approved.`);
+    if (!externalTransaction) await syncFinanceCalendarSafely(earning.creator_earning_id);
 
     return {
       creator_earning_id: earning.creator_earning_id,
@@ -2387,6 +2406,7 @@ async function rejectCompensation(creatorEarningId, payload = {}, options = {}) 
 
     if (!externalTransaction) await notifyCompensationChange(earning, 'creator_compensation_rejected',
       'Compensation rejected', `Your compensation for booking ${earning.booking_id} was rejected. Review the details.`);
+    if (!externalTransaction) await syncFinanceCalendarSafely(earning.creator_earning_id);
 
     return {
       creator_earning_id: earning.creator_earning_id,
@@ -2443,6 +2463,7 @@ async function modifyCompensation(creatorEarningId, payload = {}, options = {}) 
 
     if (!externalTransaction) await notifyCompensationChange(earning, 'creator_compensation_changed',
       'Compensation updated', `Your compensation for booking ${earning.booking_id} has changed. Review the details.`);
+    if (!externalTransaction) await syncFinanceCalendarSafely(earning.creator_earning_id);
 
     return {
       creator_earning_id: earning.creator_earning_id,
@@ -2507,6 +2528,8 @@ async function addAdvancePayment(creatorEarningId, payload = {}, options = {}) {
     }, transaction);
 
     if (!externalTransaction) await transaction.commit();
+
+    if (!externalTransaction) await syncFinanceCalendarSafely(earning.creator_earning_id);
 
     return {
       creator_earning_id: earning.creator_earning_id,
@@ -2670,6 +2693,7 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
       await notifyCompensationChange(earning, 'creator_compensation_paid',
         'Compensation paid', `Payment for booking ${earning.booking_id} has been processed.`);
     }
+    if (!externalTransaction) await syncFinanceCalendarSafely(earning.creator_earning_id);
 
     return {
       creator_earning_id: earning.creator_earning_id,
@@ -2729,6 +2753,8 @@ async function updateBookingCompensationDueDate(bookingId, payload = {}, options
       updated_at: now
     });
   }));
+
+  await Promise.all(earnings.map((earning) => syncFinanceCalendarSafely(earning.creator_earning_id)));
 
   return {
     booking_id: normalizedBookingId,

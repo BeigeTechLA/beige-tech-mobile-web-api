@@ -3,6 +3,7 @@ const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
 const quoteAnalyticsService = require('./quote-analytics.service');
+const financeGoogleCalendarService = require('./finance-google-calendar.service');
 const { DIGEST_INTERVAL_HOURS, runChatMessageEmailDigestJob } = require('./chat-message-email-digest.service');
 const { runOverdueAgreementNotifications, runOverdueLeadNotifications, runUpcomingNotifications, runOverdueRevisionNotifications, runDeliveryFollowUpNotifications } = require('./overdue-notification.service');
 
@@ -32,6 +33,7 @@ let isRunningCpPaymentDue = false;
 let isRunningCpPaymentDue7Days = false;
 let isRunningCpPaymentOverdue1Day = false;
 let isRunningCpPaymentOverdue3Days = false;
+let isRunningFinanceCalendarSync = false;
 
 const toIsoDateLocal = (date) => {
   const d = new Date(date);
@@ -138,11 +140,25 @@ const addDaysToIsoDate = (isoDate, days) => {
   return utcDate.toISOString().slice(0, 10);
 };
 
-const getCpPaymentNotificationRecipients = () => [process.env.SALES_NOTIFICATION_EMAIL]
+const getCpPaymentNotificationRecipients = () => [process.env.FINANCE_NOTIFICATION_EMAIL || process.env.SALES_NOTIFICATION_EMAIL]
   .flatMap((value) => String(value || '').split(','))
   .map((value) => value.trim().toLowerCase())
   .filter(Boolean)
   .filter((value, index, list) => list.indexOf(value) === index);
+
+const runFinanceCalendarSyncJob = async () => {
+  if (isRunningFinanceCalendarSync) return;
+  isRunningFinanceCalendarSync = true;
+  try {
+    const results = await financeGoogleCalendarService.syncAllOpenEarnings();
+    const failed = results.filter((result) => result.status === 'rejected').length;
+    if (failed) console.warn(`[Finance Calendar Job] ${failed} CP payment event(s) failed to sync`);
+  } catch (error) {
+    console.error('[Finance Calendar Job] Sync failed:', error.message);
+  } finally {
+    isRunningFinanceCalendarSync = false;
+  }
+};
 
 const getTimeZoneOffsetMs = (date, timeZone) => {
   const formatter = new Intl.DateTimeFormat('en-US', {
@@ -1488,6 +1504,7 @@ const startScheduledEmailJobs = () => {
   runCPPaymentOverdue3DaysJob().catch((err) => {
     console.error('[Email Job] Initial CP payment overdue 3-day run failed:', err.message);
   });
+  runFinanceCalendarSyncJob();
   runQuotePipelineInactivityAlertsJob().catch((err) => {
     console.error('[Email Job] Initial overdue pipeline alert run failed:', err.message);
   });
@@ -1545,6 +1562,7 @@ const startScheduledEmailJobs = () => {
     runCPPaymentOverdue3DaysJob().catch((err) => {
       console.error('[Email Job] Interval CP payment overdue 3-day run failed:', err.message);
     });
+    runFinanceCalendarSyncJob();
     runQuotePipelineInactivityAlertsJob().catch((err) => {
       console.error('[Email Job] Interval overdue pipeline alert run failed:', err.message);
     });
@@ -1592,5 +1610,6 @@ module.exports = {
   runCPPaymentDue7DaysJob,
   runCPPaymentOverdue1DayJob,
   runCPPaymentOverdue3DaysJob,
+  runFinanceCalendarSyncJob,
   runQuotePipelineInactivityAlertsJob
 };

@@ -25,12 +25,15 @@ function buildFrontendUrl(pathname = '') {
 }
 
 function getFinanceDisputeAdminRecipients() {
-  return [
-    process.env.FINANCE_DISPUTE_NOTIFICATION_EMAIL,
-    process.env.FINANCE_NOTIFICATION_EMAIL,
-    process.env.ADMIN_NOTIFICATION_EMAIL,
-    process.env.SALES_NOTIFICATION_EMAIL
-  ]
+  const configuredRecipients = process.env.FINANCE_NOTIFICATION_EMAIL
+    ? [process.env.FINANCE_NOTIFICATION_EMAIL]
+    : [
+        process.env.FINANCE_DISPUTE_NOTIFICATION_EMAIL,
+        process.env.ADMIN_NOTIFICATION_EMAIL,
+        process.env.SALES_NOTIFICATION_EMAIL
+      ];
+
+  return configuredRecipients
     .flatMap((value) => String(value || '').split(','))
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean)

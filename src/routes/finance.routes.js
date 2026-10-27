@@ -5,6 +5,7 @@ const multer = require('multer');
 const router = express.Router();
 const financeController = require('../controllers/finance.controller');
 const cpCompensationController = require('../controllers/cp-compensation.controller');
+const financeGoogleCalendarController = require('../controllers/finance-google-calendar.controller');
 const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
@@ -100,6 +101,13 @@ router.get('/admin/credit-points/users/:userId', authenticate, adminFinanceCredi
 router.post('/admin/credit-points/manual', authenticate, adminFinanceCreditPointsCreate, financeController.createAdminManualCredit);
 router.get('/admin/credit-points/export', authenticate, adminFinanceCreditPointsView, financeController.listAdminCreditPointTransactions);
 router.get('/cp-compensation/pending-shoots', authenticate, adminFinanceCpCompensationView, cpCompensationController.listPendingShoots);
+router.get('/google-calendar/callback', financeGoogleCalendarController.callback);
+router.get('/google-calendar/status', authenticate, adminFinanceCpCompensationView, financeGoogleCalendarController.status);
+router.get('/google-calendar/connect', authenticate, adminFinanceCpCompensationEdit, financeGoogleCalendarController.connect);
+router.get('/google-calendar/calendars', authenticate, adminFinanceCpCompensationView, financeGoogleCalendarController.calendars);
+router.put('/google-calendar/calendar', authenticate, adminFinanceCpCompensationEdit, financeGoogleCalendarController.selectCalendar);
+router.post('/google-calendar/sync', authenticate, adminFinanceCpCompensationEdit, financeGoogleCalendarController.sync);
+router.post('/google-calendar/disconnect', authenticate, adminFinanceCpCompensationEdit, financeGoogleCalendarController.disconnect);
 router.get('/cp-compensation/overview', authenticate, adminFinanceCpCompensationView, cpCompensationController.overview);
 router.get('/cp-compensation/calendar', authenticate, adminFinanceCpCompensationView, cpCompensationController.calendar);
 router.get('/cp-compensation', authenticate, adminFinanceCpCompensationView, cpCompensationController.list);
