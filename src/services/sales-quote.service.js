@@ -2462,12 +2462,22 @@ async function buildLineItemsPayload(rawItems = []) {
         : null;
       const effectiveUnitRate = estimatedPricing !== null ? estimatedPricing : baseUnitRate;
       const normalizedItemName = normalizeLookupKey(rawItem.item_name || rawItem.name || catalogItem?.name || '');
-      const aiEditingConfig = normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
+      const rawConfiguration = parseConfig(rawItem.configuration || rawItem.configuration_json) || {};
+      const hasEditingTypeConfiguration = Boolean(
+        rawConfiguration.editing_type_key ||
+        rawConfiguration.editingTypeKey ||
+        rawConfiguration.editing_type_label ||
+        rawConfiguration.editingTypeLabel
+      );
+      const isAiEditingLineItem =
+        normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME) ||
+        (sectionType === 'service' && hasEditingTypeConfiguration);
+      const aiEditingConfig = isAiEditingLineItem
         ? extractAiEditingConfig(rawItem, aiEditingTypesLookup)
         : null;
-    const configuration = normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
-      ? aiEditingConfig
-      : (rawItem.configuration || rawItem.configuration_json || null);
+      const configuration = isAiEditingLineItem
+        ? aiEditingConfig
+        : (rawItem.configuration || rawItem.configuration_json || null);
 
     let multiplier = quantity;
     if (rateType === 'per_hour') {
