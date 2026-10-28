@@ -6,440 +6,841 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="x-apple-disable-message-reformatting">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <meta name="color-scheme" content="light">
-  <meta name="supported-color-schemes" content="light">
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
   <title>Quote Accepted</title>
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+  <![endif]-->
 
-  <!-- Strict Light Mode Enforcement Controls -->
+  <!-- =====================================================================
+       RESPONSIVE BLOCK
+       Kept in its OWN <style> tag on purpose: Gmail discards an entire
+       <style> block if it dislikes any selector in it (e.g. the Outlook
+       [data-ogsb] hooks below). Isolating the media queries means the
+       responsive rules survive even if the theme block gets dropped.
+       ===================================================================== -->
   <style type="text/css">
-    :root {
-      color-scheme: light;
-      supported-color-schemes: light;
+    @media only screen and (max-width: 620px) {
+
+      /* ---- outer frame ---- */
+      .wrap-outer {
+        padding: 16px 8px !important;
+      }
+
+      .main-card {
+        width: 100% !important;
+        border-radius: 18px !important;
+      }
+
+      /* ---- logo ---- */
+      .sec-logo {
+        padding: 28px 0 22px !important;
+      }
+
+      .logo-pill {
+        padding: 10px 24px !important;
+      }
+
+      .sec-logo-sep {
+        padding: 24px 16px 0 !important;
+      }
+
+      /* ---- intro ---- */
+      .sec-intro {
+        padding: 0 16px !important;
+      }
+
+      .h1 {
+        font-size: 32px !important;
+        line-height: 1.15 !important;
+      }
+
+      .intro-text {
+        margin-top: 12px !important;
+        font-size: 17px !important;
+        line-height: 1.5 !important;
+      }
+
+      /* ---- acceptance summary card ---- */
+      .sec-summary {
+        padding: 28px 16px 0 !important;
+      }
+
+      .white-card {
+        border-radius: 24px !important;
+      }
+
+      .summary-pad {
+        padding: 24px 18px !important;
+      }
+
+      .summary-title {
+        font-size: 22px !important;
+        padding-bottom: 16px !important;
+      }
+
+      .row-pad {
+        padding-bottom: 14px !important;
+      }
+
+      .row-sep {
+        padding-top: 14px !important;
+      }
+
+      .icon-cell {
+        width: 64px !important;
+      }
+
+      .icon-bg {
+        width: 56px !important;
+        height: 56px !important;
+      }
+
+      .icon-img {
+        width: 22px !important;
+        height: 22px !important;
+        margin-top: 13px !important;
+        margin-right: 8px !important;
+      }
+
+      .row-label {
+        font-size: 14px !important;
+        line-height: 18px !important;
+        padding-bottom: 3px !important;
+      }
+
+      .row-value {
+        font-size: 16px !important;
+        line-height: 22px !important;
+        word-break: break-word !important;
+      }
+
+      /* ---- amount breakdown blocks ---- */
+      .breakdown-top {
+        padding-top: 14px !important;
+      }
+
+      .amount-breakdown {
+        border-radius: 18px !important;
+      }
+
+      .breakdown-pad {
+        padding: 14px 16px !important;
+      }
+
+      .bd-label {
+        font-size: 14px !important;
+        line-height: 20px !important;
+      }
+
+      .bd-amt {
+        font-size: 14px !important;
+        line-height: 20px !important;
+        white-space: nowrap !important;
+        padding-left: 10px !important;
+      }
+
+      .bd-row {
+        padding-top: 12px !important;
+        padding-bottom: 12px !important;
+      }
+
+      .bd-note {
+        font-size: 13px !important;
+        padding-top: 10px !important;
+      }
+
+      /* ---- what happens next banner ---- */
+      .sec-banner {
+        padding: 28px 16px 0 !important;
+      }
+
+      .next-steps-banner {
+        border-radius: 22px !important;
+      }
+
+      .banner-pad {
+        padding: 20px 18px 18px !important;
+      }
+
+      .banner-title {
+        font-size: 22px !important;
+        padding-bottom: 10px !important;
+      }
+
+      .banner-list {
+        padding-left: 18px !important;
+        font-size: 15px !important;
+        line-height: 1.7 !important;
+      }
+
+      /* ---- signature ---- */
+      .sec-signature {
+        padding: 30px 16px 0 !important;
+      }
+
+      .signature-cell {
+        padding-right: 12px !important;
+      }
+
+      .signature {
+        font-size: 22px !important;
+      }
+
+      /* ---- help ---- */
+      .sec-help {
+        padding: 36px 16px 0 !important;
+      }
+
+      .sep-gap {
+        padding-bottom: 28px !important;
+      }
+
+      .meta-small {
+        margin-bottom: 14px !important;
+        font-size: 14px !important;
+        line-height: 20px !important;
+      }
+
+      .help-title {
+        font-size: 20px !important;
+        margin-bottom: 6px !important;
+      }
+
+      .help-link {
+        font-size: 17px !important;
+        word-break: break-all !important;
+      }
+
+      /* ---- legal footer ---- */
+      .sec-legal {
+        padding: 32px 16px 40px !important;
+      }
+
+      .legal-links {
+        font-size: 13px !important;
+        line-height: 20px !important;
+      }
+
+      .brand-name {
+        font-size: 20px !important;
+        margin-bottom: 28px !important;
+      }
     }
 
+    /* small phones (≤ 400px, e.g. 360px Androids, iPhone SE) */
+    @media only screen and (max-width: 400px) {
+      .h1 {
+        font-size: 28px !important;
+      }
+
+      .intro-text {
+        font-size: 16px !important;
+      }
+
+      .summary-pad {
+        padding: 20px 14px !important;
+      }
+
+      .icon-cell {
+        width: 56px !important;
+      }
+
+      .icon-bg {
+        width: 48px !important;
+        height: 48px !important;
+      }
+
+      .icon-img {
+        width: 20px !important;
+        height: 20px !important;
+        margin-top: 10px !important;
+        margin-right: 7px !important;
+      }
+
+      .signature {
+        font-size: 19px !important;
+      }
+
+      .legal-links {
+        font-size: 12px !important;
+      }
+    }
+  </style>
+
+  <!-- THEME BLOCK (unchanged from your working version) -->
+  <style type="text/css">
+    :root {
+      color-scheme: light dark;
+      supported-color-schemes: light dark;
+    }
+
+    /* =====================================================================
+       THEMES
+       LIGHT = the inline styles in the markup (your original colours + gradients).
+       DARK  = the palette below, declared twice because clients use different hooks:
+         1. @media (prefers-color-scheme: dark) -> Apple Mail, iOS Mail, Outlook.com /
+            new Outlook, Samsung Mail, Thunderbird, Yahoo, most webmail
+         2. [data-ogsb] / [data-ogsc]           -> Outlook desktop + Outlook iOS/Android
+         Gmail iOS/Android ignore both and auto-invert. Gmail inverts SOLID colours but skips
+         gradients, so every gradient here is built as:
+             SOLID base colour on one element  +  gradient as a LOW-ALPHA overlay on a child.
+         Over the base, the overlay reproduces the original gradient exactly in light mode; when
+         Gmail inverts the base to dark, the overlay only adds a faint warm tint.
+
+       DARK PALETTE
+         page                #121212
+         card                #1A1410  (dark brown-black) + warm overlay to #2B2517
+         white surfaces      #26241F
+         amount boxes        #2E2820
+         banner              #2E2A20 -> #3A3324
+         headings/strong     #F5F1E8
+         body text           #D8D2C4
+         secondary / labels  #B5AEA0
+         notes               #CFC9BB
+         small print         #C9C3B6
+         divider lines       #3A362C
+       ===================================================================== */
+
+    /* 1 ---- standards-based dark mode ---- */
     @media (prefers-color-scheme: dark) {
 
       body,
       .body-wrapper {
-        background-color: #F7F7F7 !important;
-        color: #484848 !important;
+        background-color: #121212 !important;
+        color: #D8D2C4 !important;
       }
 
       .main-card {
-        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+        background-color: #1A1410 !important;
       }
 
-      .white-card{
-        background-color: #FFFFFF !important;
+      .card-overlay {
+        background-image: linear-gradient(143deg, rgba(43, 37, 23, 0) 22.58%, rgba(43, 37, 23, 1) 188.59%) !important;
       }
 
+      .white-card,
       .logo-pill {
-        background-color: #FFFFFF !important;
-      }
-
-      .next-steps-banner {
-        background: linear-gradient(90deg, #FFF3DE 0%, #F6E3C1 100%) !important;
+        background-color: #26241F !important;
       }
 
       .amount-breakdown {
-        background-color: #FFF8ED !important;
+        background-color: #2E2820 !important;
       }
 
-      h1,
-      font,
-      span,
-      strong,
-      div,
-      p,
-      li,
-      a {
-        color: #000000 !important;
+      .next-steps-banner {
+        background-color: #2E2A20 !important;
+      }
+
+      .banner-overlay {
+        background-image: linear-gradient(90deg, rgba(58, 51, 36, 0) 0%, rgba(58, 51, 36, 1) 100%) !important;
+      }
+
+      .bd-line {
+        border-bottom-color: #3A362C !important;
+      }
+
+      .text-black {
+        color: #F5F1E8 !important;
       }
 
       .body-text {
-        color: #403E3E !important;
+        color: #D8D2C4 !important;
       }
 
       .meta-text {
-        color: #3C3B3B !important;
+        color: #C9C3B6 !important;
       }
 
-      .secondary-text {
-        color: #707070 !important;
+      .secondary-text,
+      .payment-label-dim {
+        color: #B5AEA0 !important;
       }
 
       .note-text {
-        color: #5A5A5A !important;
+        color: #CFC9BB !important;
       }
+    }
 
-      .payment-label-dim {
-        color: #6A655D !important;
-      }
+    /* 2 ---- Outlook (desktop + mobile + Outlook.com) ---- */
+    [data-ogsb] body,
+    [data-ogsb] .body-wrapper {
+      background-color: #121212 !important;
+    }
+
+    [data-ogsc] body,
+    [data-ogsc] .body-wrapper {
+      color: #D8D2C4 !important;
+    }
+
+    [data-ogsb] .main-card {
+      background-color: #1A1410 !important;
+    }
+
+    [data-ogsb] .card-overlay {
+      background-image: linear-gradient(143deg, rgba(43, 37, 23, 0) 22.58%, rgba(43, 37, 23, 1) 188.59%) !important;
+    }
+
+    [data-ogsb] .white-card,
+    [data-ogsb] .logo-pill {
+      background-color: #26241F !important;
+    }
+
+    [data-ogsb] .amount-breakdown {
+      background-color: #2E2820 !important;
+    }
+
+    [data-ogsb] .next-steps-banner {
+      background-color: #2E2A20 !important;
+    }
+
+    [data-ogsc] .text-black {
+      color: #F5F1E8 !important;
+    }
+
+    [data-ogsc] .body-text {
+      color: #D8D2C4 !important;
+    }
+
+    [data-ogsc] .meta-text {
+      color: #C9C3B6 !important;
+    }
+
+    [data-ogsc] .secondary-text,
+    [data-ogsc] .payment-label-dim {
+      color: #B5AEA0 !important;
+    }
+
+    [data-ogsc] .note-text {
+      color: #CFC9BB !important;
     }
   </style>
 </head>
 
 <body class="body-wrapper"
-  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
-  <table class="body-wrapper" width="100%" cellpadding="0" cellspacing="0"
-    style="background-color: #F7F7F7; padding: 40px 20px;">
+  style="margin: 0; padding: 0; width: 100%; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-wrapper" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+    bgcolor="#F7F7F7" style="background-color: #F7F7F7;">
     <tr>
-      <td align="center">
-        <table class="main-card" width="600" cellpadding="0" cellspacing="0"
-          style="width: 100%; max-width: 600px; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
+      <td class="wrap-outer" align="center" style="padding: 40px 20px;">
 
-          <!-- Brand Logo Header -->
-          <tr>
-            <td align="center" style="padding: 40px 0 36px;">
-              <div class="logo-pill"
-                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
-                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                  alt="Beige" width="110" style="display: block; border: 0;">
-              </div>
-              <div style="padding: 36px 40px 0;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-            </td>
-          </tr>
+        <!-- Outlook (Windows) ignores max-width; this ghost table caps it at 600px -->
+        <!--[if mso]>
+        <table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td>
+        <![endif]-->
 
-          <!-- Notification Salutation Intro -->
+        <!-- LAYER 1: SOLID colour only (no gradient on this element, so Gmail iOS can invert it with its text) -->
+        <table class="main-card" role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+          bgcolor="#FFFCF6"
+          style="width: 100%; max-width: 600px; background-color: #FFFCF6; border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04); border-collapse: separate;">
           <tr>
-            <td style="padding: 0 40px;">
-              <h1 style="margin: 0; color: #000000; font-size: 50px; font-weight: 600; line-height: 1.05;">
-                Your quote is accepted
-              </h1>
-              <p class="body-text" style="margin: 18px 0 0; font-size: 24px; color: #403E3E; line-height: 1.45;">
-                Hello {{client_name}},
-              </p>
-              <p class="body-text" style="margin: 16px 0 0; font-size: 24px; color: #403E3E; line-height: 1.45;">
-                We've successfully received your approval for quote
-                <span style="color: #000000; font-weight: 600;">{{quote_number}}</span>.
-              </p>
-              <p class="body-text" style="margin: 16px 0 0; font-size: 24px; color: #403E3E; line-height: 1.45;">
-                For your project -
-                <span style="color: #000000; font-weight: 600;">{{project_description}}</span> -
-                we'll take it forward from here.
-              </p>
-            </td>
-          </tr>
+            <!-- LAYER 2: the gradient as a low-alpha overlay -->
+            <td class="card-overlay"
+              style="padding: 0; background-image: linear-gradient(143deg, rgba(239,199,137,0) 22.58%, rgba(239,199,137,0.43) 188.59%);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
 
-          <!-- Summary Component Block -->
-          <tr>
-            <td style="padding: 36px 40px 0;">
-              <table class="white-card" width="100%" cellpadding="0" cellspacing="0"
-                style="background-color: #FFFFFF; border-radius: 36px; box-shadow: 0 10px 30px rgba(0,0,0,0.05);">
+                <!-- Brand Logo Header -->
                 <tr>
-                  <td style="padding: 34px 30px;">
-                    <div
-                      style="font-size: 28px; font-weight: 600; line-height: 1.2; color: #000000; text-align: center; padding-bottom: 22px;">
-                      Acceptance Summary
+                  <td class="sec-logo" align="center" style="padding: 40px 0 36px;">
+                    <div class="logo-pill"
+                      style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
+                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                        alt="Beige" width="110" style="display: block; border: 0; width: 110px; max-width: 110px;">
                     </div>
+                    <div class="sec-logo-sep" style="padding: 36px 40px 0;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+                  </td>
+                </tr>
 
-                    <table width="100%" cellpadding="0" cellspacing="0">
-                      <!-- Row 1: Quote Info -->
+                <!-- Notification Salutation Intro -->
+                <tr>
+                  <td class="sec-intro" style="padding: 0 40px;">
+                    <h1 class="text-black h1"
+                      style="margin: 0; color: #000000; font-size: 50px; font-weight: 600; line-height: 1.05;">
+                      Your quote is accepted
+                    </h1>
+                    <p class="body-text intro-text"
+                      style="margin: 18px 0 0; font-size: 24px; color: #403E3E; line-height: 1.45;">
+                      Hello {{client_name}},
+                    </p>
+                    <p class="body-text intro-text"
+                      style="margin: 16px 0 0; font-size: 24px; color: #403E3E; line-height: 1.45;">
+                      We've successfully received your approval for quote
+                      <span class="text-black" style="color: #000000; font-weight: 600;">{{quote_number}}</span>.
+                    </p>
+                    <p class="body-text intro-text"
+                      style="margin: 16px 0 0; font-size: 24px; color: #403E3E; line-height: 1.45;">
+                      For your project -
+                      <span class="text-black" style="color: #000000; font-weight: 600;">{{project_description}}</span>
+                      -
+                      we'll take it forward from here.
+                    </p>
+                  </td>
+                </tr>
+
+                <!-- Summary Component Block -->
+                <tr>
+                  <td class="sec-summary" style="padding: 36px 40px 0;">
+                    <table class="white-card" role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                      border="0" bgcolor="#FFFFFF"
+                      style="background-color: #FFFFFF; border-radius: 36px; box-shadow: 0 10px 30px rgba(0,0,0,0.05);">
                       <tr>
-                        <td style="padding: 0 0 18px;">
-                          <table width="100%" cellpadding="0" cellspacing="0">
-                            <tr>
-                              <td width="96">
-                                <div
-                                  style="width: 88px; height: 88px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
-                                  <img
-                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Checklist.svg"
-                                    width="34" height="34" alt="Accepted"
-                                    style="margin-top: 21px; margin-right: 12px; display: inline-block; border: 0; max-width: 100%;">
-                                </div>
-                              </td>
-                              <td>
-                                <div class="secondary-text"
-                                  style="font-size: 16px; color: #707070; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                  Accepted Quote
-                                </div>
-                                <div style="font-size: 18px; font-weight: 600; color: #000000; line-height: 24px;">
-                                  {{quote_number}}
-                                </div>
-                              </td>
-                            </tr>
-                          </table>
-                          <div style="padding-top: 18px;">
-                            <img
-                              src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                              alt="Line Separator" width="100%" style="display: block; border: 0;">
+                        <td class="summary-pad" style="padding: 34px 30px;">
+                          <div class="text-black summary-title"
+                            style="font-size: 28px; font-weight: 600; line-height: 1.2; color: #000000; text-align: center; padding-bottom: 22px;">
+                            Acceptance Summary
                           </div>
-                        </td>
-                      </tr>
 
-                      <!-- Row 2: Project Details -->
-                      <tr>
-                        <td style="padding: 0 0 18px;">
-                          <table width="100%" cellpadding="0" cellspacing="0">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <!-- Row 1: Quote Info -->
                             <tr>
-                              <td width="96">
-                                <div
-                                  style="width: 88px; height: 88px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
-                                  <img
-                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/User.svg"
-                                    width="34" height="34" alt="Project"
-                                    style="margin-top: 21px; margin-right: 12px; display: inline-block; border: 0; max-width: 100%;">
-                                </div>
-                              </td>
-                              <td>
-                                <div class="secondary-text"
-                                  style="font-size: 16px; color: #707070; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                  Project
-                                </div>
-                                <div style="font-size: 18px; font-weight: 600; color: #000000; line-height: 24px;">
-                                  {{project_description}}
-                                </div>
-                              </td>
-                            </tr>
-                          </table>
-                          <div style="padding-top: 18px;">
-                            <img
-                              src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                              alt="Line Separator" width="100%" style="display: block; border: 0;">
-                          </div>
-                        </td>
-                      </tr>
-
-                      <!-- Row 3: Accepted Base Amount -->
-                      <tr>
-                        <td style="padding: 0;">
-                          <table width="100%" cellpadding="0" cellspacing="0">
-                            <tr>
-                              <td width="96">
-                                <div
-                                  style="width: 88px; height: 88px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
-                                  <img
-                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
-                                    width="34" height="34" alt="Amount"
-                                    style="margin-top: 21px; margin-right: 12px; display: inline-block; border: 0; max-width: 100%;">
-                                </div>
-                              </td>
-                              <td>
-                                <div class="secondary-text"
-                                  style="font-size: 16px; color: #707070; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                  {{accepted_amount_label}}
-                                </div>
-                                <div style="font-size: 18px; font-weight: 600; color: #000000; line-height: 24px;">
-                                  $ {{proposal_amount}}
-                                </div>
-                              </td>
-                            </tr>
-                          </table>
-                        </td>
-                      </tr>
-
-                      <!-- Dynamic Block A: Additional Payment Invoicing Stack -->
-                      {{#if is_additional_payment}}
-                      <tr>
-                        <td style="padding: 18px 0 0;">
-                          <table class="amount-breakdown" width="100%" cellpadding="0" cellspacing="0"
-                            style="background-color: #FFF8ED; border-radius: 22px;">
-                            <tr>
-                              <td style="padding: 18px 22px;">
-                                <table width="100%" cellpadding="0" cellspacing="0">
+                              <td class="row-pad" style="padding: 0 0 18px;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                                   <tr>
-                                    <td class="secondary-text"
-                                      style="font-size: 15px; color: #707070; padding: 0 0 8px;">Previously paid</td>
-                                    <td align="right"
-                                      style="font-size: 15px; font-weight: 600; color: #000000; padding: 0 0 8px;">$
-                                      {{previously_paid_amount}}</td>
-                                  </tr>
-                                  <tr>
-                                    <td class="secondary-text"
-                                      style="font-size: 15px; color: #707070; padding: 0 0 8px;">Revised quote total
+                                    <td class="icon-cell" width="96" style="width: 96px;">
+                                      <div class="icon-bg"
+                                        style="width: 88px; height: 88px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                                        <img class="icon-img"
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Checklist.svg"
+                                          width="34" height="34" alt="Accepted"
+                                          style="margin-top: 21px; margin-right: 12px; display: inline-block; border: 0; max-width: 100%;">
+                                      </div>
                                     </td>
-                                    <td align="right"
-                                      style="font-size: 15px; font-weight: 600; color: #000000; padding: 0 0 8px;">$
-                                      {{revised_total}}</td>
-                                  </tr>
-                                  <tr>
-                                    <td style="font-size: 15px; color: #000000; font-weight: 600;">Additional amount
-                                      accepted</td>
-                                    <td align="right" style="font-size: 15px; font-weight: 700; color: #000000;">$
-                                      {{additional_amount}}</td>
+                                    <td>
+                                      <div class="secondary-text row-label"
+                                        style="font-size: 16px; color: #707070; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                        Accepted Quote
+                                      </div>
+                                      <div class="text-black row-value"
+                                        style="font-size: 18px; font-weight: 600; color: #000000; line-height: 24px;">
+                                        {{quote_number}}
+                                      </div>
+                                    </td>
                                   </tr>
                                 </table>
-                                <div class="note-text"
-                                  style="font-size: 14px; line-height: 1.6; color: #5A5A5A; padding-top: 12px;">
-                                  {{payment_note}}
+                                <div class="row-sep" style="padding-top: 18px;">
+                                  <img
+                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                    alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
                                 </div>
                               </td>
                             </tr>
-                          </table>
-                        </td>
-                      </tr>
-                      {{/if}}
 
-                      <!-- Dynamic Block B: Partial Installment Track Details -->
-                      {{#if is_partial_payment}}
-                      <tr>
-                        <td style="padding: 14px 0 0;">
-                          <table width="100%" cellpadding="0" cellspacing="0">
+                            <!-- Row 2: Project Details -->
                             <tr>
-                              <td class="payment-label-dim"
-                                style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">
-                                Previously Paid</td>
-                              <td align="right"
-                                style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">
-                                $ {{previously_paid_amount}}</td>
-                            </tr>
-                            <tr>
-                              <td class="payment-label-dim"
-                                style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">
-                                Quote Total</td>
-                              <td align="right"
-                                style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">
-                                $ {{revised_total}}</td>
-                            </tr>
-                            <tr>
-                              <td class="payment-label-dim"
-                                style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">
-                                Remaining Amount Accepted</td>
-                              <td align="right"
-                                style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">
-                                $ {{proposal_amount}}</td>
-                            </tr>
-                          </table>
-                        </td>
-                      </tr>
-                      {{/if}}
-
-                      <!-- Dynamic Block C: Budget Variance Markdown Reduction -->
-                      {{#if is_reduced_payment}}
-                      <tr>
-                        <td style="padding: 18px 0 0;">
-                          <table class="amount-breakdown" width="100%" cellpadding="0" cellspacing="0"
-                            style="background-color: #FFF8ED; border-radius: 22px;">
-                            <tr>
-                              <td style="padding: 18px 22px;">
-                                <table width="100%" cellpadding="0" cellspacing="0">
+                              <td class="row-pad" style="padding: 0 0 18px;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                                   <tr>
-                                    <td class="secondary-text"
-                                      style="font-size: 15px; color: #707070; padding: 0 0 8px;">Previously paid</td>
-                                    <td align="right"
-                                      style="font-size: 15px; font-weight: 600; color: #000000; padding: 0 0 8px;">$
-                                      {{previously_paid_amount}}</td>
-                                  </tr>
-                                  <tr>
-                                    <td class="secondary-text"
-                                      style="font-size: 15px; color: #707070; padding: 0 0 8px;">Revised quote total
+                                    <td class="icon-cell" width="96" style="width: 96px;">
+                                      <div class="icon-bg"
+                                        style="width: 88px; height: 88px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                                        <img class="icon-img"
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/User.svg"
+                                          width="34" height="34" alt="Project"
+                                          style="margin-top: 21px; margin-right: 12px; display: inline-block; border: 0; max-width: 100%;">
+                                      </div>
                                     </td>
-                                    <td align="right"
-                                      style="font-size: 15px; font-weight: 600; color: #000000; padding: 0 0 8px;">$
-                                      {{revised_total}}</td>
-                                  </tr>
-                                  <tr>
-                                    <td style="font-size: 15px; color: #000000; font-weight: 600;">Reduction recorded
+                                    <td>
+                                      <div class="secondary-text row-label"
+                                        style="font-size: 16px; color: #707070; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                        Project
+                                      </div>
+                                      <div class="text-black row-value"
+                                        style="font-size: 18px; font-weight: 600; color: #000000; line-height: 24px;">
+                                        {{project_description}}
+                                      </div>
                                     </td>
-                                    <td align="right" style="font-size: 15px; font-weight: 700; color: #000000;">$
-                                      {{reduced_amount}}</td>
                                   </tr>
                                 </table>
-                                <div class="note-text"
-                                  style="font-size: 14px; line-height: 1.6; color: #5A5A5A; padding-top: 12px;">
-                                  {{payment_note}}
+                                <div class="row-sep" style="padding-top: 18px;">
+                                  <img
+                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                    alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
                                 </div>
                               </td>
                             </tr>
+
+                            <!-- Row 3: Accepted Base Amount -->
+                            <tr>
+                              <td style="padding: 0;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                                  <tr>
+                                    <td class="icon-cell" width="96" style="width: 96px;">
+                                      <div class="icon-bg"
+                                        style="width: 88px; height: 88px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                                        <img class="icon-img"
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
+                                          width="34" height="34" alt="Amount"
+                                          style="margin-top: 21px; margin-right: 12px; display: inline-block; border: 0; max-width: 100%;">
+                                      </div>
+                                    </td>
+                                    <td>
+                                      <div class="secondary-text row-label"
+                                        style="font-size: 16px; color: #707070; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                        {{accepted_amount_label}}
+                                      </div>
+                                      <div class="text-black row-value"
+                                        style="font-size: 18px; font-weight: 600; color: #000000; line-height: 24px;">
+                                        $ {{proposal_amount}}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+
+                            <!-- Dynamic Block A: Additional Payment Invoicing Stack -->
+                            {{#if is_additional_payment}}
+                            <tr>
+                              <td class="breakdown-top" style="padding: 18px 0 0;">
+                                <table class="amount-breakdown" role="presentation" width="100%" cellpadding="0"
+                                  cellspacing="0" border="0" bgcolor="#FFF8ED"
+                                  style="background-color: #FFF8ED; border-radius: 22px;">
+                                  <tr>
+                                    <td class="breakdown-pad" style="padding: 18px 22px;">
+                                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                                        border="0">
+                                        <tr>
+                                          <td class="secondary-text bd-label"
+                                            style="font-size: 15px; color: #707070; padding: 0 0 8px;">Previously paid
+                                          </td>
+                                          <td align="right" class="text-black bd-amt"
+                                            style="font-size: 15px; font-weight: 600; color: #000000; padding: 0 0 8px;">
+                                            $
+                                            {{previously_paid_amount}}</td>
+                                        </tr>
+                                        <tr>
+                                          <td class="secondary-text bd-label"
+                                            style="font-size: 15px; color: #707070; padding: 0 0 8px;">Revised quote
+                                            total
+                                          </td>
+                                          <td align="right" class="text-black bd-amt"
+                                            style="font-size: 15px; font-weight: 600; color: #000000; padding: 0 0 8px;">
+                                            $
+                                            {{revised_total}}</td>
+                                        </tr>
+                                        <tr>
+                                          <td class="text-black bd-label"
+                                            style="font-size: 15px; color: #000000; font-weight: 600;">Additional amount
+                                            accepted</td>
+                                          <td align="right" class="text-black bd-amt"
+                                            style="font-size: 15px; font-weight: 700; color: #000000;">$
+                                            {{additional_amount}}</td>
+                                        </tr>
+                                      </table>
+                                      <div class="note-text bd-note"
+                                        style="font-size: 14px; line-height: 1.6; color: #5A5A5A; padding-top: 12px;">
+                                        {{payment_note}}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                            {{/if}}
+
+                            <!-- Dynamic Block B: Partial Installment Track Details -->
+                            {{#if is_partial_payment}}
+                            <tr>
+                              <td style="padding: 14px 0 0;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                                  <tr>
+                                    <td class="payment-label-dim bd-line bd-label bd-row"
+                                      style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">
+                                      Previously Paid</td>
+                                    <td align="right" class="text-black bd-line bd-amt bd-row"
+                                      style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">
+                                      $ {{previously_paid_amount}}</td>
+                                  </tr>
+                                  <tr>
+                                    <td class="payment-label-dim bd-line bd-label bd-row"
+                                      style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">
+                                      Quote Total</td>
+                                    <td align="right" class="text-black bd-line bd-amt bd-row"
+                                      style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">
+                                      $ {{revised_total}}</td>
+                                  </tr>
+                                  <tr>
+                                    <td class="payment-label-dim bd-line bd-label bd-row"
+                                      style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">
+                                      Remaining Amount Accepted</td>
+                                    <td align="right" class="text-black bd-line bd-amt bd-row"
+                                      style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">
+                                      $ {{proposal_amount}}</td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                            {{/if}}
+
+                            <!-- Dynamic Block C: Budget Variance Markdown Reduction -->
+                            {{#if is_reduced_payment}}
+                            <tr>
+                              <td class="breakdown-top" style="padding: 18px 0 0;">
+                                <table class="amount-breakdown" role="presentation" width="100%" cellpadding="0"
+                                  cellspacing="0" border="0" bgcolor="#FFF8ED"
+                                  style="background-color: #FFF8ED; border-radius: 22px;">
+                                  <tr>
+                                    <td class="breakdown-pad" style="padding: 18px 22px;">
+                                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                                        border="0">
+                                        <tr>
+                                          <td class="secondary-text bd-label"
+                                            style="font-size: 15px; color: #707070; padding: 0 0 8px;">Previously paid
+                                          </td>
+                                          <td align="right" class="text-black bd-amt"
+                                            style="font-size: 15px; font-weight: 600; color: #000000; padding: 0 0 8px;">
+                                            $
+                                            {{previously_paid_amount}}</td>
+                                        </tr>
+                                        <tr>
+                                          <td class="secondary-text bd-label"
+                                            style="font-size: 15px; color: #707070; padding: 0 0 8px;">Revised quote
+                                            total
+                                          </td>
+                                          <td align="right" class="text-black bd-amt"
+                                            style="font-size: 15px; font-weight: 600; color: #000000; padding: 0 0 8px;">
+                                            $
+                                            {{revised_total}}</td>
+                                        </tr>
+                                        <tr>
+                                          <td class="text-black bd-label"
+                                            style="font-size: 15px; color: #000000; font-weight: 600;">Reduction
+                                            recorded
+                                          </td>
+                                          <td align="right" class="text-black bd-amt"
+                                            style="font-size: 15px; font-weight: 700; color: #000000;">$
+                                            {{reduced_amount}}</td>
+                                        </tr>
+                                      </table>
+                                      <div class="note-text bd-note"
+                                        style="font-size: 14px; line-height: 1.6; color: #5A5A5A; padding-top: 12px;">
+                                        {{payment_note}}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                            {{/if}}
                           </table>
                         </td>
                       </tr>
-                      {{/if}}
                     </table>
                   </td>
                 </tr>
-              </table>
-            </td>
-          </tr>
 
-          <!-- Milestone Next Steps Checklist Banner -->
-          <tr>
-            <td style="padding: 34px 40px 0;">
-              <table class="next-steps-banner" width="100%" cellpadding="0" cellspacing="0"
-                style="background: linear-gradient(90deg, #FFF3DE 0%, #F6E3C1 100%); border-radius: 30px;">
+                <!-- Milestone Next Steps Checklist Banner -->
                 <tr>
-                  <td style="padding: 28px 28px 24px;">
-                    <div
-                      style="font-size: 28px; font-style: italic; font-weight: 600; color: #000000; padding-bottom: 14px;">
-                      What Happens Next
+                  <td class="sec-banner" style="padding: 34px 40px 0;">
+                    <!-- SOLID base + gradient overlay. Over #FFF3DE the overlay equals
+                         linear-gradient(90deg, #FFF3DE 0%, #F6E3C1 100%) -->
+                    <table class="next-steps-banner" role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                      border="0" bgcolor="#FFF3DE"
+                      style="background-color: #FFF3DE; border-radius: 30px; overflow: hidden; border-collapse: separate;">
+                      <tr>
+                        <td class="banner-overlay"
+                          style="padding: 0; background-image: linear-gradient(90deg, rgba(219,179,106,0) 0%, rgba(219,179,106,0.25) 100%);">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                              <td class="banner-pad" style="padding: 28px 28px 24px;">
+                                <div class="text-black banner-title"
+                                  style="font-size: 28px; font-style: italic; font-weight: 600; color: #000000; padding-bottom: 14px;">
+                                  What Happens Next
+                                </div>
+                                <ul class="note-text banner-list"
+                                  style="margin: 0; padding-left: 22px; color: #5A5A5A; font-size: 17px; line-height: 1.9;">
+                                  <li>Your sales team will send the invoice shortly.</li>
+                                  <li>We'll guide you through the next production and booking steps.</li>
+                                  <li>If we need anything else, our team will reach out directly.</li>
+                                </ul>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- Signature Segment Layer -->
+                <tr>
+                  <td class="sec-signature" style="padding: 38px 40px 0;">
+                    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                      <tr>
+                        <td class="signature-cell" style="white-space: nowrap; padding-right: 15px;">
+                          <span class="text-black signature"
+                            style="font-family: sans-serif; font-size: 28px; font-weight: 800; font-style: italic; color: #000000; line-height: 1;">
+                            The Beige Team
+                          </span>
+                        </td>
+                        <td width="100%" style="vertical-align: middle;">
+                          <div
+                            style="border-top: 1px solid #BDBDBD; font-size: 0; line-height: 0; width: 100%; height: 0;">
+                            &nbsp;</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- Help Desk Support Layer -->
+                <tr>
+                  <td class="sec-help" align="center" style="padding: 52px 40px 0;">
+                    <div class="sep-gap" style="padding-bottom: 48px;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
                     </div>
-                    <ul class="note-text"
-                      style="margin: 0; padding-left: 22px; color: #5A5A5A; font-size: 17px; line-height: 1.9;">
-                      <li>Your sales team will send the invoice shortly.</li>
-                      <li>We'll guide you through the next production and booking steps.</li>
-                      <li>If we need anything else, our team will reach out directly.</li>
-                    </ul>
+                    <p class="meta-text meta-small"
+                      style="margin: 0 0 20px; font-size: 16px; font-weight: 400; color: #3C3B3B;">
+                      This is an automated email from BeigeAI. Please do not reply to this email.
+                    </p>
+                    <p class="text-black help-title"
+                      style="margin: 0 0 10px; color: #000000; font-size: 26px; font-weight: 600;">
+                      Need Help?</p>
+                    <a href="mailto:sales@beigecorporation.io" target="_blank" class="text-black help-link"
+                      style="display:block; margin: 0; color: #000000; font-size: 26px; font-weight: 600;">sales@beigecorporation.io</a>
                   </td>
                 </tr>
-              </table>
-            </td>
-          </tr>
 
-          <!-- Signature Segment Layer -->
-          <tr>
-            <td style="padding: 38px 40px 0;">
-              <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                <!-- Legal & Brand Footer -->
                 <tr>
-                  <td style="white-space: nowrap; padding-right: 15px;">
-                    <span
-                      style="font-family: sans-serif; font-size: 28px; font-weight: 800; font-style: italic; color: #000000; line-height: 1;">
-                      The Beige Team
-                    </span>
-                  </td>
-                  <td width="100%" style="vertical-align: middle;">
-                    <div style="border-top: 1px solid #BDBDBD; font-size: 0; line-height: 0; width: 100%; height: 0;">
-                      &nbsp;</div>
+                  <td class="sec-legal" align="center" style="padding: 40px 40px 60px;">
+                    <div class="sep-gap" style="padding-bottom: 48px;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+                    <p class="meta-text meta-small legal-links" style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
+                      Help Center &nbsp; &bull; &nbsp; Terms of Services &nbsp; &bull; &nbsp; Privacy Policy
+                    </p>
+                    <p class="text-black brand-name"
+                      style="margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600;">
+                      Beige AI
+                    </p>
+                    <div class="logo-pill"
+                      style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
+                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                        alt="Beige" width="110" style="display: block; border: 0; width: 110px; max-width: 110px;">
+                    </div>
                   </td>
                 </tr>
+
               </table>
-            </td>
-          </tr>
-
-          <!-- Help Desk Support Layer -->
-          <tr>
-            <td align="center" style="padding: 52px 40px 0;">
-              <div style="padding-bottom: 48px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-              <p class="meta-text" style="margin: 0 0 20px; font-size: 16px; font-weight: 400; color: #3C3B3B;">
-                This is an automated email from BeigeAI. Please do not reply to this email.
-              </p>
-              <p style="margin: 0 0 10px; color: #000000; font-size: 26px; font-weight: 600;">Need Help?</p>
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0; color: #000000; font-size: 26px; font-weight: 600;">
-                sales@beigecorporation.io
-              </a>
-            </td>
-          </tr>
-
-          <!-- Legal & Brand Footer -->
-          <tr>
-            <td align="center" style="padding: 40px 40px 60px;">
-              <div style="padding-bottom: 48px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-              <p class="meta-text" style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
-                Help Center &nbsp; &bull; &nbsp; Terms of Services &nbsp; &bull; &nbsp; Privacy Policy
-              </p>
-              <p style="margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600;">
-                Beige AI
-              </p>
-              <div class="logo-pill"
-                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
-                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                  alt="Beige" width="110" style="display: block; border: 0;">
-              </div>
             </td>
           </tr>
         </table>
+
+        <!--[if mso]>
+        </td></tr></table>
+        <![endif]-->
+
       </td>
     </tr>
   </table>

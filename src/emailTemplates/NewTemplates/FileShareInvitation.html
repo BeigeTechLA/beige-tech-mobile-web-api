@@ -4,15 +4,275 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- Force supporting clients to honor light mode layouts first -->
-  <meta name="color-scheme" content="light">
-  <meta name="supported-color-schemes" content="light">
-
+  <meta name="x-apple-disable-message-reformatting">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
+  <!-- Tells clients this email ships BOTH themes, so they apply our palettes instead of auto-inverting -->
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
   <title>Beige Shared Files</title>
-  <style>
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+  <![endif]-->
+
+  <!-- =====================================================================
+       RESPONSIVE BLOCK
+       Kept in its OWN <style> tag on purpose: Gmail discards an entire <style> block
+       if it dislikes any selector in it (e.g. the Outlook [data-ogsb] hooks below).
+       Isolating the media queries means the responsive rules survive even if the
+       theme block gets dropped.
+       ===================================================================== -->
+  <style type="text/css">
+    @media only screen and (max-width: 620px) {
+
+      /* ---- outer frame ---- */
+      .wrap-outer {
+        padding: 0 !important;
+      }
+
+      .main-card {
+        width: 100% !important;
+      }
+
+      /* ---- logo ---- */
+      .sec-logo {
+        padding: 28px 0 20px !important;
+      }
+
+      .sec-logo-sep {
+        padding: 20px 16px 0 !important;
+      }
+
+      /* ---- header ---- */
+      .sec-header {
+        padding: 0 16px !important;
+      }
+
+      .h1 {
+        font-size: 36px !important;
+        line-height: 1.1 !important;
+      }
+
+      /* ---- cream panel ---- */
+      .sec-panel {
+        padding: 24px 10px 0 !important;
+      }
+
+      .panel,
+      .panel-body {
+        border-radius: 0 0 22px 22px !important;
+      }
+
+      .scallop-cell {
+        width: 20px !important;
+      }
+
+      .scallop-bottom {
+        width: 14px !important;
+        height: 7px !important;
+        border-radius: 0 0 7px 7px !important;
+      }
+
+      .panel-body {
+        padding: 22px 14px 28px !important;
+      }
+
+      .hello {
+        font-size: 28px !important;
+        line-height: 34px !important;
+      }
+
+      .msg-text {
+        font-size: 16px !important;
+        line-height: 24px !important;
+      }
+
+      .link-text {
+        font-size: 15px !important;
+        line-height: 24px !important;
+      }
+
+      .grid {
+        margin-top: 22px !important;
+      }
+
+      .grid-l {
+        padding: 0 5px 10px 0 !important;
+      }
+
+      .grid-r {
+        padding: 0 0 10px 5px !important;
+      }
+
+      .grid-img {
+        height: 150px !important;
+      }
+
+      .grid-wide {
+        height: 180px !important;
+      }
+
+      .security-text {
+        margin-top: 20px !important;
+        font-size: 16px !important;
+        line-height: 24px !important;
+      }
+
+      .btn-wrap {
+        padding-top: 22px !important;
+      }
+
+      .btn {
+        padding: 14px 24px !important;
+        font-size: 15px !important;
+        line-height: 1.4 !important;
+      }
+
+      .br-desktop {
+        display: none !important;
+      }
+
+      /* ---- info boxes ---- */
+      .sec-info {
+        padding: 32px 10px 0 !important;
+      }
+
+      .info-sep {
+        padding: 0 14px 22px !important;
+      }
+
+      .info-pad {
+        padding: 14px 16px !important;
+      }
+
+      .info-text {
+        font-size: 16px !important;
+        line-height: 24px !important;
+      }
+
+      .info-gap {
+        height: 16px !important;
+      }
+
+      /* ---- sign-off ---- */
+      .sec-signoff {
+        padding-top: 28px !important;
+      }
+
+      .signoff-sep {
+        padding: 0 16px 24px !important;
+      }
+
+      .warmly {
+        margin-bottom: 20px !important;
+        font-size: 22px !important;
+      }
+
+      .team-cell {
+        width: auto !important;
+      }
+
+      .team-pill {
+        width: auto !important;
+      }
+
+      .team-pad {
+        padding: 10px 22px !important;
+      }
+
+      .team-name {
+        font-size: 22px !important;
+      }
+
+      .signoff-sep-2 {
+        padding: 28px 16px 0 !important;
+      }
+
+      /* ---- help + footer ---- */
+      .sec-help {
+        padding: 36px 16px 24px !important;
+      }
+
+      .footer-text {
+        font-size: 13px !important;
+        line-height: 20px !important;
+      }
+
+      .help-title {
+        margin-top: 14px !important;
+        font-size: 18px !important;
+        line-height: 26px !important;
+      }
+
+      .help-sep {
+        padding: 28px 0 0 !important;
+      }
+
+      .brand-name {
+        font-size: 20px !important;
+      }
+
+      .sec-footer-logo {
+        padding: 0 0 36px !important;
+      }
+    }
+
+    /* small phones (≤ 400px, e.g. 360px Androids, iPhone SE) */
+    @media only screen and (max-width: 400px) {
+      .h1 {
+        font-size: 32px !important;
+      }
+
+      .scallop-cell {
+        width: 18px !important;
+      }
+
+      .scallop-bottom {
+        width: 12px !important;
+        height: 6px !important;
+        border-radius: 0 0 6px 6px !important;
+      }
+
+      .grid-img {
+        height: 130px !important;
+      }
+
+      .grid-wide {
+        height: 160px !important;
+      }
+
+      .btn {
+        padding: 13px 18px !important;
+        font-size: 14px !important;
+      }
+
+      .team-name {
+        font-size: 20px !important;
+      }
+
+      .footer-text {
+        font-size: 12px !important;
+      }
+    }
+  </style>
+
+  <!-- THEME / RESET BLOCK -->
+  <style type="text/css">
     :root {
-      color-scheme: light !important;
-      supported-color-schemes: light !important;
+      color-scheme: light dark;
+      supported-color-schemes: light dark;
+    }
+
+    body,
+    table,
+    td,
+    p,
+    a,
+    h1,
+    h2,
+    div,
+    span {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
     }
 
     body,
@@ -31,361 +291,578 @@
 
     img {
       -ms-interpolation-mode: bicubic;
+      border: 0;
+      outline: none;
+      text-decoration: none;
     }
 
-    /* Prevent color inversions across aggressive clients (Apple Mail, Outlook Web, Gmail app) */
+    /* =====================================================================
+       THEMES
+       LIGHT = the inline styles in the markup (original colours).
+       DARK  = the palette below, declared twice because clients use different hooks:
+         1. @media (prefers-color-scheme: dark) -> Apple Mail, iOS Mail, Outlook.com /
+            new Outlook, Samsung Mail, Thunderbird, Yahoo, most webmail
+         2. [data-ogsb] / [data-ogsc]           -> Outlook desktop + Outlook iOS/Android
+         Gmail iOS/Android ignore both and force-invert INLINE colours only. So:
+           - the card gradient = SOLID inline base + LOW-ALPHA gradient overlay child
+           - info boxes = SOLID inline white base + LOW-ALPHA tint (an opaque cream-to-white
+             gradient would stay white in Gmail dark mode while the text turns white)
+           - scallops = table-cell half-discs (Gmail drops radial-gradient backgrounds)
+           - "black" elements use #000010, not #000000 (Gmail iOS flips pure black)
+
+       DARK PALETTE
+         page                #121212
+         card                #1C1B19 + warm overlay to #2B2517
+         cream panel         #2B2517
+         scallops            #1C1B19 (match the card)
+         info boxes          #26241F + faint gold tint
+         logo pills          #26241F
+         headings / links    #F5F1E8
+         body text           #D8D2C4
+         small print         #C9C3B6
+         sign-off rules      #5A5444
+         button + team pill  unchanged (#E8D1AB on #000010)
+       ===================================================================== */
+
+    /* 1 ---- standards-based dark mode ---- */
     @media (prefers-color-scheme: dark) {
 
       body,
-      table,
-      td,
-      h1,
-      h2,
-      p,
-      a,
-      div,
-      span {
-        color-scheme: light !important;
+      .body-bg {
+        background-color: #121212 !important;
+        color: #D8D2C4 !important;
       }
 
-      .force-light-bg {
-        background-color: #F7F7F7 !important;
-        background: #F7F7F7 !important;
+      .main-card {
+        background-color: #1C1B19 !important;
       }
 
-      .force-card-gradient {
-        background: linear-gradient(145deg, #FFFCF6 12%, #FEF0D8 122%) !important;
+      .card-overlay {
+        background-image: linear-gradient(145deg, rgba(43, 37, 23, 0) 12%, rgba(43, 37, 23, 1) 122%) !important;
       }
 
-      .force-white-bg {
-        background-color: #FFFFFF !important;
-        background: #FFFFFF !important;
+      .panel,
+      .panel td.panel-fill {
+        background-color: #2B2517 !important;
       }
 
-      .force-cream-bg {
-        background-color: #FEF0D8 !important;
-        background: #FEF0D8 !important;
+      .scallop-bottom {
+        background-color: #1C1B19 !important;
+      }
+
+      .info-box,
+      .logo-pill {
+        background-color: #26241F !important;
+      }
+
+      .info-pad {
+        background-image: linear-gradient(90deg, rgba(232, 209, 171, 0.10) 0%, rgba(232, 209, 171, 0) 58%) !important;
+      }
+
+      .rule {
+        border-top-color: #5A5444 !important;
+      }
+
+      .text-black {
+        color: #F5F1E8 !important;
+      }
+
+      .text-default {
+        color: #D8D2C4 !important;
+      }
+
+      .footer-text {
+        color: #C9C3B6 !important;
       }
 
       .force-black-bg {
-        background-color: #000000 !important;
-        background: #000000 !important;
-      }
-
-      .force-info-gradient {
-        background: linear-gradient(90deg, #FFF1D9 0%, #FFFFFF 58%, #FFFFFF 100%) !important;
-        background-color: #FFFFFF !important;
-      }
-
-      .force-black-text {
-        color: #000000 !important;
-      }
-
-      .force-muted-text {
-        color: rgba(0, 0, 0, 0.80) !important;
-      }
-
-      .force-dark-gray-text {
-        color: #3C3B3B !important;
+        background-color: #000010 !important;
       }
 
       .force-accent-text {
         color: #E8D1AB !important;
       }
     }
+
+    /* 2 ---- Outlook (desktop + mobile + Outlook.com) ---- */
+    [data-ogsb] body,
+    [data-ogsb] .body-bg {
+      background-color: #121212 !important;
+    }
+
+    [data-ogsc] body,
+    [data-ogsc] .body-bg {
+      color: #D8D2C4 !important;
+    }
+
+    [data-ogsb] .main-card {
+      background-color: #1C1B19 !important;
+    }
+
+    [data-ogsb] .card-overlay {
+      background-image: linear-gradient(145deg, rgba(43, 37, 23, 0) 12%, rgba(43, 37, 23, 1) 122%) !important;
+    }
+
+    [data-ogsb] .panel,
+    [data-ogsb] .panel td.panel-fill {
+      background-color: #2B2517 !important;
+    }
+
+    [data-ogsb] .scallop-bottom {
+      background-color: #1C1B19 !important;
+    }
+
+    [data-ogsb] .info-box,
+    [data-ogsb] .logo-pill {
+      background-color: #26241F !important;
+    }
+
+    [data-ogsb] .info-pad {
+      background-image: linear-gradient(90deg, rgba(232, 209, 171, 0.10) 0%, rgba(232, 209, 171, 0) 58%) !important;
+    }
+
+    [data-ogsb] .rule {
+      border-top-color: #5A5444 !important;
+    }
+
+    [data-ogsc] .text-black {
+      color: #F5F1E8 !important;
+    }
+
+    [data-ogsc] .text-default {
+      color: #D8D2C4 !important;
+    }
+
+    [data-ogsc] .footer-text {
+      color: #C9C3B6 !important;
+    }
+
+    [data-ogsb] .force-black-bg {
+      background-color: #000010 !important;
+    }
+
+    [data-ogsc] .force-accent-text {
+      color: #E8D1AB !important;
+    }
   </style>
 </head>
 
-<body class="force-light-bg"
-  style="margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; background-color:#F7F7F7; color:#000000; color-scheme: light;">
-  <table class="force-light-bg" width="100%" cellpadding="0" cellspacing="0"
-    style="background-color:#F7F7F7; padding:0;">
+<body class="body-bg"
+  style="margin: 0; padding: 0; width: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #000000;">
+  <table class="body-bg" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F7F7F7"
+    style="background-color: #F7F7F7;">
     <tr>
-      <td align="center" class="force-light-bg">
-        <table class="force-card-gradient" width="600" cellpadding="0" cellspacing="0"
-          style="width:600px; max-width:600px; background:linear-gradient(145deg,#FFFCF6 12%,#FEF0D8 122%); border:1px solid rgba(232,209,171,0.30); box-shadow:0 10px 30px rgba(0,0,0,0.05);">
+      <td class="wrap-outer" align="center" style="padding: 0;">
 
+        <!-- Outlook (Windows) ignores max-width; this ghost table caps it at 600px -->
+        <!--[if mso]>
+        <table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td>
+        <![endif]-->
+
+        <!-- LAYER 1: solid card colour (what Gmail/Outlook invert or override) -->
+        <table class="main-card" role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+          bgcolor="#FFFCF6"
+          style="width: 100%; max-width: 600px; background-color: #FFFCF6; border: 1px solid rgba(232,209,171,0.30); box-shadow: 0 10px 30px rgba(0,0,0,0.05); border-collapse: separate;">
           <tr>
-            <td align="center" style="padding:34px 0 24px;">
-              <table cellpadding="0" cellspacing="0" class="force-white-bg"
-                style="background-color:#FFFFFF; border-radius:100px; box-shadow:0 8px 18px rgba(0,0,0,0.10);">
+            <!-- LAYER 2: the gradient, as a transparent->cream overlay. Over #FFFCF6 this is identical to
+                 linear-gradient(145deg, #FFFCF6 12%, #FEF0D8 122%) -->
+            <td class="card-overlay"
+              style="padding: 0; background-image: linear-gradient(145deg, rgba(254,240,216,0) 12%, rgba(254,240,216,1) 122%);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+
+                <!-- Logo -->
                 <tr>
-                  <td align="center" style="padding:10px 29px;">
-                    <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                      alt="Beige" width="72" style="display:block; border:0;">
-                  </td>
-                </tr>
-              </table>
-              <div style="padding:24px 40px 0;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="" width="100%" style="display:block; border:0;">
-              </div>
-            </td>
-          </tr>
-
-          <tr>
-            <td align="center" style="padding:0 38px;">
-              <h1 class="force-black-text"
-                style="margin:0; color:#000000; font-size:64px; line-height:1; font-weight:500; text-align:center;">
-                Beige Shared Files<br>With You
-              </h1>
-            </td>
-          </tr>
-
-          <tr>
-            <td align="center" style="padding:30px 18px 0;">
-              <table class="force-cream-bg" width="100%" cellpadding="0" cellspacing="0"
-                style="background-color:#FEF0D8; border-radius:0 0 30px 30px;">
-
-                <!-- Top scallop pattern -->
-                <tr>
-                  <td class="force-cream-bg" height="18"
-                    style="height:18px; line-height:18px; font-size:0; background-color:#FEF0D8; background-image:radial-gradient(circle at 10px -3px,#FFFCF6 11px,transparent 12px); background-size:34px 18px; background-repeat:repeat-x;">
-                    &nbsp;
-                  </td>
-                </tr>
-
-                <tr>
-                  <td align="center" style="padding:27px 20px 28px;">
-                    <h2 class="force-black-text"
-                      style="margin:0; font-size:35px; line-height:42px; font-weight:700; color:#000000;">
-                      Hello
-                    </h2>
-
-                    <p class="force-muted-text"
-                      style="margin:15px 0 0; font-size:20px; line-height:30px; font-weight:400; color:#000000CC;">
-                      {{sender_name}} has shared files with you via Beige.<br>
-                      You can securely access the shared files<br>
-                      using the link below:
-                    </p>
-
-                    <p class="force-muted-text"
-                      style="margin:17px 0 4px; font-size:20px; line-height:30px; font-weight:500; color:#000000CC;">
-                      Open Shared Files:
-                    </p>
-
-                    <p class="force-black-text"
-                      style="margin:0; font-size:19px; line-height:35px; font-style:italic; font-weight:600; color:#000000; word-break:break-all;">
-                      <a class="force-black-text" href="{{shared_files_url}}" target="_blank"
-                        style="color:#000000; text-decoration:underline;">
-                        {{shared_files_url}}
-                      </a>
-                    </p>
-
-                    <!-- Image grid -->
-                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:30px;">
+                  <td class="sec-logo" align="center" style="padding: 34px 0 24px;">
+                    <table class="logo-pill" role="presentation" cellpadding="0" cellspacing="0" border="0"
+                      bgcolor="#FFFFFF"
+                      style="background-color: #FFFFFF; border-radius: 100px; box-shadow: 0 8px 18px rgba(0,0,0,0.10); border-collapse: separate;">
                       <tr>
-                        <td width="50%" style="padding:0 8px 16px 0;">
+                        <td class="logo-pill" align="center" bgcolor="#FFFFFF"
+                          style="padding: 10px 29px; background-color: #FFFFFF; border-radius: 100px;">
                           <img
-                            src="https://d2jhn32fsulyac.cloudfront.net/assets/email_assets/file_share_preview_team_01.jpg"
-                            alt="Shared file preview" width="100%" height="252"
-                            style="display:block; width:100%; height:252px; object-fit:cover; border:0; border-radius:11px;">
+                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                            alt="Beige" width="72" style="display: block; border: 0; width: 72px; max-width: 72px;">
                         </td>
+                      </tr>
+                    </table>
+                    <div class="sec-logo-sep" style="padding: 24px 40px 0;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+                  </td>
+                </tr>
 
-                        <td width="50%" style="padding:0 0 16px 8px;">
-                          <img
-                            src="https://d2jhn32fsulyac.cloudfront.net/assets/email_assets/file_share_preview_portrait_01.png"
-                            alt="Shared file preview" width="100%" height="252"
-                            style="display:block; width:100%; height:252px; object-fit:cover; border:0; border-radius:11px;">
+                <!-- Header -->
+                <tr>
+                  <td class="sec-header" align="center" style="padding: 0 38px;">
+                    <h1 class="text-black h1"
+                      style="margin: 0; color: #000000; font-size: 64px; line-height: 1; font-weight: 500; text-align: center;">
+                      Beige Shared Files<br>With You
+                    </h1>
+                  </td>
+                </tr>
+
+                <!-- Cream panel -->
+                <tr>
+                  <td class="sec-panel" align="center" style="padding: 30px 18px 0;">
+                    <table class="panel" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                      bgcolor="#FEF0D8"
+                      style="background-color: #FEF0D8; border-radius: 0 0 30px 30px; border-collapse: separate;">
+
+                      <!-- Top scallop edge: card-coloured half-discs in table cells
+                           (the original radial-gradient background is dropped by Gmail) -->
+                      <tr>
+                        <td class="panel-fill" bgcolor="#FEF0D8"
+                          style="padding: 0; background-color: #FEF0D8; line-height: 0; font-size: 0;">
+                          <table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center"
+                            style="margin: 0 auto;">
+                            <tr>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                              <td class="scallop-cell" width="34" align="center"
+                                style="width: 34px; padding: 0; line-height: 0; font-size: 0;">
+                                <div class="scallop-bottom"
+                                  style="width: 22px; height: 11px; margin: 0 auto; background-color: #FFFCF6; border-radius: 0 0 11px 11px;">
+                                </div>
+                              </td>
+                            </tr>
+                          </table>
                         </td>
                       </tr>
 
                       <tr>
-                        <td colspan="2" style="padding:0;">
-                          <img
-                            src="https://d2jhn32fsulyac.cloudfront.net/assets/email_assets/file_share_preview_group_01.jpg"
-                            alt="Shared file preview" width="100%" height="290"
-                            style="display:block; width:100%; height:290px; object-fit:cover; border:0; border-radius:11px;">
+                        <td class="panel-fill panel-body" align="center" bgcolor="#FEF0D8"
+                          style="padding: 27px 20px 32px; background-color: #FEF0D8; border-radius: 0 0 30px 30px;">
+                          <h2 class="text-black hello"
+                            style="margin: 0; font-size: 35px; line-height: 42px; font-weight: 700; color: #000000;">
+                            Hello
+                          </h2>
+
+                          <p class="text-default msg-text"
+                            style="margin: 15px 0 0; font-size: 20px; line-height: 30px; font-weight: 400; color: #333231;">
+                            {{sender_name}} has shared files with you via Beige.<br class="br-desktop">
+                            You can securely access the shared files<br class="br-desktop">
+                            using the link below:
+                          </p>
+
+                          <p class="text-default msg-text"
+                            style="margin: 17px 0 4px; font-size: 20px; line-height: 30px; font-weight: 500; color: #333231;">
+                            Open Shared Files:
+                          </p>
+
+                          <p class="text-black link-text"
+                            style="margin: 0; font-size: 19px; line-height: 35px; font-style: italic; font-weight: 600; color: #000000; word-break: break-all;">
+                            <a class="text-black" href="{{shared_files_url}}" target="_blank"
+                              style="color: #000000; text-decoration: underline;">{{shared_files_url}}</a>
+                          </p>
+
+                          <!-- Image grid -->
+                          <table class="grid" role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                            border="0" style="margin-top: 30px;">
+                            <tr>
+                              <td class="grid-l" width="50%" style="padding: 0 8px 16px 0;">
+                                <img class="grid-img"
+                                  src="https://d2jhn32fsulyac.cloudfront.net/assets/email_assets/file_share_preview_team_01.jpg"
+                                  alt="Shared file preview" width="254" height="252"
+                                  style="display: block; width: 100%; height: 252px; object-fit: cover; border: 0; border-radius: 11px;">
+                              </td>
+                              <td class="grid-r" width="50%" style="padding: 0 0 16px 8px;">
+                                <img class="grid-img"
+                                  src="https://d2jhn32fsulyac.cloudfront.net/assets/email_assets/file_share_preview_portrait_01.png"
+                                  alt="Shared file preview" width="254" height="252"
+                                  style="display: block; width: 100%; height: 252px; object-fit: cover; border: 0; border-radius: 11px;">
+                              </td>
+                            </tr>
+                            <tr>
+                              <td colspan="2" style="padding: 0;">
+                                <img class="grid-wide"
+                                  src="https://d2jhn32fsulyac.cloudfront.net/assets/email_assets/file_share_preview_group_01.jpg"
+                                  alt="Shared file preview" width="524" height="290"
+                                  style="display: block; width: 100%; height: 290px; object-fit: cover; border: 0; border-radius: 11px;">
+                              </td>
+                            </tr>
+                          </table>
+
+                          <p class="text-black security-text"
+                            style="margin: 25px 0 0; font-size: 20px; line-height: 29px; font-style: italic; font-weight: 600; color: #000000;">
+                            For security purposes, you&rsquo;ll be asked to<br class="br-desktop">
+                            verify your access using a one-time<br class="br-desktop">
+                            OTP sent to your email.
+                          </p>
+
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
+                            <tr>
+                              <td class="btn-wrap" align="center" style="padding: 30px 0 0;">
+                                <a class="force-black-bg force-accent-text btn" href="{{shared_files_url}}"
+                                  target="_blank"
+                                  style="display: inline-block; padding: 22px 55px; border-radius: 999px; background-color: #000010; box-shadow: 0 8px 16px rgba(0,0,0,0.16); color: #E8D1AB; text-decoration: none; font-size: 18px; line-height: 1.7; font-weight: 600; text-transform: uppercase; white-space: nowrap;">
+                                  Verify &amp; Access Files &rarr;
+                                </a>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- Info boxes -->
+                <tr>
+                  <td class="sec-info" style="padding: 42px 18px 0;">
+                    <div class="info-sep" style="padding: 0 24px 30px;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+                    <!-- Info box: SOLID inline white base + LOW-ALPHA cream tint (reproduces the original
+                         #FFF1D9 -> white fade, but Gmail dark mode darkens the base together with the text) -->
+                    <table class="info-box" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                      bgcolor="#FFFFFF"
+                      style="background-color: #FFFFFF; border-radius: 14px; box-shadow: 0 14px 30px rgba(155,112,55,0.18); border-collapse: separate;">
+                      <tr>
+                        <td class="info-pad" align="center"
+                          style="padding: 17px 20px; border-radius: 14px; background-image: linear-gradient(90deg, rgba(255,208,128,0.3) 0%, rgba(255,208,128,0) 58%);">
+                          <p class="text-default info-text"
+                            style="margin: 0; font-size: 20px; line-height: 29px; font-weight: 600; color: #4C4A47;">
+                            &#10003; Once verified, you&rsquo;ll be able to view and<br class="br-desktop">
+                            download the shared files.
+                          </p>
                         </td>
                       </tr>
                     </table>
 
-                    <p class="force-black-text"
-                      style="margin:25px 0 0; font-size:20px; line-height:29px; font-style:italic; font-weight:600; color:#000000;">
-                      For security purposes, you’ll be asked to<br>
-                      verify your access using a one-time<br>
-                      OTP sent to your email.
-                    </p>
-
-                    <table role="presentation" cellspacing="0" cellpadding="0" border="0"
-                      style="margin:auto; border-collapse:separate; border-spacing:0; padding:30px 0 0;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#000000" class="force-black-bg"
-                          style="border-radius:999px; box-shadow:0 8px 16px rgba(0,0,0,0.16); background-color:#000000;">
-                          <a class="force-accent-text" href="{{shared_files_url}}"
-                            style="display:inline-block; padding:22px 55px; color:#E8D1AB; text-decoration:none; font-size:18px; line-height:1.7; font-weight:600; text-transform:uppercase;">
-                            Verify & Access Files &rarr;
-                          </a>
+                        <td class="info-gap" height="24" style="height: 24px; line-height: 24px; font-size: 0;">&nbsp;
                         </td>
                       </tr>
                     </table>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <tr>
-            <td style="padding:42px 18px 0;">
-              <!-- Horizontal separator -->
-              <div style="padding:0 24px 30px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="" width="100%" style="display:block; border:0;">
-              </div>
-
-              <!-- Info box 1 -->
-              <table class="force-info-gradient" width="100%" cellpadding="0" cellspacing="0"
-                style="background-color:#FFFFFF; background:linear-gradient(90deg, #FFF1D9 0%, #FFFFFF 58%, #FFFFFF 100%); border-radius:14px; box-shadow:0 14px 30px rgba(155,112,55,0.18);">
-                <tr>
-                  <td align="center" style="padding:17px 20px;">
-                    <p class="force-muted-text"
-                      style="margin:0; font-size:20px; line-height:29px; font-weight:600; color:#000000B2;">
-                      ✓ Once verified, you’ll be able to view and<br>
-                      download the shared files.
-                    </p>
-                  </td>
-                </tr>
-              </table>
-
-              <table width="100%" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td height="24" style="height:24px; line-height:24px; font-size:0;">
-                    &nbsp;
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Info box 2 -->
-              <table class="force-info-gradient" width="100%" cellpadding="0" cellspacing="0"
-                style="background-color:#FFFFFF; background:linear-gradient(90deg, #FFF1D9 0%, #FFFFFF 58%, #FFFFFF 100%); border-radius:14px; box-shadow:0 14px 30px rgba(155,112,55,0.18);">
-                <tr>
-                  <td align="center" style="padding:17px 20px;">
-                    <p class="force-muted-text"
-                      style="margin:0; font-size:20px; line-height:29px; font-weight:600; color:#000000B2;">
-                      ✓ If you weren’t expecting this share, you can<br>
-                      safely ignore this email.
-                    </p>
-                  </td>
-                </tr>
-              </table>
-
-            </td>
-          </tr>
-
-          <tr>
-            <td align="center" style="padding:34px 0 0; text-align:center;">
-              <!-- Horizontal separator above Warmly -->
-              <div style="padding:0 42px 32px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="" width="100%" style="display:block; border:0;">
-              </div>
-
-              <p class="force-black-text"
-                style="margin:0 0 30px; font-size:27px; line-height:normal; font-weight:700; color:#000000;">
-                Warmly,
-              </p>
-
-              <!-- Beige Team pill with side lines -->
-              <table border="0" cellpadding="0" cellspacing="0" width="100%" align="center">
-                <tr>
-                  <!-- Left line -->
-                  <td valign="middle" style="padding:0;">
-                    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                    <!-- Info box: SOLID inline white base + LOW-ALPHA cream tint (reproduces the original
+                         #FFF1D9 -> white fade, but Gmail dark mode darkens the base together with the text) -->
+                    <table class="info-box" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                      bgcolor="#FFFFFF"
+                      style="background-color: #FFFFFF; border-radius: 14px; box-shadow: 0 14px 30px rgba(155,112,55,0.18); border-collapse: separate;">
                       <tr>
-                        <td style="border-top:1px solid #000000; font-size:0; line-height:0;">
-                          &nbsp;
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-
-                  <!-- Beige Team pill -->
-                  <td align="center" valign="middle" width="394" style="padding:0;">
-                    <table class="force-black-bg" border="0" cellpadding="0" cellspacing="0" align="center"
-                      style="background-color:#000000; border-radius:100px; width:394px;">
-                      <tr>
-                        <td align="center" valign="middle" style="padding:10px 24px;">
-                          <p class="force-accent-text"
-                            style="margin:0; color:#E8D1AB; font-size:32px; line-height:normal; font-weight:700; white-space:nowrap;">
-                            The Beige Team
+                        <td class="info-pad" align="center"
+                          style="padding: 17px 20px; border-radius: 14px; background-image: linear-gradient(90deg, rgba(255,208,128,0.3) 0%, rgba(255,208,128,0) 58%);">
+                          <p class="text-default info-text"
+                            style="margin: 0; font-size: 20px; line-height: 29px; font-weight: 600; color: #4C4A47;">
+                            &#10003; If you weren&rsquo;t expecting this share, you can<br class="br-desktop">
+                            safely ignore this email.
                           </p>
                         </td>
                       </tr>
                     </table>
                   </td>
+                </tr>
 
-                  <!-- Right line -->
-                  <td valign="middle" style="padding:0;">
-                    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                <!-- Sign-off -->
+                <tr>
+                  <td class="sec-signoff" align="center" style="padding: 34px 0 0; text-align: center;">
+                    <div class="signoff-sep" style="padding: 0 42px 32px;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+
+                    <p class="text-black warmly"
+                      style="margin: 0 0 30px; font-size: 27px; line-height: normal; font-weight: 700; color: #000000;">
+                      Warmly,
+                    </p>
+
+                    <!-- Beige Team pill with side rules (rule | pill | rule) -->
+                    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" align="center">
                       <tr>
-                        <td style="border-top:1px solid #000000; font-size:0; line-height:0;">
-                          &nbsp;
+                        <td class="rule-cell" width="50%" valign="middle" style="padding: 0;">
+                          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                            <tr>
+                              <td class="rule" style="border-top: 1px solid #000010; font-size: 0; line-height: 0;">
+                                &nbsp;</td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td class="team-cell" align="center" valign="middle" width="394"
+                          style="padding: 0; white-space: nowrap;">
+                          <table class="force-black-bg team-pill" role="presentation" border="0" cellpadding="0"
+                            cellspacing="0" align="center" bgcolor="#000010"
+                            style="background-color: #000010; border-radius: 100px; width: 394px; border-collapse: separate;">
+                            <tr>
+                              <td class="force-black-bg team-pad" align="center" valign="middle" bgcolor="#000010"
+                                style="padding: 10px 24px; background-color: #000010; border-radius: 100px;">
+                                <p class="force-accent-text team-name"
+                                  style="margin: 0; color: #E8D1AB; font-size: 32px; line-height: normal; font-weight: 700; white-space: nowrap;">
+                                  The Beige Team
+                                </p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td class="rule-cell" width="50%" valign="middle" style="padding: 0;">
+                          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                            <tr>
+                              <td class="rule" style="border-top: 1px solid #000010; font-size: 0; line-height: 0;">
+                                &nbsp;</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                    <div class="signoff-sep-2" style="padding: 34px 36px 0;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+                  </td>
+                </tr>
+
+                <!-- Help + footer -->
+                <tr>
+                  <td class="sec-help" align="center" style="padding: 46px 42px 30px;">
+                    <p class="footer-text" style="margin: 0; font-size: 16px; line-height: normal; color: #3C3B3B;">
+                      This is an automated email from BeigeAI. Please do not reply to this email.
+                    </p>
+
+                    <p class="text-black help-title"
+                      style="margin: 18px 0 0; font-size: 22px; line-height: normal; font-weight: 600; color: #000000;">
+                      Need Help?<br>
+                      <a class="text-black" href="mailto:sales@beigecorporation.io" target="_blank"
+                        style="color: #000000; text-decoration: underline; word-break: break-all;">sales@beigecorporation.io</a>
+                    </p>
+
+                    <div class="help-sep" style="padding: 38px 40px 0;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+
+                    <p class="footer-text"
+                      style="margin: 30px 0 0; font-size: 16px; line-height: normal; color: #3C3B3B;">
+                      Help Center &nbsp;&bull;&nbsp; Term of Services &nbsp;&bull;&nbsp; Privacy Policy
+                    </p>
+
+                    <p class="text-black brand-name"
+                      style="margin: 10px 0 0; font-size: 26px; line-height: normal; font-weight: 600; color: #000000;">
+                      Beige AI
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="sec-footer-logo" align="center" style="padding: 0 0 50px;">
+                    <table class="logo-pill" role="presentation" cellpadding="0" cellspacing="0" border="0"
+                      bgcolor="#FFFFFF"
+                      style="background-color: #FFFFFF; border-radius: 100px; box-shadow: 0 8px 20px rgba(0,0,0,0.10); border-collapse: separate;">
+                      <tr>
+                        <td class="logo-pill" align="center" bgcolor="#FFFFFF"
+                          style="padding: 12px 34px; background-color: #FFFFFF; border-radius: 100px;">
+                          <img
+                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                            alt="Beige" width="92" style="display: block; border: 0; width: 92px; max-width: 92px;">
                         </td>
                       </tr>
                     </table>
                   </td>
                 </tr>
-              </table>
-              <div style="padding:34px 36px 0;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="" width="100%" style="display:block; border:0;">
-              </div>
 
-            </td>
-          </tr>
-
-          <tr>
-            <td align="center" style="padding:46px 42px 30px;">
-              <p class="force-dark-gray-text" style="margin:0; font-size:16px; line-height:normal; color:#3C3B3B;">
-                This is an automated email from BeigeAI. Please do not reply to this email.
-              </p>
-
-              <p class="force-black-text"
-                style="margin:18px 0 0; font-size:22px; line-height:normal; font-weight:600; color:#000000;">
-                Need Help?<br>
-                <a class="force-black-text" href="mailto:sales@beigecorporation.io" target="_blank"
-                  style="color:#000000; text-decoration:underline;">
-                  sales@beigecorporation.io
-                </a>
-              </p>
-
-              <div style="padding:38px 40px 0;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="" width="100%" style="display:block; border:0;">
-              </div>
-
-              <p class="force-dark-gray-text"
-                style="margin:30px 0 0; font-size:16px; line-height:normal; color:#3C3B3B;">
-                Help Center &nbsp;•&nbsp; Term of Services &nbsp;•&nbsp; Privacy Policy
-              </p>
-
-              <p class="force-black-text"
-                style="margin:10px 0 0; font-size:26px; line-height:normal; font-weight:600; color:#000000;">
-                Beige AI
-              </p>
-            </td>
-          </tr>
-
-          <tr>
-            <td align="center" style="padding:0 0 50px;">
-              <table class="force-white-bg" cellpadding="0" cellspacing="0"
-                style="background-color:#FFFFFF; border-radius:100px; box-shadow:0 8px 20px rgba(0,0,0,0.10);">
-                <tr>
-                  <td align="center" style="padding:12px 34px;">
-                    <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                      alt="Beige" width="92" style="display:block; border:0;">
-                  </td>
-                </tr>
               </table>
             </td>
           </tr>
-
         </table>
+
+        <!--[if mso]>
+        </td></tr></table>
+        <![endif]-->
+
       </td>
     </tr>
   </table>
