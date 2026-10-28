@@ -647,13 +647,36 @@ async function listDocuments(filters = {}, creatorId = null) {
   if (Number(filters.booking_id)) where.booking_id = Number(filters.booking_id);
   if (filters.status) where.status = filters.status;
   if (filters.booking_id) where.booking_id = Number(filters.booking_id);
+  if (filters.search) {
+    const search = `%${String(filters.search).trim()}%`;
+    where[Op.or] = [
+      { title: { [Op.like]: search } },
+      { snapshot_json: { [Op.like]: search } }
+    ];
+  }
   if (creatorId) {
     where.creator_id = Number(creatorId);
     // Drafts and cancelled versions have never been sent for CP review.
     where.status = filters.status && !['draft', 'cancelled'].includes(filters.status)
       ? filters.status : { [Op.notIn]: ['draft', 'cancelled'] };
   }
-  const rows = await db.agreement_documents.findAll({ where, order: [['created_at', 'DESC']], limit: Math.min(Number(filters.limit) || 50, 100) });
+  const limit = Math.min(Math.max(Number(filters.limit) || 50, 1), 100);
+  const page = Math.max(Number(filters.page) || 1, 1);
+  const query = { where, order: [['created_at', 'DESC'], ['agreement_document_id', 'DESC']] };
+  if (Number(filters.page) > 0) {
+    const { count, rows } = await db.agreement_documents.findAndCountAll({
+      ...query,
+      limit,
+      offset: (page - 1) * limit
+    });
+    return {
+      items: await Promise.all(rows.map(documentPayloadWithCreativePartner)),
+      total: count,
+      page,
+      limit
+    };
+  }
+  const rows = await db.agreement_documents.findAll({ ...query, limit });
   return Promise.all(rows.map(documentPayloadWithCreativePartner));
 }
 

@@ -12,6 +12,7 @@ const {
   sendTaskAssignmentEmail,
   sendCPNewBookingRequestEmail,
   sendPostProductionAssignmentEmail,
+  sendProducerAssignedEmail,
   sendOnboardingFormCriticalEmail,
   sendCreativePartnerProfileReminderEmail
 } = require('../utils/emailService');
@@ -67,6 +68,12 @@ const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beig
 
 const getFrontendBaseUrl = () =>
   String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+const formatShootEmailTime = (value) => {
+  if (!value) return 'TBD';
+  const parsed = moment(String(value), ['HH:mm:ss', 'HH:mm'], true);
+  return parsed.isValid() ? parsed.format('h:mm A') : String(value);
+};
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
@@ -12453,8 +12460,9 @@ exports.setShootProducer = async (req, res) => {
     const project = await stream_project_booking.findOne({ where: { stream_project_booking_id: projectId, is_active: 1 } });
     if (!project) return res.status(404).json({ success: false, message: 'Shoot not found' });
 
+    let producer = null;
     if (producerId !== null) {
-      const producer = await users.findOne({
+      producer = await users.findOne({
         where: { id: producerId, is_active: 1 },
         attributes: ['id', 'name', 'email'],
         include: [{ model: db.user_type, as: 'userType', attributes: ['user_role'], required: true,
@@ -12469,8 +12477,57 @@ exports.setShootProducer = async (req, res) => {
         return res.status(409).json({ success: false, message: 'This person is already on the post production team' });
       }
     }
+    const previousProducerId = project.producer_user_id == null ? null : Number(project.producer_user_id);
     await project.update({ producer_user_id: producerId });
-    return res.status(200).json({ success: true, data: { producer_user_id: producerId } });
+
+    let emailNotification = null;
+    if (producerId !== null && previousProducerId !== producerId) {
+      try {
+        const [client, crewAssignments] = await Promise.all([
+          project.user_id
+            ? clients.findOne({ where: { user_id: project.user_id }, attributes: ['name'] })
+            : null,
+          assigned_crew.findAll({
+            where: { project_id: projectId, is_active: 1 },
+            include: [{ model: crew_members, as: 'crew_member', required: false }]
+          })
+        ]);
+        const dateValue = project.event_date ? String(project.event_date).slice(0, 10) : '';
+        const dateMatch = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        const shootDate = dateMatch
+          ? new Date(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]))
+              .toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+          : (project.event_date ? moment(project.event_date).format('MMMM D, YYYY') : 'TBD');
+        const cpNames = crewAssignments
+          .map((assignment) => assignment.crew_member)
+          .filter(Boolean)
+          .map((member) => `${member.first_name || ''} ${member.last_name || ''}`.trim() || member.name)
+          .filter(Boolean);
+        const baseFrontendUrl = String(process.env.FRONTEND_URL || 'https://beige.app').trim().replace(/\/+$/, '');
+        emailNotification = await sendProducerAssignedEmail({
+          to_email: producer.email,
+          producer_name: producer.name,
+          project_name: project.project_name,
+          booking_id: projectId,
+          shoot_date: shootDate,
+          start_time: formatShootEmailTime(project.start_time),
+          end_time: formatShootEmailTime(project.end_time),
+          location: project.event_location || 'TBD',
+          client_name: client?.name || 'TBD',
+          cp_name: cpNames.join(', ') || 'TBD',
+          shoot_details_url: `${baseFrontendUrl}/admin/shoots/${projectId}`
+        });
+      } catch (emailError) {
+        console.error('Producer assignment saved, but email notification preparation failed:', emailError);
+        emailNotification = { success: false, error: 'Failed to prepare producer assignment email' };
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: { producer_user_id: producerId },
+      ...(emailNotification ? { email_notification: emailNotification } : {})
+    });
   } catch (error) {
     console.error('Set shoot producer failed:', error);
     return res.status(500).json({ success: false, message: 'Failed to update shoot producer' });

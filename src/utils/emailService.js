@@ -79,6 +79,7 @@ const {
   PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
   POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
   EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID,
+  PRODUCER_ASSIGNED_TEMPLATE_ID,
   OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
   FILE_SHARE_INVITATION_TEMPLATE_ID,
   BEIGE_CREDIT_RECEIVED_TEMPLATE_ID,
@@ -3023,6 +3024,52 @@ const sendPostProductionAssignmentEmail = async (data) => {
   }
 };
 
+const sendProducerAssignedEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+    if (!PRODUCER_ASSIGNED_TEMPLATE_ID) {
+      return { success: false, error: 'PRODUCER_ASSIGNED_TEMPLATE_ID is not configured' };
+    }
+
+    const to = String(data?.to_email || '').trim();
+    if (!to) return { success: false, error: 'Producer email is required' };
+
+    const fromEmail = getSendgridFromAddress();
+    if (!fromEmail) return { success: false, error: 'Sender email not configured' };
+
+    const baseFrontendUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+    const [response] = await sgMail.send({
+      to,
+      from: { email: fromEmail, name: getSendgridFromName() },
+      subject: `You've Been Assigned as Producer${data?.project_name ? ` - ${data.project_name}` : ''}`,
+      templateId: PRODUCER_ASSIGNED_TEMPLATE_ID,
+      dynamicTemplateData: {
+        producer_name: data?.producer_name || 'there',
+        project_name: data?.project_name || 'Shoot',
+        booking_id: data?.booking_id || '',
+        shoot_date: data?.shoot_date || 'TBD',
+        start_time: data?.start_time || 'TBD',
+        end_time: data?.end_time || 'TBD',
+        location: data?.location || 'TBD',
+        client_name: data?.client_name || 'TBD',
+        cp_name: data?.cp_name || 'TBD',
+        shoot_details_url: data?.shoot_details_url || `${baseFrontendUrl}/admin/shoots`,
+      }
+    });
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId: response?.headers?.['x-message-id'] || response?.headers?.['X-Message-Id'] || null
+    };
+  } catch (error) {
+    console.error('Error sending producer assignment email:', error?.response?.body || error.message);
+    return { success: false, error: error?.response?.body || error.message };
+  }
+};
+
 const sendProductionProposalEmail = async (data) => {
   try {
     const to = data?.to_email || data?.email;
@@ -4584,6 +4631,7 @@ module.exports = {
   sendCPPaymentCompletedEmail,
   sendCreativePartnerProfileReminderEmail,
   sendPostProductionAssignmentEmail,
+  sendProducerAssignedEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,
   sendCPSignupWelcomeEmail,
