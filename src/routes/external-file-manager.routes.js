@@ -89,6 +89,8 @@ router.get('/share/:shareToken/content', externalFileManagerController.getShared
 router.get('/share/:shareToken/view-url', externalFileManagerController.getSharedViewUrl);
 router.post('/share/:shareToken/view-urls', externalFileManagerController.getSharedViewUrlsBatch);
 router.get('/share/:shareToken/download-url', externalFileManagerController.getSharedDownloadUrl);
+router.post('/share/:shareToken/folder-download-url', externalFileManagerController.getSharedFolderDownloadUrl);
+router.get('/share/:shareToken/download-folder', externalFileManagerController.downloadSharedFolderZip);
 router.post('/share/:shareToken/upload-policy', externalFileManagerController.getSharedUploadPolicy);
 router.post('/share/:shareToken/upload-policies/batch', externalFileManagerController.getSharedUploadPoliciesBatch);
 router.post('/share/:shareToken/file-uploaded', externalFileManagerController.notifySharedFileUploaded);
