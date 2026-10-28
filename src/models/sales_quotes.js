@@ -182,6 +182,20 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 0.00
     },
+    sales_tax_rate: {
+      type: DataTypes.DECIMAL(5,2),
+      allowNull: false,
+      defaultValue: 0.00
+    },
+    card_payment_charge_enabled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true
+    },
+    card_payment_method: {
+      type: DataTypes.STRING(32),
+      allowNull: true
+    },
     subtotal: {
       type: DataTypes.DECIMAL(10,2),
       allowNull: false,
