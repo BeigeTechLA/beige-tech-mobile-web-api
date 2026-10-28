@@ -284,14 +284,15 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date(),
     const id = Number(row.creator_id);
     const current = overdueByCreator.get(id) || {
       id: String(id), name: creatorName(row.creator), roles: creatorRoleNames(row.creator.primary_role),
-      amount: 0, days_overdue: 0
+      amount: 0, days_overdue: 0, shoots: new Set()
     };
     current.amount += row.payable_amount;
+    current.shoots.add(Number(row.booking_id));
     current.days_overdue = Math.max(current.days_overdue, Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${row.due_date}T00:00:00Z`)) / 86400000));
     overdueByCreator.set(id, current);
   });
   const topOverdue = Array.from(overdueByCreator.values())
-    .map((row) => ({ ...row, amount: money(row.amount) }))
+    .map((row) => ({ ...row, amount: money(row.amount), shoots: row.shoots.size }))
     .sort((a, b) => b.amount - a.amount).slice(0, 100);
   const timeline = [
     { id: 'this_week', label: 'This Week', segments: { upcoming: 0, dueSoon: 0, later: 0, overdue: 0 } },
