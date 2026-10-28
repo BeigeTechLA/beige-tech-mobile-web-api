@@ -12342,6 +12342,82 @@ exports.getPostProductionTeamOptions = async (req, res) => {
       (user) => !assignedEmails.has(String(user.email || '').trim().toLowerCase())
     );
 
+    // ---- Open shoot count per post-production member ----
+    // Excludes deleted, cancelled, completed and assets-delivered shoots.
+    const emailToUserId = new Map(
+      availableUsers.map((user) => [String(user.email || '').trim().toLowerCase(), Number(user.id)])
+    );
+    const availableEmails = [...emailToUserId.keys()].filter(Boolean);
+    const availableUserIds = availableUsers.map((user) => Number(user.id));
+
+    // userId -> Set(projectId); a Set prevents double counting
+    const candidateProjectsByUser = new Map(availableUserIds.map((id) => [id, new Set()]));
+
+    if (availableEmails.length) {
+      const [memberAssignments, producerShoots] = await Promise.all([
+        assigned_post_production_member.findAll({
+          where: { is_active: 1 },
+          attributes: ['project_id'],
+          include: [{
+            model: post_production_members,
+            as: 'post_production_member',
+            attributes: ['email'],
+            required: true,
+            where: { email: { [Op.in]: availableEmails } }
+          }],
+          raw: true
+        }),
+        // Shoots where the user is the producer also count as their workload
+        stream_project_booking.findAll({
+          where: { producer_user_id: { [Op.in]: availableUserIds } },
+          attributes: ['stream_project_booking_id', 'producer_user_id'],
+          raw: true
+        })
+      ]);
+
+      memberAssignments.forEach((row) => {
+        const email = String(row['post_production_member.email'] || '').trim().toLowerCase();
+        const userId = emailToUserId.get(email);
+        if (userId) candidateProjectsByUser.get(userId).add(Number(row.project_id));
+      });
+
+      producerShoots.forEach((row) => {
+        const set = candidateProjectsByUser.get(Number(row.producer_user_id));
+        if (set) set.add(Number(row.stream_project_booking_id));
+      });
+    }
+
+    const allCandidateProjectIds = [
+      ...new Set([...candidateProjectsByUser.values()].flatMap((set) => [...set]))
+    ];
+
+    const openProjectIdSet = new Set();
+    if (allCandidateProjectIds.length) {
+      const openProjects = await stream_project_booking.findAll({
+        where: {
+          stream_project_booking_id: { [Op.in]: allCandidateProjectIds },
+          is_active: 1,                                  // not deleted
+          [Op.and]: [
+            // Only active post-production work: exclude completed/assets-delivered (4) and cancelled (5).
+            { [Op.or]: [{ status: { [Op.notIn]: [4, 5] } }, { status: { [Op.is]: null } }] },
+            { [Op.or]: [{ is_cancelled: 0 }, { is_cancelled: { [Op.is]: null } }] },
+            { [Op.or]: [{ is_completed: 0 }, { is_completed: { [Op.is]: null } }] }
+          ]
+        },
+        attributes: ['stream_project_booking_id'],
+        raw: true
+      });
+      openProjects.forEach((project) => openProjectIdSet.add(Number(project.stream_project_booking_id)));
+    }
+
+    const getOpenShootCount = (userId) => {
+      let count = 0;
+      (candidateProjectsByUser.get(Number(userId)) || new Set()).forEach((projectId) => {
+        if (openProjectIdSet.has(projectId)) count += 1;
+      });
+      return count;
+    };
+
     return res.status(200).json({
       success: true,
       data: availableUsers.map((user) => ({
@@ -12349,7 +12425,8 @@ exports.getPostProductionTeamOptions = async (req, res) => {
         name: user.name,
         email: user.email,
         role_name: roleNameById.get(Number(user.user_type)) || null,
-        is_active: user.is_active
+        is_active: user.is_active,
+        assigned_shoots_count: getOpenShootCount(user.id)
       }))
     });
   } catch (error) {
