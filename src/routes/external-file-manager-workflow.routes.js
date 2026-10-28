@@ -23,6 +23,7 @@ router.get('/workflow/:bookingId', authenticate, workflowView, controller.getWor
 router.put('/workflow/:bookingId/requirements', authenticate, workflowManage, controller.updateRequirements);
 router.post('/workflow/:bookingId/start-editing', authenticate, workflowManage, controller.startEditing);
 router.get('/workflow/:bookingId/progress', authenticate, workflowView, controller.getProgress);
+router.get('/workflow/:bookingId/activity', authenticate, workflowView, controller.getActivity);
 router.post('/workflow/:bookingId/submit-approval', authenticate, workflowManage, controller.submitApproval);
 router.post('/workflow/:bookingId/submit-revision', authenticate, workflowManage, controller.submitRevision);
 router.post('/workflow/:bookingId/complete', authenticate, workflowManage, controller.complete);

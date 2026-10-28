@@ -67,19 +67,37 @@ const getBooking = async (bookingId) => {
   return getPlain(booking);
 };
 
-const getEditor = (booking) => {
-  const assignment = (booking?.assigned_crews || []).find((item) => isEditorCrewMember(item?.crew_member));
-  const crew = assignment?.crew_member;
-  return crew ? {
-    id: crew.user_id || crew.crew_member_id || null,
-    name: fullName(crew) || crew.email || null,
-    email: crew.email || null,
-    editorType: 'editor',
-  } : null;
+const getEditorType = (workflowEditorType, crew) => {
+  const normalizedWorkflowEditorType = String(workflowEditorType || '').trim().toLowerCase();
+  if (['internal', 'external'].includes(normalizedWorkflowEditorType)) return normalizedWorkflowEditorType;
+  if (!crew) return null;
+  return Number(crew.is_beige_member) === 1 ? 'internal' : 'external';
+};
+
+const getEditors = (booking, workflowEditorType, requestUserId) => {
+  const editors = (booking?.assigned_crews || [])
+    .filter((item) => isEditorCrewMember(item?.crew_member))
+    .map((assignment) => {
+      const crew = assignment.crew_member;
+      return {
+        id: crew.user_id || crew.crew_member_id || null,
+        name: fullName(crew) || crew.email || null,
+        email: crew.email || null,
+        editorType: getEditorType(workflowEditorType, crew),
+      };
+    });
+
+  if (!requestUserId) return editors;
+  return editors.sort((left, right) => {
+    const leftIsRequester = String(left.id || '') === String(requestUserId);
+    const rightIsRequester = String(right.id || '') === String(requestUserId);
+    return Number(rightIsRequester) - Number(leftIsRequester);
+  });
 };
 
 const getWorkflowRequirements = (booking, workflowRequirements) => {
   const sqlBrief = booking.description || booking.special_instructions || '';
+  const workflowBrief = typeof workflowRequirements?.brief === 'string' ? workflowRequirements.brief.trim() : '';
   return {
     editingRequirements: '',
     requiredFormat: '',
@@ -88,12 +106,14 @@ const getWorkflowRequirements = (booking, workflowRequirements) => {
     brief: '',
     requiredCount: null,
     ...(workflowRequirements && typeof workflowRequirements === 'object' ? workflowRequirements : {}),
-    brief: sqlBrief || workflowRequirements?.brief || '',
+    brief: workflowBrief || sqlBrief,
   };
 };
 
-const getBookingEnrichment = (booking) => {
-  const editor = getEditor(booking);
+const getBookingEnrichment = (booking, workflow = {}, requestUserId = null) => {
+  const editors = getEditors(booking, workflow.editorType, requestUserId);
+  const editor = editors[0] || null;
+  const requirements = getWorkflowRequirements(booking, workflow.requirements);
   return {
     bookingId: booking.stream_project_booking_id,
     orderId: String(booking.stream_project_booking_id),
@@ -102,9 +122,10 @@ const getBookingEnrichment = (booking) => {
     serviceType: getServiceType(booking),
     producer: booking.user ? { id: booking.user.id, name: booking.user.name || booking.user.email, email: booking.user.email } : null,
     editor,
-    editorType: editor?.editorType || null,
-    dueDate: booking.estimated_delivery_date || null,
-    brief: booking.description || booking.special_instructions || null,
+    editors,
+    editorType: editor?.editorType || getEditorType(workflow.editorType, null),
+    dueDate: workflow.dueDate != null ? workflow.dueDate : booking.estimated_delivery_date || null,
+    brief: requirements.brief,
   };
 };
 
@@ -305,7 +326,9 @@ exports.listWorkflows = async (req, res) => {
         statusCounts,
         items: (upstream.data?.items || []).map((item) => ({
           ...item,
-          ...(bookingById.has(String(item.orderId)) ? getBookingEnrichment(bookingById.get(String(item.orderId))) : {}),
+          ...(bookingById.has(String(item.orderId))
+            ? getBookingEnrichment(bookingById.get(String(item.orderId)), item, getRequestUserId(req))
+            : {}),
         })),
       },
     });
@@ -317,12 +340,16 @@ exports.listWorkflows = async (req, res) => {
 exports.getWorkflow = (req, res) => proxyForBooking(req, res, async (booking) => {
   await ensureBookingAccess(req, booking);
   const upstream = await externalFileManager.proxyRequest(`/workflows/${encodeURIComponent(booking.stream_project_booking_id)}`);
+  const enrichment = getBookingEnrichment(booking, upstream.data || {}, getRequestUserId(req));
   return {
     ...upstream,
     data: {
       ...(upstream.data || {}),
-      ...getBookingEnrichment(booking),
-      requirements: getWorkflowRequirements(booking, upstream.data?.requirements),
+      ...enrichment,
+      requirements: {
+        ...getWorkflowRequirements(booking, upstream.data?.requirements),
+        brief: enrichment.brief,
+      },
     },
   };
 });
@@ -352,6 +379,30 @@ exports.getProgress = (req, res) => proxyForBooking(req, res, async (booking) =>
   await ensureBookingAccess(req, booking);
   const query = req.query.version ? `?version=${encodeURIComponent(String(req.query.version))}` : '';
   return externalFileManager.proxyRequest(`/workflows/${encodeURIComponent(booking.stream_project_booking_id)}/progress${query}`);
+});
+
+exports.getActivity = (req, res) => proxyForBooking(req, res, async (booking) => {
+  await ensureBookingAccess(req, booking);
+  const query = new URLSearchParams();
+  ['page', 'limit'].forEach((key) => {
+    if (req.query[key] != null && String(req.query[key]).trim()) query.set(key, String(req.query[key]));
+  });
+  const upstream = await externalFileManager.proxyRequest(
+    `/workflows/${encodeURIComponent(booking.stream_project_booking_id)}/activity${query.toString() ? `?${query.toString()}` : ''}`
+  );
+  return {
+    ...upstream,
+    data: {
+      items: (upstream.data?.items || []).map((item) => ({
+        action: item.action,
+        actorName: item.actorName,
+        fileCount: item.fileCount,
+        metadata: item.metadata,
+        createdAt: item.createdAt,
+      })),
+      pagination: upstream.data?.pagination,
+    },
+  };
 });
 
 const submitWorkflow = (path, type) => (req, res) => proxyForBooking(req, res, async (booking) => {
