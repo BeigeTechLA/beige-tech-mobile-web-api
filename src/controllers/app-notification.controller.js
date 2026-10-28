@@ -174,6 +174,27 @@ exports.markAllRead = async (req, res) => {
   }
 };
 
+exports.markReadByReference = async (req, res) => {
+  try {
+    const data = await appNotificationService.markReadByReference({
+      userId: getRequestUserId(req),
+      referenceType: req.body.reference_type,
+      referenceId: req.body.reference_id,
+      deliverySurface: 'web_app',
+      appUserType: getRequestUserType(req)
+    });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Related notifications marked as read.',
+      data
+    });
+  } catch (err) {
+    return handleError(res, err, 'markReadByReference');
+  }
+};
+
 exports.deleteNotification = async (req, res) => {
   try {
     const notificationId = toInt(req.params.id);
@@ -196,10 +217,34 @@ exports.deleteNotification = async (req, res) => {
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
-      message: 'Notification deleted.',
+      message: 'Notification archived.',
       data: null
     });
   } catch (err) {
     return handleError(res, err, 'deleteNotification');
+  }
+};
+
+exports.restoreNotification = async (req, res) => {
+  try {
+    const notificationId = toInt(req.params.id);
+    if (!notificationId) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true, code: constants.BAD_REQUEST.code, message: 'Invalid notification id.', data: null
+      });
+    }
+
+    await appNotificationService.restoreNotification({
+      userId: getRequestUserId(req),
+      notificationId,
+      deliverySurface: 'web_app',
+      appUserType: getRequestUserType(req)
+    });
+
+    return res.status(constants.OK.code).json({
+      error: false, code: constants.OK.code, message: 'Notification restored.', data: null
+    });
+  } catch (err) {
+    return handleError(res, err, 'restoreNotification');
   }
 };

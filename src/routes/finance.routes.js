@@ -21,6 +21,7 @@ const adminFinanceCreditPointsEdit = requireAnyPermission(['admin_finances_beige
 const adminFinanceCpCompensationView = requireAnyPermission(['admin_finances_cp_compensation.view'], adminFinancePermissionOptions);
 const adminFinanceCpCompensationCreate = requireAnyPermission(['admin_finances_cp_compensation.create'], adminFinancePermissionOptions);
 const adminFinanceCpCompensationEdit = requireAnyPermission(['admin_finances_cp_compensation.edit'], adminFinancePermissionOptions);
+const adminFinanceAnalyticsView = requireAnyPermission(['admin_finances_analytics.view'], adminFinancePermissionOptions);
 
 const disputeUploadDir = path.join(__dirname, '../../public/uploads/media');
 fs.mkdirSync(disputeUploadDir, { recursive: true });
@@ -56,6 +57,12 @@ const cpReceiptUpload = multer({
 });
 
 router.get('/transactions/export', authenticate, adminFinancesView, financeController.exportTransactions);
+router.get('/admin/analytics', authenticate, adminFinanceAnalyticsView, financeController.getAdminAnalytics);
+router.get('/admin/analytics/reconciliation/export', authenticate, adminFinanceAnalyticsView, financeController.exportAdminAnalyticsAudit);
+router.get('/admin/analytics/cp-payout-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminCpPayoutHistory);
+router.get('/admin/analytics/cp-overdue-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminCpOverdueHistory);
+router.get('/admin/analytics/payout-schedule-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminPayoutScheduleHistory);
+router.get('/admin/analytics/shoot-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminShootHistory);
 router.get('/transactions', authenticate, adminFinanceTransactionsView, financeController.listTransactions);
 router.get('/shoots', authenticate, adminFinanceTransactionsView, financeController.listShootBreakdowns);
 router.get('/shoots/:bookingId', authenticate, adminFinanceTransactionsView, financeController.getShootFinance);
@@ -93,6 +100,8 @@ router.get('/admin/credit-points/users/:userId', authenticate, adminFinanceCredi
 router.post('/admin/credit-points/manual', authenticate, adminFinanceCreditPointsCreate, financeController.createAdminManualCredit);
 router.get('/admin/credit-points/export', authenticate, adminFinanceCreditPointsView, financeController.listAdminCreditPointTransactions);
 router.get('/cp-compensation/pending-shoots', authenticate, adminFinanceCpCompensationView, cpCompensationController.listPendingShoots);
+router.get('/cp-compensation/overview', authenticate, adminFinanceCpCompensationView, cpCompensationController.overview);
+router.get('/cp-compensation/calendar', authenticate, adminFinanceCpCompensationView, cpCompensationController.calendar);
 router.get('/cp-compensation', authenticate, adminFinanceCpCompensationView, cpCompensationController.list);
 router.post('/cp-compensation/payment-proof', authenticate, adminFinanceCpCompensationCreate, cpReceiptUpload.single('proof_file'), cpCompensationController.uploadPaymentProof);
 router.patch('/cp-compensation/:bookingId/due-date', authenticate, adminFinanceCpCompensationEdit, cpCompensationController.updateDueDate);

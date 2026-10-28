@@ -70,3 +70,21 @@ exports.updateEmailPreferences = async (req, res) => {
     return handleError(res, err, 'updateEmailPreferences');
   }
 };
+
+exports.updateInboxPreferences = async (req, res) => {
+  try {
+    const data = await pushNotificationService.updateInboxNotificationPreferences({
+      userId: getRequestUserId(req),
+      mutedCategories: req.body.muted_categories,
+    });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Notification centre preferences updated successfully.',
+      data: { muted_categories: data.muted_categories },
+    });
+  } catch (err) {
+    return handleError(res, err, 'updateInboxPreferences');
+  }
+};

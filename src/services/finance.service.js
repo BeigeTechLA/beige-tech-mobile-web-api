@@ -240,6 +240,7 @@ async function syncCreatorEarningToWallet(earning, transaction = null) {
 }
 
 function normalizeStatus(paymentStatus, hasPayment) {
+  if (paymentStatus === 'partially_paid') return 'partially_paid';
   if (paymentStatus === 'succeeded' || paymentStatus === 'paid' || hasPayment) return 'paid';
   if (paymentStatus === 'failed') return 'failed';
   if (paymentStatus === 'refunded') return 'refunded';
@@ -719,18 +720,66 @@ async function loadBookingFinanceContext(bookingId, transaction = null) {
     throw error;
   }
 
-  const payment = booking.payment_id
+  const [cardPayment, client] = await Promise.all([
+    booking.payment_id
     ? await db.payment_transactions.findByPk(booking.payment_id, {
         include: [{ model: db.crew_members, as: 'creator', required: false }],
         transaction
       })
+    : Promise.resolve(null),
+    booking.user_id
+      ? db.users.unscoped().findByPk(booking.user_id, { attributes: ['id'], transaction })
+      : Promise.resolve(null)
+  ]);
+
+  // The booking payment transaction is not the whole payment picture.  Sales
+  // can record wire/Zelle/cash payments without creating a payment_id.  The
+  // booking summary is the canonical aggregate for those records; use it when
+  // producing finance rows so manual and card payments reconcile identically.
+  const [summaryRows, manualRows] = await Promise.all([
+    db.sequelize.query(
+      `SELECT paid_amount, credit_used_amount, due_amount, quote_total, payment_status, manual_payment_updated_at
+       FROM booking_payment_summary WHERE booking_id = :bookingId LIMIT 1`,
+      { replacements: { bookingId }, type: db.Sequelize.QueryTypes.SELECT, transaction }
+    ),
+    db.sequelize.query(
+      `SELECT COALESCE(SUM(amount), 0) AS paid_amount, MAX(updated_at) AS paid_at
+       FROM booking_manual_payments WHERE booking_id = :bookingId`,
+      { replacements: { bookingId }, type: db.Sequelize.QueryTypes.SELECT, transaction }
+    )
+  ]);
+  const summary = summaryRows[0] || null;
+  const manual = manualRows[0] || null;
+  const summaryPaidAmount = roundCurrency(Number(summary?.paid_amount || 0) + Number(summary?.credit_used_amount || 0));
+  const manualPaidAmount = roundCurrency(manual?.paid_amount || 0);
+  const cardPaymentPlain = toPlainRecord(cardPayment);
+  const cardPaidAmount = roundCurrency(cardPaymentPlain?.total_amount || 0);
+  const paidAmount = summaryPaidAmount > 0
+    ? summaryPaidAmount
+    : Math.max(manualPaidAmount, cardPaidAmount);
+  const summaryStatus = String(summary?.payment_status || '').toLowerCase();
+  let paymentStatus = cardPaymentPlain?.status || null;
+  if (['paid', 'partially_paid', 'failed', 'refunded'].includes(summaryStatus)) {
+    paymentStatus = summaryStatus;
+  } else if (summaryStatus === 'no_payment_due' || paidAmount > 0) {
+    paymentStatus = 'paid';
+  }
+  const payment = paidAmount > 0 || cardPaymentPlain
+    ? {
+        ...cardPaymentPlain,
+        total_amount: paidAmount,
+        quote_total: roundCurrency(summary?.quote_total || 0),
+        status: paymentStatus,
+        created_at: cardPaymentPlain?.created_at || manual?.paid_at || summary?.manual_payment_updated_at || null,
+        payment_source: cardPaymentPlain?.payment_source || (manualPaidAmount > 0 ? 'manual' : null)
+      }
     : null;
 
-  return { booking, payment };
+  return { booking, payment, paymentSummary: summary, clientUserId: client?.id || null };
 }
 
 async function ensurePaidBookingInvoiceHistory(booking, payment, transaction = null) {
-  if (!db.invoice_send_history || !booking || !payment) return null;
+  if (!db.invoice_send_history || !booking || !payment || normalizeStatus(payment.status, true) !== 'paid') return null;
 
   const bookingId = Number(booking.stream_project_booking_id);
   if (!bookingId) return null;
@@ -860,11 +909,14 @@ function calculateCreatorRows({ booking, payment, pricingSnapshot = null, financ
   });
 }
 
-function calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows }) {
+function calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows, clientUserId = null }) {
   const quote = pricingSnapshot || {};
   const totalFromQuote = roundCurrency(quote.total || quote.price_after_discount || 0);
+  const totalFromPaymentSummary = roundCurrency(payment?.quote_total || 0);
   const totalFromPayment = roundCurrency(payment?.total_amount || 0);
-  const totalAmount = totalFromQuote || totalFromPayment || roundCurrency(booking.budget || 0);
+  // Sales payment summaries are tied to the accepted sales quote and therefore
+  // take precedence over a legacy booking quote that may later be repriced.
+  const totalAmount = totalFromPaymentSummary || totalFromQuote || totalFromPayment || roundCurrency(booking.budget || 0);
 
   const subtotal = roundCurrency(quote.subtotal || totalAmount);
   const discount = roundCurrency(quote.discount_amount || quote.discountAmount || 0);
@@ -891,7 +943,7 @@ function calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows }) 
   return {
     booking_id: booking.stream_project_booking_id,
     quote_id: booking.quote_id || quote.quote_id || null,
-    client_user_id: booking.user_id || null,
+    client_user_id: clientUserId,
     guest_email: booking.guest_email || null,
     currency: 'USD',
     subtotal_amount: subtotal,
@@ -922,7 +974,7 @@ async function syncBookingFinance(bookingId, options = {}) {
   const transaction = externalTransaction || await db.sequelize.transaction();
 
   try {
-    const { booking, payment } = await loadBookingFinanceContext(bookingId, transaction);
+    const { booking, payment, clientUserId } = await loadBookingFinanceContext(bookingId, transaction);
     const ensuredInvoice = await ensurePaidBookingInvoiceHistory(booking, payment, transaction);
     if (ensuredInvoice) {
       const invoiceRows = Array.isArray(booking.invoice_send_history) ? booking.invoice_send_history : [];
@@ -934,7 +986,7 @@ async function syncBookingFinance(bookingId, options = {}) {
     }
     const pricingSnapshot = await buildPricingSnapshotFromBooking(booking);
     const creatorRowsPreview = calculateCreatorRows({ booking, payment, pricingSnapshot });
-    const breakdownPayload = calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows: creatorRowsPreview });
+    const breakdownPayload = calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows: creatorRowsPreview, clientUserId });
     const latestInvoice = Array.isArray(booking.invoice_send_history) && booking.invoice_send_history.length
       ? booking.invoice_send_history[0]
       : null;
@@ -944,12 +996,12 @@ async function syncBookingFinance(bookingId, options = {}) {
       booking_id: booking.stream_project_booking_id,
       payment_id: payment?.payment_id || null,
       invoice_send_history_id: latestInvoice?.invoice_send_history_id || null,
-      client_user_id: booking.user_id || null,
+      client_user_id: clientUserId,
       guest_email: booking.guest_email || payment?.guest_email || null,
       transaction_type: 'client_payment',
       direction: 'inflow',
-      source: payment?.stripe_payment_intent_id ? 'stripe' : 'system',
-      payment_method: payment?.stripe_payment_intent_id ? 'stripe' : null,
+      source: payment?.stripe_payment_intent_id ? 'stripe' : (payment?.payment_source === 'manual' ? 'manual' : 'system'),
+      payment_method: payment?.stripe_payment_intent_id ? 'stripe' : (payment?.payment_source === 'manual' ? 'manual' : null),
       status: normalizeStatus(payment?.status, Boolean(payment)),
       currency: 'USD',
       gross_amount: breakdownPayload.collected_amount,
@@ -986,7 +1038,7 @@ async function syncBookingFinance(bookingId, options = {}) {
       financeTransactionId: financeTransaction.finance_transaction_id
     });
 
-    const recalculatedBreakdown = calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows });
+    const recalculatedBreakdown = calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows, clientUserId });
     const [breakdown] = await db.finance_project_breakdowns.findOrCreate({
       where: { booking_id: booking.stream_project_booking_id },
       defaults: recalculatedBreakdown,
@@ -3336,6 +3388,7 @@ async function markCreatorPayoutPaid(payoutRequestId, payload = {}, options = {}
 module.exports = {
   syncBookingFinance,
   listTransactions,
+  getPaymentHistoryEntriesForBookings: fetchPaymentHistoryEntriesForBookings,
   exportTransactionsCsv,
   listShootBreakdowns,
   getShootFinance,

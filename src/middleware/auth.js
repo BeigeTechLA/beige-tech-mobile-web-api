@@ -32,7 +32,9 @@ const validatePermissionVersion = async (decoded) => {
       'user_type',
       'permissions_version',
       'password_changed_at',
-      'created_at'
+      'created_at',
+      'email',
+      'email_verified'
     ],
     include: [
       {
@@ -46,6 +48,10 @@ const validatePermissionVersion = async (decoded) => {
 
   if (!user) {
     throw new Error('USER_NOT_FOUND');
+  }
+
+  if (user.email && Number(user.email_verified) !== 1) {
+    throw new Error('EMAIL_NOT_VERIFIED');
   }
 
   if (
@@ -84,8 +90,9 @@ const authMiddleware = async (req, res, next) => {
 
     if (!token) {
       return res.status(401).json({
-        error: true,
-        message: 'No authorization token provided'
+        success: false,
+        code: 'AUTH_REQUIRED',
+        message: 'Please sign in to continue.'
       });
     }
 
@@ -108,15 +115,17 @@ const authMiddleware = async (req, res, next) => {
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
-        error: true,
-        message: 'Token has expired'
+        success: false,
+        code: 'SESSION_EXPIRED',
+        message: 'Your session has expired. Please sign in again.'
       });
     }
 
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({
-        error: true,
-        message: 'Invalid token'
+        success: false,
+        code: 'SESSION_INVALID',
+        message: 'Please sign in again.'
       });
     }
 
@@ -124,19 +133,20 @@ const authMiddleware = async (req, res, next) => {
       error.message === 'PERMISSION_CHANGED' ||
       error.message === 'USER_NOT_FOUND' ||
       error.message === 'SESSION_REVOKED' ||
+      error.message === 'EMAIL_NOT_VERIFIED' ||
       error.message === 'INVALID_TOKEN_TYPE'
     ) {
       return res.status(401).json({
         success: false,
         force_logout: true,
-        message: 'Please login again.'
+        message: 'Please sign in again.'
       });
     }
 
+    console.error('Authentication error:', error);
     return res.status(500).json({
-      error: true,
-      message: 'Authentication error',
-      details: error.message
+      success: false,
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -194,8 +204,9 @@ const authenticateAdmin = async (req, res, next) => {
 
     if (!token) {
       return res.status(401).json({
-        error: true,
-        message: 'Authorization token required'
+        success: false,
+        code: 'AUTH_REQUIRED',
+        message: 'Please sign in to continue.'
       });
     }
 
@@ -223,8 +234,8 @@ const authenticateAdmin = async (req, res, next) => {
   } catch (error) {
     console.error('Authentication error:', error);
     return res.status(401).json({
-      error: true,
-      message: 'Invalid or expired token'
+      success: false,
+      message: 'Please sign in again.'
     });
   }
 };

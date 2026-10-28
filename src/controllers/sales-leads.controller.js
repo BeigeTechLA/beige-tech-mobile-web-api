@@ -16,17 +16,57 @@ const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const pushNotificationService = require('../services/push-notification.service');
 const shiftManagementService = require('../services/shift-management.service');
+const businessNotifications = require('../services/business-notification.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { S3UploadFiles } = require('../utils/common.js');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
+const { resolveSalesLeadBookingStatus } = require('../utils/salesLeadBookingStatus');
+const { paidSalesLeadSql, closedLostSalesLeadSql } = require('../utils/salesLeadStatusFilters');
 
 const sequelize = require('../db');
 const db = require('../models');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
+exports.updateLeadResponseDeadline = async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ success: false, message: 'Valid lead ID required' });
+    const rawDueAt = req.body?.response_due_at;
+    if (rawDueAt !== null && (typeof rawDueAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(rawDueAt))) {
+      return res.status(400).json({ success: false, message: 'response_due_at must include a time zone, or be null' });
+    }
+    const parsedDueAt = rawDueAt === null ? null : new Date(rawDueAt);
+    if (parsedDueAt && Number.isNaN(parsedDueAt.getTime())) return res.status(400).json({ success: false, message: 'Invalid response_due_at' });
+    const lead = await sales_leads.findOne({ where: { lead_id: leadId, is_active: 1 } });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+    await lead.update({ response_due_at: parsedDueAt, updated_at: new Date() });
+    return res.json({ success: true, data: { lead_id: leadId, response_due_at: lead.response_due_at } });
+  } catch (error) {
+    console.error('Update lead response deadline error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to update response deadline' });
+  }
+};
+
+exports.markLeadResponded = async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ success: false, message: 'Valid lead ID required' });
+    const lead = await sales_leads.findOne({ where: { lead_id: leadId, is_active: 1 } });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+    if (Number(lead.assigned_sales_rep_id || 0) !== Number(req.userId)) {
+      return res.status(403).json({ success: false, message: 'Only the assigned owner can mark this lead responded' });
+    }
+    if (!lead.owner_responded_at) await lead.update({ owner_responded_at: new Date(), last_activity_at: new Date() });
+    return res.json({ success: true, data: { lead_id: leadId, owner_responded_at: lead.owner_responded_at } });
+  } catch (error) {
+    console.error('Mark lead responded error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to mark lead responded' });
+  }
+};
 
 const normalizeString = (value) => {
   if (value == null) return null;
@@ -589,9 +629,17 @@ function hasOutstandingAdditionalPayment(customQuoteFinancials = null) {
 }
 
 function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, customQuoteFinancials = null }) {
-  const summaryStatus = String(customQuoteFinancials?.payment_summary?.payment_status || '').toLowerCase();
-  const summaryApprovalStatus = String(customQuoteFinancials?.payment_summary?.last_quote_change_status || '').toLowerCase();
-  if (summaryStatus && (!summaryApprovalStatus || summaryApprovalStatus === 'approved')) {
+  const paymentSummary = customQuoteFinancials?.payment_summary || null;
+  const summaryStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+  if (summaryStatus) {
+    const approvalStatus = String(paymentSummary.last_quote_change_status || '').toLowerCase();
+    if (approvalStatus === 'pending' || approvalStatus === 'rejected') {
+      const paidAmount = parseFloat(paymentSummary.paid_amount || 0) + parseFloat(paymentSummary.credit_used_amount || 0);
+      const dueAmount = parseFloat(paymentSummary.due_amount || 0);
+      if (dueAmount <= 0.009 && paidAmount > 0) return 'paid';
+      if (paidAmount > 0 && dueAmount > 0.009) return 'partially_paid';
+      if (dueAmount > 0.009) return 'unpaid';
+    }
     return summaryStatus;
   }
 
@@ -609,8 +657,7 @@ function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, cu
 
 function resolveLeadQuoteAmounts({ linkedSalesQuote = null, booking = null, customQuoteFinancials = null }) {
   const paymentSummary = customQuoteFinancials?.payment_summary || null;
-  const paymentSummaryStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
-  if (paymentSummary && (!paymentSummaryStatus || paymentSummaryStatus === 'approved')) {
+  if (paymentSummary) {
     return {
       collected_amount: parseFloat(paymentSummary.paid_amount || 0),
       outstanding_amount: parseFloat(paymentSummary.due_amount || 0)
@@ -1864,8 +1911,16 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const tx = await db.sequelize.transaction();
         try {
             if (booking_id) {
-                booking = await stream_project_booking.findByPk(booking_id);
+                booking = await stream_project_booking.findByPk(booking_id, {
+                    transaction: tx,
+                    lock: tx.LOCK.UPDATE
+                });
                 if (booking) {
+                    if (Number(booking.is_draft) !== 1 || booking.payment_id || booking.payment_completed_at) {
+                        const conflict = new Error('This booking is no longer a draft.');
+                        conflict.code = 'BOOKING_NOT_DRAFT';
+                        throw conflict;
+                    }
                     const updateData = { ...bookingData };
                     if (!hasScheduleFields) {
                         delete updateData.event_date;
@@ -1969,6 +2024,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 }
             }
 
+            if (assignedRep?.id) await businessNotifications.notifyLeadAssigned(lead, assignedRep.id);
+
           // emailService.sendSalesLeadNotification({
           //   guestEmail: normalizedGuestEmail,
           //   shootType: shoot_type,
@@ -2031,6 +2088,9 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         });
 
     } catch (error) {
+        if (error.code === 'BOOKING_NOT_DRAFT') {
+            return res.status(409).json({ success: false, message: error.message });
+        }
         console.error('Error in trackEarlyBookingInterest:', error);
         return res.status(500).json({ 
             success: false, 
@@ -2108,6 +2168,8 @@ exports.trackBookingStart = async (req, res) => {
       status: 'Booking In Progress',
       source: 'web_form'
     });
+
+    if (assignedRep?.id) await businessNotifications.notifyLeadAssigned(lead, assignedRep.id);
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -2672,6 +2734,51 @@ exports.getLeads = async (req, res) => {
       (production_filter && String(production_filter).toLowerCase() !== 'all')
     );
 
+    // Resolve these statuses before loading the expensive lead associations.
+    // Otherwise a ten-row page enriches every lead in the database first.
+    const databaseStatusSql = activeStatusFilter === 'Paid'
+      ? paidSalesLeadSql
+      : activeStatusFilter === 'Closed - Lost'
+        ? closedLostSalesLeadSql
+        : null;
+    const useDatabaseStatusFilter = databaseStatusSql &&
+      !shootStatusRequested &&
+      !start_date && !end_date &&
+      (!intent || intent === 'All') &&
+      (!cp_assignment || String(cp_assignment).toLowerCase() === 'all') &&
+      (!production_filter || String(production_filter).toLowerCase() === 'all');
+
+    if (useDatabaseStatusFilter) {
+      const statusWhere = {
+        ...whereClause,
+        [Op.and]: Sequelize.literal(`(${databaseStatusSql})`)
+      };
+      const [total, leads] = await Promise.all([
+        sales_leads.count({ where: statusWhere }),
+        sales_leads.findAll({
+          where: statusWhere,
+          include: getSalesLeadListIncludes(),
+          order: [['created_at', 'DESC']],
+          limit: pageLimit,
+          offset,
+          distinct: true
+        })
+      ]);
+      const processedLeads = await mapWithConcurrency(
+        leads,
+        GET_LEADS_PROCESS_CONCURRENCY,
+        (lead) => processSalesLeadForList(lead, logContext)
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          leads: processedLeads,
+          pagination: { total, page: pageNumber, totalPages: Math.ceil(total / pageLimit) }
+        }
+      });
+    }
+
     if (!hasDerivedListFilters) {
       const databasePageStartedAt = Date.now();
       const [total, leads] = await Promise.all([
@@ -2887,7 +2994,7 @@ const normalizeBoardStatusLabel = (rawStatus) => {
 
 const normalizeLeadStatusFilterLabel = (rawStatus) => {
   const value = String(rawStatus || '')
-    .replace(/Ã¢â‚¬â€œ|â€”|â€“/g, '-')
+    .replace(/â€“|Ã¢â‚¬â€œ|â€”|â€“|[–—]/g, '-')
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -3243,6 +3350,19 @@ exports.getLeadById = async (req, res) => {
     }
 
     const leadJson = lead.toJSON();
+    const previousSalesRepRows = await db.sequelize.query(
+      `SELECT source.id, source.name
+       FROM sales_record_reassignment_history history
+       LEFT JOIN users source ON source.id = history.from_user_id
+       WHERE history.record_type = 'lead' AND history.record_id = :recordId
+       ORDER BY history.created_at DESC, history.id DESC
+       LIMIT 1`,
+      {
+        replacements: { recordId: `L-${lead.lead_id}` },
+        type: Sequelize.QueryTypes.SELECT
+      }
+    );
+    const previousSalesRep = previousSalesRepRows[0] || null;
     const linkedSalesQuote = await sales_quotes.findOne({
       where: { lead_id: lead.lead_id },
       attributes: ['sales_quote_id', 'quote_number', 'status', 'subtotal', 'discount_amount', 'total'],
@@ -3445,10 +3565,8 @@ exports.getLeadById = async (req, res) => {
     let creditApplied = 0;
     let totalPaid = null;
     const paymentSummary = customQuoteFinancials?.payment_summary || null;
-    const paymentSummaryChangeStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
-    const canUsePaymentSummaryChange = !paymentSummaryChangeStatus || paymentSummaryChangeStatus === 'approved';
 
-    if (paymentSummary && canUsePaymentSummaryChange) {
+    if (paymentSummary) {
       creditApplied = parseFloat(paymentSummary.credit_used_amount || 0);
       totalPaid = parseFloat(paymentSummary.paid_amount || 0);
     } else if (leadJson.booking?.payment_id) {
@@ -3566,6 +3684,9 @@ exports.getLeadById = async (req, res) => {
       data: {
         ...leadJson,
         phone: final_phone,
+        previous_assigned_sales_rep: previousSalesRep
+          ? { id: Number(previousSalesRep.id), name: previousSalesRep.name }
+          : null,
         selected_crew_ids: selectedCrewIds,
         accepted_cp,
         rejected_ap,
@@ -3905,7 +4026,7 @@ exports.changeLeadSalesRep = async (req, res) => {
 
     const lead = await sales_leads.findOne({
       where: { lead_id: id, is_active: 1 },
-      attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'guest_email']
+      attributes: ['lead_id', 'booking_id', 'lead_type', 'assigned_sales_rep_id', 'client_name', 'guest_email']
     });
 
     if (!lead) {
@@ -3930,21 +4051,48 @@ exports.changeLeadSalesRep = async (req, res) => {
     }
 
     const previousRepId = lead.assigned_sales_rep_id;
+    const transaction = await db.sequelize.transaction();
+    try {
+      await lead.update({
+        assigned_sales_rep_id: salesRep.id
+      }, { transaction });
 
-    await lead.update({
-      assigned_sales_rep_id: salesRep.id
-    });
+      await sales_lead_activities.create({
+        lead_id: lead.lead_id,
+        activity_type: 'assigned',
+        activity_data: {
+          previous_rep_id: previousRepId,
+          new_rep_id: salesRep.id,
+          assignment_type: 'admin_change_sales_rep'
+        },
+        performed_by_user_id: req.userId
+      }, { transaction });
 
-    await sales_lead_activities.create({
-      lead_id: lead.lead_id,
-      activity_type: 'assigned',
-      activity_data: {
-        previous_rep_id: previousRepId,
-        new_rep_id: salesRep.id,
-        assignment_type: 'admin_change_sales_rep'
-      },
-      performed_by_user_id: req.userId
-    });
+      if (Number(previousRepId || 0) > 0 && Number(previousRepId) !== Number(salesRep.id) && req.userId) {
+        await db.sequelize.query(
+          `INSERT INTO sales_record_reassignment_history
+            (record_type, record_id, client_name, from_user_id, to_user_id, actor_user_id, created_at)
+           VALUES ('lead', :recordId, :clientName, :fromUserId, :toUserId, :actorUserId, CURRENT_TIMESTAMP)`,
+          {
+            replacements: {
+              recordId: `L-${lead.lead_id}`,
+              clientName: lead.client_name || lead.guest_email || null,
+              fromUserId: previousRepId,
+              toUserId: salesRep.id,
+              actorUserId: req.userId
+            },
+            transaction
+          }
+        );
+      }
+
+      await transaction.commit();
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+
+    if (lead.lead_type === 'self_serve') await businessNotifications.notifyLeadAssigned(lead, salesRep.id);
 
     return res.json({
       success: true,
@@ -4089,6 +4237,9 @@ exports.updateLeadStatus = async (req, res) => {
 
     await lead.update({
       lead_status: status,
+      ...(Number(lead.assigned_sales_rep_id || 0) === Number(performedBy) && status !== oldStatus
+        ? { owner_responded_at: lead.owner_responded_at || new Date() }
+        : {}),
       last_activity_at: new Date()
     });
 
@@ -4184,7 +4335,7 @@ exports.updateClientLeadStatus = async (req, res) => {
   }
 };
 
-const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'stripe', 'other', 'net30'];
+const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'payment_link', 'applepay', 'stripe', 'other', 'net30'];
 
 const parseJsonIfNeeded = (value) => {
   if (!value) return null;
@@ -4380,30 +4531,15 @@ async function processSalesLeadForList(lead, context = {}) {
         booking: lead?.booking
       });
 
-    let computedBookingStatus =
-      leadAssignmentService.getLeadBookingStatus(
-        lead,
-        lead?.booking
-      );
     const paymentSummary = customQuoteFinancials?.payment_summary || null;
-    const summaryStatus = String(paymentSummary?.payment_status || '').trim().toLowerCase();
-    const summaryPaidAmount = parseFloat(paymentSummary?.paid_amount || 0);
-    const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
-
-    if (manualProgress.hasFullPayment) {
-      computedBookingStatus = 'Booked';
-    } else if (manualProgress.isPartiallyPaid) {
-      computedBookingStatus = 'Partially Paid';
-    } else if (summaryStatus === 'paid') {
-      computedBookingStatus = 'Paid';
-    } else if (
-      ['partially_paid', 'partial_paid', 'approval_pending'].includes(summaryStatus) ||
-      (summaryPaidAmount > 0 && summaryDueAmount > 0)
-    ) {
-      computedBookingStatus = 'Partially Paid';
-    } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
-      computedBookingStatus = 'Partially Paid';
-    }
+    const computedBookingStatus = resolveSalesLeadBookingStatus({
+      baseStatus: leadAssignmentService.getLeadBookingStatus(lead, lead?.booking),
+      leadStatus: lead?.lead_status,
+      bookingCancelled: lead?.booking?.is_cancelled,
+      manualProgress,
+      paymentSummary,
+      outstandingAdditionalPayment: hasOutstandingAdditionalPayment(customQuoteFinancials)
+    });
 
     const pLinks = leadJson.payment_links || [];
     let activePaymentLink = null;
@@ -4694,7 +4830,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
-      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, stripe, other, or net30',
+      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, payment_link, applepay, stripe, other, or net30',
     });
   }
 
@@ -5064,6 +5200,160 @@ exports.recordManualPayment = async (req, res) => {
       success: false,
       message: 'Failed to record manual payment',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+const editManualPaymentAmount = async ({ leadModel, activityModel, req, res }) => {
+  const { id: leadId, paymentId } = req.params;
+  const newAmount = Number(req.body?.amount);
+
+  if (!Number.isFinite(newAmount) || newAmount < 0) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'amount must be a valid number (0 or more)'
+    });
+  }
+
+  const lead = await leadModel.findOne({ where: { lead_id: leadId, is_active: 1 } });
+  if (!lead) {
+    return res.status(constants.NOT_FOUND.code).json({ success: false, message: 'Lead not found' });
+  }
+
+  // NOTE: change `id` below if your booking_manual_payments primary key has another name
+  const [row] = await db.sequelize.query(
+    `SELECT * FROM booking_manual_payments WHERE booking_manual_payment_id = :paymentId AND lead_id = :leadId LIMIT 1`,
+    { replacements: { paymentId: Number(paymentId), leadId: Number(leadId) }, type: Sequelize.QueryTypes.SELECT }
+  );
+  if (!row) {
+    return res.status(constants.NOT_FOUND.code).json({ success: false, message: 'Manual payment not found' });
+  }
+
+  const bookingId = Number(row.booking_id);
+  const oldAmount = Number(row.amount || 0);
+  const delta = newAmount - oldAmount;
+
+  const summary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const quoteTotal = Number(summary?.quote_total || 0);
+  const creditUsed = Number(summary?.credit_used_amount || 0);
+  const paidAfter = Math.max(Number(summary?.paid_amount || 0) + delta, 0);
+
+  if (quoteTotal > 0 && paidAfter + creditUsed > quoteTotal + 0.009) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'Edited amount would exceed the quote total'
+    });
+  }
+
+  const isNowFull = quoteTotal > 0 && paidAfter + creditUsed >= quoteTotal - 0.009;
+  const nextType = isNowFull ? 'full' : 'partial';
+
+  await db.sequelize.query(
+    `UPDATE booking_manual_payments SET amount = :amount, payment_type = :paymentType WHERE booking_manual_payment_id = :paymentId`,
+    { replacements: { amount: newAmount, paymentType: nextType, paymentId: Number(paymentId) }, type: Sequelize.QueryTypes.UPDATE }
+  );
+
+  await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    leadId: Number(leadId),
+    salesQuoteId: summary?.sales_quote_id || row.sales_quote_id || null,
+    quoteTotal,
+    paidAmount: paidAfter,
+    creditUsedAmount: creditUsed,
+    creditCreatedAmount: Number(summary?.credit_created_amount || 0),
+    manualPaymentMode: row.payment_mode,
+    manualPaymentOtherMode: row.other_payment_mode,
+    manualPaymentProofUrl: row.proof_url,
+    manualPaymentProofFilePath: row.proof_file_path,
+    manualPaymentProofFileName: row.proof_file_name,
+    manualPaymentNotes: row.notes,
+    manualPaymentUpdatedByUserId: req.userId || null,
+    manualPaymentUpdatedAt: new Date(),
+    lastQuoteChangeType: summary?.last_quote_change_type || 'none',
+    lastQuoteChangeAmount: Number(summary?.last_quote_change_amount || 0),
+    lastQuoteChangeStatus: summary?.last_quote_change_status || 'none',
+  });
+
+  // Keep the activity log in sync (the UI reads paid status from it)
+  const activities = await activityModel.findAll({
+    where: { lead_id: Number(leadId), activity_type: 'payment_completed' }
+  });
+  for (const activity of activities) {
+    const data = parseJsonIfNeeded(activity.activity_data);
+    if (Number(data?.booking_manual_payment_id) === Number(paymentId)) {
+      await activity.update({
+        activity_data: {
+          ...data,
+          amount: newAmount,
+          payment_type: nextType,
+          paid_amount_after: paidAfter,
+          remaining_after_payment: Math.max(quoteTotal - paidAfter - creditUsed, 0),
+          edited_from_amount: oldAmount,
+          edited_by: req.userId || null,
+          edited_at: new Date().toISOString()
+        }
+      });
+    }
+  }
+
+  // Only one entry can be the "full" one: demote every other manual 'full' entry to 'partial'
+  await db.sequelize.query(
+    `UPDATE booking_manual_payments
+     SET payment_type = 'partial'
+     WHERE booking_id = :bookingId
+       AND payment_type = 'full'
+       AND booking_manual_payment_id <> :paymentId`,
+    { replacements: { bookingId, paymentId: Number(paymentId) }, type: Sequelize.QueryTypes.UPDATE }
+  );
+  for (const activity of activities) {
+    const data = parseJsonIfNeeded(activity.activity_data);
+    if (
+      data?.payment_method === 'manual' &&
+      data?.payment_type === 'full' &&
+      Number(data?.booking_manual_payment_id) !== Number(paymentId)
+    ) {
+      await activity.update({ activity_data: { ...data, payment_type: 'partial' } });
+    }
+  }
+
+  if (isNowFull) await lead.update({ lead_status: 'booked', last_activity_at: new Date() });
+  else await lead.update({ last_activity_at: new Date() });
+
+  return res.json({
+    success: true,
+    message: 'Manual payment amount updated',
+    data: {
+      lead_id: Number(leadId),
+      paid_amount_total: paidAfter,
+      pending_amount: Math.max(quoteTotal - paidAfter - creditUsed, 0),
+      payment_type: nextType
+    }
+  });
+};
+
+const SUPER_ADMIN_ROLES = ['super_admin', 'superadmin', 'super admin'];
+
+exports.editManualPaymentAmount = async (req, res) => {
+  try {
+    const role = String(req.userRole || req.user?.userRole || '').trim().toLowerCase();
+    if (!SUPER_ADMIN_ROLES.includes(role)) {
+      return res.status(constants.FORBIDDEN?.code || 403).json({
+        success: false,
+        message: 'Only a super admin can edit a recorded manual payment'
+      });
+    }
+
+    return await editManualPaymentAmount({
+      leadModel: sales_leads,
+      activityModel: sales_lead_activities,
+      req,
+      res
+    });
+  } catch (error) {
+    console.error('Error editing manual payment:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to edit manual payment'
     });
   }
 };

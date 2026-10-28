@@ -354,6 +354,177 @@ exports.deleteCatalogItem = async (req, res) => {
   }
 };
 
+exports.bulkDeleteCatalogItems = async (req, res) => {
+  try {
+    const rawIds = Array.isArray(req.body?.catalog_item_ids) ? req.body.catalog_item_ids : [];
+    const catalogItemIds = Array.from(
+      new Set(
+        rawIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      )
+    );
+
+    if (catalogItemIds.length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'At least one valid catalog item ID is required.',
+        data: null
+      });
+    }
+
+    if (catalogItemIds.length > 100) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'A maximum of 100 catalog items can be deleted at once.',
+        data: null
+      });
+    }
+
+    const results = [];
+
+    // Sequential on purpose: reuses the single-delete rules (not found, default items).
+    for (const catalogItemId of catalogItemIds) {
+      try {
+        await quoteService.deleteCatalogItem(catalogItemId);
+        results.push({
+          catalog_item_id: catalogItemId,
+          success: true,
+          message: 'Catalog item deleted successfully.'
+        });
+      } catch (error) {
+        console.error(`Bulk delete catalog item ${catalogItemId} failed:`, error?.message || error);
+        results.push({
+          catalog_item_id: catalogItemId,
+          success: false,
+          message: error?.message || 'Failed to delete catalog item.'
+        });
+      }
+    }
+
+    const successIds = results.filter((r) => r.success).map((r) => r.catalog_item_id);
+    const failedResults = results.filter((r) => !r.success);
+    const failedIds = failedResults.map((r) => r.catalog_item_id);
+
+    const message = failedIds.length === 0
+      ? `Successfully deleted ${successIds.length} item${successIds.length === 1 ? '' : 's'}.`
+      : successIds.length > 0
+        ? `${successIds.length} item${successIds.length === 1 ? '' : 's'} deleted and ${failedIds.length} failed.`
+        : `Failed to delete the selected item${failedIds.length === 1 ? '' : 's'}.`;
+
+    return res.status(constants.OK.code).json({
+      success: failedIds.length === 0,
+      partial_success: successIds.length > 0 && failedIds.length > 0,
+      message,
+      error: failedResults[0]?.message || undefined,
+      data: {
+        action: 'delete',
+        success_ids: successIds,
+        failed_ids: failedIds,
+        success_count: successIds.length,
+        failed_count: failedIds.length,
+        results
+      }
+    });
+  } catch (error) {
+    console.error('Error bulk deleting quote catalog items:', error);
+    return sendError(res, error, 'Failed to delete catalog items', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+
+exports.bulkDeleteTypes = async (req, res) => {
+  try {
+    const toIds = (raw) =>
+      Array.from(
+        new Set(
+          (Array.isArray(raw) ? raw : [])
+            .map((id) => Number(id))
+            .filter((id) => Number.isInteger(id) && id > 0)
+        )
+      );
+
+    const shootIds = toIds(req.body?.shoot_type_ids);
+    const editingIds = toIds(req.body?.ai_editing_type_ids);
+    const total = shootIds.length + editingIds.length;
+
+    if (total === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'At least one valid type ID is required.',
+        data: null
+      });
+    }
+
+    if (total > 100) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'A maximum of 100 types can be deleted at once.',
+        data: null
+      });
+    }
+
+    const shoot = { success_ids: [], failed_ids: [] };
+    const editing = { success_ids: [], failed_ids: [] };
+    const results = [];
+
+    // Sequential on purpose: reuses the single-delete rules (not found, defaults).
+    for (const id of shootIds) {
+      try {
+        const record = await db.sales_shoot_types.findByPk(id);
+        if (!record) throw new Error('Shoot type not found');
+        if (Number(record.is_system_default) === 1) {
+          throw new Error('Default shoot types cannot be deleted');
+        }
+        await record.update({ is_active: 0 });
+        shoot.success_ids.push(id);
+        results.push({ kind: 'shoot', id, success: true });
+      } catch (error) {
+        shoot.failed_ids.push(id);
+        results.push({ kind: 'shoot', id, success: false, message: error?.message || 'Failed to delete shoot type' });
+      }
+    }
+
+    for (const id of editingIds) {
+      try {
+        await quoteService.deleteAiEditingType(id);
+        editing.success_ids.push(id);
+        results.push({ kind: 'edit', id, success: true });
+      } catch (error) {
+        editing.failed_ids.push(id);
+        results.push({ kind: 'edit', id, success: false, message: error?.message || 'Failed to delete editing type' });
+      }
+    }
+
+    const successCount = shoot.success_ids.length + editing.success_ids.length;
+    const failedCount = shoot.failed_ids.length + editing.failed_ids.length;
+    const firstError = results.find((r) => !r.success)?.message;
+
+    const message = failedCount === 0
+      ? `Successfully deleted ${successCount} type${successCount === 1 ? '' : 's'}.`
+      : successCount > 0
+        ? `${successCount} type${successCount === 1 ? '' : 's'} deleted and ${failedCount} failed.`
+        : `Failed to delete the selected type${failedCount === 1 ? '' : 's'}.`;
+
+    return res.status(constants.OK.code).json({
+      success: failedCount === 0,
+      partial_success: successCount > 0 && failedCount > 0,
+      message,
+      error: firstError || undefined,
+      data: {
+        action: 'delete',
+        shoot,
+        editing,
+        success_count: successCount,
+        failed_count: failedCount,
+        results
+      }
+    });
+  } catch (error) {
+    console.error('Error bulk deleting types:', error);
+    return sendError(res, error, 'Failed to delete types', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+
 exports.createQuote = async (req, res) => {
   try {
     const quote = await quoteService.createQuote(req.body, getUserContext(req));
@@ -916,6 +1087,20 @@ exports.rejectQuoteProposal = async (req, res) => {
     console.error('Error updating sales quote status:', error);
     const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
     return sendError(res, error, error.message || 'Failed to update quote status', statusCode);
+  }
+};
+
+exports.respondToQuoteProposal = async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const action = String(req.body?.action || '').trim();
+    if (!token || !['decline', 'request_change'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'A valid token and response action are required' });
+    }
+    const data = await quoteService.respondToQuoteProposal(token, action, req.body?.reason);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return sendError(res, error, error.message || 'Failed to save quote response', constants.BAD_REQUEST.code);
   }
 };
 

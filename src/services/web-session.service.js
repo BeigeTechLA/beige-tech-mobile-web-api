@@ -55,7 +55,8 @@ async function refresh(req, res, generateTokens) {
         include: [{ model: db.user_type, as: 'userType', attributes: ['user_type_id', 'user_role', 'is_internal_member'] }]
       });
       // Never upgrade old refresh credentials to the current password version.
-      if (!user || session.permissions_version == null || Number(session.permissions_version) !== Number(user.permissions_version)) {
+      if (!user || (user.email && Number(user.email_verified) !== 1) ||
+          session.permissions_version == null || Number(session.permissions_version) !== Number(user.permissions_version)) {
         await session.update({ revoked_at: new Date() }, { transaction });
         return null;
       }

@@ -7,6 +7,7 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const db = require('../models');
+const businessNotifications = require('./business-notification.service');
 const constants = require('../utils/constants');
 const {
   sendCustomQuoteProposalEmail,
@@ -21,6 +22,7 @@ const accountCreditService = require('./account-credit.service');
 const paymentLinksService = require('./payment-links.service');
 const bookingPaymentSummaryService = require('./booking-payment-summary.service');
 const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
+const { paidQuoteSql, partiallyPaidQuoteSql, resolveCurrentQuotePaymentStatus } = require('../utils/quotePaymentStatusFilter');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -494,6 +496,9 @@ function buildQuoteVersionSnapshot(quoteRecord, lineItems = []) {
     tax_type: quote.tax_type || null,
     tax_rate: Number(quote.tax_rate || 0),
     tax_amount: Number(quote.tax_amount || 0),
+    sales_tax_rate: Number(quote.sales_tax_rate || 0),
+    card_payment_charge_enabled: Boolean(quote.card_payment_charge_enabled),
+    card_payment_method: quote.card_payment_method || null,
     subtotal: Number(quote.subtotal || 0),
     total: Number(quote.total || 0),
     notes: quote.notes || null,
@@ -844,6 +849,23 @@ function appendAndCondition(where, condition) {
   return where;
 }
 
+function applyQuoteStatusFilter(where, rawStatus) {
+  const status = String(rawStatus || '').trim().toLowerCase();
+  if (status === 'paid' || status === 'partially_paid') {
+    return appendAndCondition(where, db.sequelize.literal(
+      `(${status === 'paid' ? paidQuoteSql : partiallyPaidQuoteSql})`
+    ));
+  }
+
+  const statusFilter = normalizeQuoteFilterStatus(rawStatus);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
+  }
+  return where;
+}
+
 function applyQuoteSalesRepFilter(where, assignedSalesRepId, user) {
   if (!assignedSalesRepId) {
     return where;
@@ -913,12 +935,7 @@ function buildQuoteListWhere(query, user) {
     ? { ...buildQuoteAccessWhere(user) }
     : {};
 
-  const statusFilter = normalizeQuoteFilterStatus(query.status);
-  if (statusFilter?.length) {
-    appendAndCondition(where, {
-      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
-    });
-  }
+  applyQuoteStatusFilter(where, query.status);
 
   applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
 
@@ -1284,6 +1301,9 @@ function buildQuoteInvoicePricingData(quoteDetails = {}) {
     tax_type: quoteDetails.tax_type || null,
     tax_rate: Number(quoteDetails.tax_rate || 0),
     tax_amount: Number(quoteDetails.tax_amount || 0),
+    sales_tax_rate: Number(quoteDetails.sales_tax_rate || 0),
+    card_payment_charge_enabled: Boolean(quoteDetails.card_payment_charge_enabled),
+    card_payment_method: quoteDetails.card_payment_method || null,
     line_items: lineItems.map((item) => ({
       name: item.item_name || item.name || 'Service',
       quantity: Number(item.quantity || 1),
@@ -4956,6 +4976,9 @@ async function createQuote(payload, user) {
       tax_type: payload.tax_type || null,
       tax_rate: totals.tax_rate,
       tax_amount: totals.tax_amount,
+      sales_tax_rate: Number(payload.sales_tax_rate ?? Math.max(0, totals.tax_rate - (payload.card_payment_charge_enabled ? 4 : 0))),
+      card_payment_charge_enabled: payload.card_payment_charge_enabled !== undefined ? Boolean(payload.card_payment_charge_enabled) : true,
+      card_payment_method: payload.card_payment_charge_enabled ? null : (payload.card_payment_method || null),
       subtotal: totals.subtotal,
       total: totals.total,
       notes: payload.notes || null,
@@ -5076,6 +5099,9 @@ async function duplicateQuote(salesQuoteId, user) {
       tax_type: sourceQuote.tax_type || null,
       tax_rate: sourceQuote.tax_rate || 0,
       tax_amount: sourceQuote.tax_amount || 0,
+      sales_tax_rate: sourceQuote.sales_tax_rate || 0,
+      card_payment_charge_enabled: Boolean(sourceQuote.card_payment_charge_enabled),
+      card_payment_method: sourceQuote.card_payment_method || null,
       subtotal: sourceQuote.subtotal || 0,
       total: sourceQuote.total || 0,
       notes: sourceQuote.notes || null,
@@ -5214,6 +5240,9 @@ async function updateQuote(salesQuoteId, payload, user) {
       tax_type: quote.tax_type,
       tax_rate: quote.tax_rate,
       tax_amount: quote.tax_amount,
+      sales_tax_rate: quote.sales_tax_rate,
+      card_payment_charge_enabled: Boolean(quote.card_payment_charge_enabled),
+      card_payment_method: quote.card_payment_method || null,
       subtotal: quote.subtotal,
       total: quote.total,
       quote_validity_days: quote.quote_validity_days,
@@ -5270,6 +5299,11 @@ async function updateQuote(salesQuoteId, payload, user) {
       : newTotal < previousTotal
         ? 'decrease'
         : 'unchanged';
+    const holdForApproval = Boolean(
+      billingState.booking?.stream_project_booking_id &&
+      billingState.is_collected &&
+      (extraAmount > 0 || reducedAmount > 0)
+    );
     const paymentStatus = extraAmount > 0
       ? (billingState.is_collected ? 'paid' : billingState.payment_status)
       : (billingState.is_collected ? 'paid' : billingState.payment_status);
@@ -5337,6 +5371,11 @@ async function updateQuote(salesQuoteId, payload, user) {
       tax_type: payload.tax_type !== undefined ? payload.tax_type : quote.tax_type,
       tax_rate: totals.tax_rate,
       tax_amount: totals.tax_amount,
+      sales_tax_rate: payload.sales_tax_rate !== undefined ? Number(payload.sales_tax_rate || 0) : Number(quote.sales_tax_rate || 0),
+      card_payment_charge_enabled: payload.card_payment_charge_enabled !== undefined ? Boolean(payload.card_payment_charge_enabled) : Boolean(quote.card_payment_charge_enabled),
+      card_payment_method: payload.card_payment_charge_enabled === true
+        ? null
+        : (payload.card_payment_method !== undefined ? payload.card_payment_method || null : quote.card_payment_method || null),
       subtotal: totals.subtotal,
       total: newTotal,
       notes: payload.notes !== undefined ? payload.notes : quote.notes,
@@ -5409,7 +5448,7 @@ async function updateQuote(salesQuoteId, payload, user) {
     }
 
     let signatureInvalidation = null;
-    if (String(previousQuoteSnapshot.status || '').toLowerCase() !== 'draft') {
+    if (!holdForApproval && String(previousQuoteSnapshot.status || '').toLowerCase() !== 'draft') {
       signatureInvalidation = await invalidateQuoteSignatureForNewVersion({
         transaction,
         quoteRecord: quote,
@@ -5419,7 +5458,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       });
     }
 
-    if (quote.lead_id) {
+    if (quote.lead_id && !holdForApproval) {
       const updatedQuoteDetails = {
         sales_quote_id: quote.sales_quote_id,
         quote_number: quote.quote_number,
@@ -5451,6 +5490,9 @@ async function updateQuote(salesQuoteId, payload, user) {
         tax_type: quote.tax_type,
         tax_rate: quote.tax_rate,
         tax_amount: quote.tax_amount,
+        sales_tax_rate: quote.sales_tax_rate,
+        card_payment_charge_enabled: Boolean(quote.card_payment_charge_enabled),
+        card_payment_method: quote.card_payment_method || null,
         subtotal: quote.subtotal,
         total: quote.total,
         notes: quote.notes,
@@ -5567,7 +5609,8 @@ async function updateQuote(salesQuoteId, payload, user) {
     const shouldUpdatePaymentSummaryForPaidQuote = Boolean(
       billingState.booking?.stream_project_booking_id &&
       quoteChangeType !== 'unchanged' &&
-      billingState.is_collected
+      billingState.is_collected &&
+      !holdForApproval
     );
     const shouldCreateApprovalRequestVersion = Boolean(
       billingState.booking?.stream_project_booking_id &&
@@ -5595,8 +5638,9 @@ async function updateQuote(salesQuoteId, payload, user) {
       await bookingPaymentSummaryService.upsertBookingPaymentSummary({
         bookingId: billingState.booking.stream_project_booking_id,
         salesQuoteId,
-        quoteTotal: newTotal,
-        paidAmount: paidAmountForSummary,
+        // Keep the approved total visible while the proposed revision is pending.
+        quoteTotal: previousTotal,
+        paidAmount: currentSummaryPaidAmount,
         creditUsedAmount: currentPaymentSummary?.credit_used_amount || 0,
         creditCreatedAmount: currentPaymentSummary?.credit_created_amount || 0,
         lastQuoteChangeType: extraAmount > 0
@@ -5677,9 +5721,107 @@ async function updateQuote(salesQuoteId, payload, user) {
       await attachQuoteVersionToActivity(transaction, approvalRequestActivity, updatedVersion);
     }
 
+    if (holdForApproval) {
+      // The version holds the proposed quote. Restore the active quote and line items
+      // until an administrator approves that version.
+      await quote.update({ ...previousQuoteAuditSnapshot, updated_at: new Date() }, { transaction });
+      await db.sales_quote_line_items.update(
+        { is_active: 0, updated_at: new Date() },
+        { where: { sales_quote_id: salesQuoteId, is_active: 1 }, transaction }
+      );
+      if (existingLineItems.length) {
+        await db.sales_quote_line_items.update(
+          { is_active: 1, updated_at: new Date() },
+          {
+            where: { line_item_id: { [Op.in]: existingLineItems.map((item) => item.line_item_id) } },
+            transaction
+          }
+        );
+      }
+    }
+
     await createQuotePreviewLink(salesQuoteId, user, { transaction });
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function applyPendingQuoteChange(salesQuoteId, activityId) {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const activity = await db.sales_quote_activities.findOne({
+      where: { activity_id: activityId, sales_quote_id: salesQuoteId },
+      transaction
+    });
+    const metadata = parseConfig(activity?.metadata_json) || {};
+    if (!activity || metadata.approval_status !== 'pending') {
+      throw new Error('Pending quote change request was not found');
+    }
+    const versionId = Number(metadata.quote_version_id || metadata.quote_version?.sales_quote_version_id || 0);
+    const version = versionId
+      ? await db.sales_quote_versions.findOne({ where: { sales_quote_version_id: versionId, sales_quote_id: salesQuoteId }, transaction })
+      : null;
+    const snapshot = parseConfig(version?.quote_snapshot_json) || {};
+    if (!version || !Array.isArray(snapshot.line_items)) {
+      throw new Error('Pending quote version snapshot was not found');
+    }
+
+    const quote = await db.sales_quotes.findByPk(salesQuoteId, { transaction });
+    if (!quote) throw new Error('Quote not found');
+    const quoteFields = [
+      'client_user_id', 'client_id', 'assigned_sales_rep_id', 'pricing_mode', 'client_name', 'client_email',
+      'client_phone', 'client_address', 'project_description', 'pre_production_notes', 'pre_production_file_name',
+      'pre_production_file_type', 'pre_production_file_size', 'pre_production_file_path', 'pre_production_file_url',
+      'video_shoot_type', 'booking_type', 'time_zone', 'start_date', 'start_time', 'end_time', 'booking_days',
+      'quote_validity_days', 'valid_until', 'discount_type', 'discount_value', 'discount_amount', 'tax_type',
+      'tax_rate', 'tax_amount', 'subtotal', 'total', 'notes', 'terms_conditions'
+    ];
+    const patch = Object.fromEntries(quoteFields.filter((field) => snapshot[field] !== undefined).map((field) => [field, snapshot[field]]));
+    await quote.update({ ...patch, updated_at: new Date() }, { transaction });
+    await invalidateQuoteSignatureForNewVersion({
+      transaction,
+      quoteRecord: quote,
+      salesQuoteId,
+      userId: null,
+      reason: 'Approved quote change request'
+    });
+
+    await db.sales_quote_line_items.update(
+      { is_active: 0, updated_at: new Date() },
+      { where: { sales_quote_id: salesQuoteId, is_active: 1 }, transaction }
+    );
+    const proposedItems = snapshot.line_items.filter((item) => item.is_active !== false).map((item) => {
+      const persisted = { ...item };
+      delete persisted.line_item_id;
+      delete persisted.sales_quote_id;
+      delete persisted.catalog_item;
+      delete persisted.configuration;
+      delete persisted.created_at;
+      delete persisted.updated_at;
+      return { ...persisted, is_active: 1, sales_quote_id: salesQuoteId };
+    });
+    if (proposedItems.length) await db.sales_quote_line_items.bulkCreate(proposedItems, { transaction });
+
+    const lead = quote.lead_id ? await db.sales_leads.findOne({ where: { lead_id: quote.lead_id }, transaction }) : null;
+    if (lead?.booking_id) {
+      const booking = await db.stream_project_booking.findByPk(lead.booking_id, { transaction });
+      if (booking) {
+        await booking.update({ budget: Number(snapshot.total || 0) || null }, { transaction });
+        const legacyQuote = await persistLegacyBookingQuoteFromSalesQuote({
+          booking,
+          quoteDetails: { ...snapshot, line_items: proposedItems },
+          transaction
+        });
+        if (booking.quote_id !== legacyQuote.quote_id) {
+          await booking.update({ quote_id: legacyQuote.quote_id }, { transaction });
+        }
+      }
+    }
+    await transaction.commit();
+    return true;
   } catch (error) {
     await transaction.rollback();
     throw error;
@@ -6651,17 +6793,24 @@ async function listQuotes(query, user) {
     const resolvedManualPaymentSummary = financialDetails?.manual_payment_summary || manualPaymentSummary;
     const hasSummaryManualFullPayment = Boolean(resolvedManualPaymentSummary?.hasFullPayment);
     const hasSummaryManualPartialPayment = Boolean(resolvedManualPaymentSummary?.isPartiallyPaid);
-    const finalPaymentStatus = hasSummaryManualFullPayment
-      ? 'paid'
-      : hasSummaryManualPartialPayment
-        ? 'partially_paid'
-        : resolvedPaymentStatus;
-    const finalCollectedAmount = hasSummaryManualFullPayment || hasSummaryManualPartialPayment
-      ? resolvedManualPaymentSummary.paidAmount
-      : resolvedCollectedAmount;
-    const finalOutstandingAmount = hasSummaryManualFullPayment || hasSummaryManualPartialPayment
-      ? resolvedManualPaymentSummary.pendingAmount
-      : resolvedOutstandingAmount;
+    const currentSummary = financialDetails?.payment_summary || null;
+    const summaryDue = roundCurrency(currentSummary?.due_amount || 0);
+    const fallbackPaymentStatus = hasSummaryManualFullPayment
+        ? 'paid'
+        : hasSummaryManualPartialPayment
+          ? 'partially_paid'
+          : resolvedPaymentStatus;
+    const finalPaymentStatus = resolveCurrentQuotePaymentStatus(currentSummary, fallbackPaymentStatus);
+    const finalCollectedAmount = currentSummary
+      ? roundCurrency(currentSummary.paid_amount || 0)
+      : hasSummaryManualFullPayment || hasSummaryManualPartialPayment
+        ? resolvedManualPaymentSummary.paidAmount
+        : resolvedCollectedAmount;
+    const finalOutstandingAmount = currentSummary
+      ? summaryDue
+      : hasSummaryManualFullPayment || hasSummaryManualPartialPayment
+        ? resolvedManualPaymentSummary.pendingAmount
+        : resolvedOutstandingAmount;
     const openedAt = new Date(plain.sent_at || plain.created_at);
     const isClosed = ['paid', 'rejected', 'expired'].includes(String(plain.status || '').toLowerCase()) || finalPaymentStatus === 'paid';
     const closedAt = isClosed ? new Date(plain.updated_at || Date.now()) : new Date();
@@ -6681,7 +6830,9 @@ async function listQuotes(query, user) {
       latest_change_log: buildQuoteChangeLogs(changeLogsByQuote[Number(plain.sales_quote_id || 0)] || [])[0] || null,
       change_log_count: buildQuoteChangeLogs(changeLogsByQuote[Number(plain.sales_quote_id || 0)] || []).length,
       payment_status: finalPaymentStatus,
-      is_collected: hasSummaryManualFullPayment ? true : (hasManualFullPayment ? true : billingState.is_collected),
+      is_collected: currentSummary
+        ? finalPaymentStatus === 'paid'
+        : (hasSummaryManualFullPayment ? true : (hasManualFullPayment ? true : billingState.is_collected)),
       collected_amount: finalCollectedAmount,
       outstanding_amount: finalOutstandingAmount,
       payment: {
@@ -6760,12 +6911,7 @@ async function getQuoteDashboard(query, user) {
     ? { ...buildQuoteAccessWhere(user) }
     : {};
 
-  const statusFilter = normalizeQuoteFilterStatus(query.status);
-  if (statusFilter?.length) {
-    appendAndCondition(where, {
-      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
-    });
-  }
+  applyQuoteStatusFilter(where, query.status);
 
   applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
 
@@ -6980,6 +7126,17 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
     const currentVersion = await getLatestQuoteVersionRecord(salesQuoteId, transaction);
     await attachQuoteVersionToActivity(transaction, statusActivity, currentVersion);
     await transaction.commit();
+    if (status === 'rejected' && previousQuoteAuditSnapshot.status !== 'rejected' && isClientRole(user?.role)) {
+      await businessNotifications.notify({
+        userId: quote.assigned_sales_rep_id || quote.created_by_user_id,
+        title: 'Client declined quote',
+        message: `The client declined quote ${quote.quote_number || salesQuoteId}.`,
+        topic: 'shoots', category: 'proposals', type: 'client_quote_declined',
+        referenceType: 'sales_quote', referenceId: String(salesQuoteId),
+        payload: { sales_quote_id: String(salesQuoteId) },
+        priority: 'high', dedupeWindowSeconds: 60
+      });
+    }
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
     await transaction.rollback();
@@ -7004,6 +7161,8 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
     if (String(quote.status || '').toLowerCase() === 'expired') {
       throw new Error('Quote cannot be sent because it is expired');
     }
+
+    const wasSentBefore = Boolean(quote.sent_at);
 
     const quoteDetails = await getQuoteById(salesQuoteId, user);
     if (!quoteDetails) {
@@ -7078,6 +7237,13 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
     );
 
     await transaction.commit();
+    await businessNotifications.notifyQuoteClient(quote, {
+      title: wasSentBefore ? 'Revised quote ready' : 'Quote ready for your review',
+      message: `Quote ${quote.quote_number || salesQuoteId} ${wasSentBefore ? 'has been revised and sent to you.' : 'has been sent to you.'}`,
+      topic: 'shoots', category: 'proposals', type: wasSentBefore ? 'quote_revised' : 'quote_sent',
+      referenceType: 'sales_quote', referenceId: String(salesQuoteId),
+      payload: { sales_quote_id: String(salesQuoteId) }, dedupeWindowSeconds: 60
+    });
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
     await transaction.rollback();
@@ -7101,6 +7267,54 @@ async function acceptQuoteProposal(token) {
     sendClientEmail: true,
     sendSalesEmail: true
   });
+}
+
+async function respondToQuoteProposal(token, action, reason = '') {
+  if (!['decline', 'request_change'].includes(action)) throw new Error('Invalid quote response');
+  const decoded = verifyQuoteAcceptToken(token);
+  const salesQuoteId = Number(decoded.sales_quote_id);
+  const responseReason = String(reason || '').trim();
+  if (action === 'request_change' && !responseReason) throw new Error('Change request details are required');
+  if (responseReason.length > 2000) throw new Error('Response details are too long');
+
+  const transaction = await db.sequelize.transaction();
+  let quote;
+  let alreadyResponded = false;
+  try {
+    quote = await db.sales_quotes.findByPk(salesQuoteId, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!quote || (decoded.quote_number && quote.quote_number !== decoded.quote_number) ||
+      (decoded.client_email && quote.client_email && String(decoded.client_email).toLowerCase() !== String(quote.client_email).toLowerCase())) {
+      throw new Error('Invalid quote response token');
+    }
+    if (action === 'decline' && quote.status === 'rejected') {
+      alreadyResponded = true;
+    } else if (!['sent', 'viewed'].includes(quote.status)) {
+      throw new Error(`Quote cannot be responded to because it is ${quote.status}`);
+    }
+    if (!alreadyResponded) {
+      if (action === 'decline') await quote.update({ status: 'rejected', rejected_at: new Date(), updated_at: new Date() }, { transaction });
+      await recordActivity(transaction, salesQuoteId, action === 'decline' ? 'rejected' : 'updated', null,
+        action === 'decline' ? 'Quote declined by client' : 'Quote change requested by client',
+        { source: 'client_quote_response', action, reason: responseReason });
+    }
+    await transaction.commit();
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    throw error;
+  }
+
+  if (!alreadyResponded) await businessNotifications.notify({
+    userId: quote.assigned_sales_rep_id || quote.created_by_user_id,
+    title: action === 'decline' ? 'Client declined quote' : 'Client requested quote changes',
+    message: action === 'decline'
+      ? `The client declined quote ${quote.quote_number || salesQuoteId}.`
+      : `The client requested changes to quote ${quote.quote_number || salesQuoteId}.`,
+    topic: 'shoots', category: 'proposals', type: action === 'decline' ? 'client_quote_declined' : 'client_quote_change_requested',
+    referenceType: 'sales_quote', referenceId: String(salesQuoteId),
+    payload: { sales_quote_id: String(salesQuoteId), response_reason: responseReason },
+    priority: 'high'
+  });
+  return { sales_quote_id: salesQuoteId, action, already_responded: alreadyResponded };
 }
 
 async function acceptQuoteById(salesQuoteId, options = {}) {
@@ -7246,6 +7460,16 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
           ? await sendQuoteAcceptedSalesNotificationEmail(emailPayload)
           : { success: false, skipped: true }
       };
+      if (['email_accept_link', 'signature_sign'].includes(activitySource)) {
+        await businessNotifications.notify({
+          userId: quote.assigned_sales_rep_id || quote.created_by_user_id,
+          title: 'Client accepted quote',
+          message: `The client accepted quote ${quote.quote_number || salesQuoteId}.`,
+          topic: 'shoots', category: 'proposals', type: 'client_quote_accepted',
+          referenceType: 'sales_quote', referenceId: String(salesQuoteId),
+          payload: { sales_quote_id: String(salesQuoteId), booking_id: String(bookingConversion?.booking_id || '') }
+        });
+      }
     }
 
     return {
@@ -7312,6 +7536,7 @@ module.exports = {
   createQuote,
   duplicateQuote,
   updateQuote,
+  applyPendingQuoteChange,
   convertQuoteToBooking,
   getQuoteById,
   listQuoteVersions,
@@ -7329,6 +7554,7 @@ module.exports = {
   sendQuoteProposal,
   getQuoteAcceptancePreview,
   acceptQuoteProposal,
+  respondToQuoteProposal,
   acceptQuoteOnSignature,
   ensureQuoteBookingForPayment,
   downloadQuotePdf

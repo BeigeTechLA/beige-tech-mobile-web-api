@@ -11,6 +11,14 @@ const DEFAULT_TOPICS = {
   files: true,
 };
 const ALLOWED_TOPICS = new Set(Object.keys(DEFAULT_TOPICS));
+// These are notification-centre categories, not FCM topics. Keeping the two
+// preference sets separate means a user can mute a noisy inbox category
+// without accidentally changing device-level delivery preferences.
+const ALLOWED_INBOX_CATEGORIES = new Set([
+  'messages', 'meetings', 'files', 'shoots', 'payments', 'projects', 'proposals', 'system',
+  'leads', 'agreements', 'disputes', 'payouts', 'reviews'
+]);
+const PROJECT_INBOX_CATEGORIES = new Set(['projects', 'project', 'shoots', 'meetings', 'proposals']);
 
 const normalizeString = (value) => {
   if (value == null) return null;
@@ -70,6 +78,14 @@ const normalizeTopics = (topics = null) => {
   );
 };
 
+const normalizeMutedCategories = (categories = null) => {
+  if (!Array.isArray(categories)) return null;
+
+  return [...new Set(categories
+    .map((category) => normalizeString(category)?.toLowerCase())
+    .filter((category) => category && ALLOWED_INBOX_CATEGORIES.has(category)))];
+};
+
 const parseJsonObject = (value) => {
   if (!value) return null;
   if (typeof value === 'object' && !Array.isArray(value)) return value;
@@ -120,6 +136,13 @@ const formatUserNotificationPreference = (preference = null) => {
     email_enabled: normalizeBoolean(plain.email_enabled, true),
     topics: withDefaultTopics(plain.topics),
     email_topics: withDefaultTopics(plain.email_topics),
+    muted_categories: normalizeMutedCategories(
+      Array.isArray(plain.muted_categories)
+        ? plain.muted_categories
+        : (() => {
+          try { return JSON.parse(plain.muted_categories || 'null'); } catch (_) { return null; }
+        })()
+    ) || [],
   };
 };
 
@@ -507,6 +530,60 @@ exports.updateEmailNotificationPreferences = async ({
   }
 
   return formatUserNotificationPreference(await modelNotificationPreferences.create(payload));
+};
+
+exports.updateInboxNotificationPreferences = async ({ userId, mutedCategories }) => {
+  if (!userId) {
+    const error = new Error('Authenticated user is required.');
+    error.httpCode = constants.UNAUTHORIZED.code;
+    throw error;
+  }
+
+  const normalizedMutedCategories = normalizeMutedCategories(mutedCategories);
+  if (!normalizedMutedCategories) {
+    const error = new Error('muted_categories must be an array of supported notification categories.');
+    error.httpCode = constants.BAD_REQUEST.code;
+    throw error;
+  }
+
+  const payload = {
+    user_id: userId,
+    muted_categories: normalizedMutedCategories,
+    updated_at: new Date(),
+  };
+  const existing = await modelNotificationPreferences.findOne({ where: { user_id: userId } });
+  if (existing) {
+    await existing.update(payload);
+    return formatUserNotificationPreference(await existing.reload());
+  }
+
+  return formatUserNotificationPreference(await modelNotificationPreferences.create(payload));
+};
+
+// Category mutes affect browser push only. The MySQL inbox is the complete
+// history even when a category or device is muted. Critical push bypasses mute.
+exports.isPushCategoryAllowedForUser = async ({
+  userId,
+  category = null,
+  priority = 'normal',
+}) => {
+  if (isCriticalPriority(priority) || !userId) return true;
+
+  const normalizedCategory = normalizeString(category)?.toLowerCase();
+  if (!normalizedCategory) return true;
+
+  const preference = await modelNotificationPreferences.findOne({
+    where: { user_id: userId },
+    raw: true,
+  });
+  if (!preference) return true;
+
+  const mutedCategories = formatUserNotificationPreference(preference).muted_categories;
+  if (mutedCategories.includes(normalizedCategory)) return false;
+
+  // The UI's Projects tab groups shoots and meetings. Muting Projects should
+  // consistently mute every notification represented by that tab.
+  return !(mutedCategories.includes('projects') && PROJECT_INBOX_CATEGORIES.has(normalizedCategory));
 };
 
 exports.isEmailAllowedForUser = async ({

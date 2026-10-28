@@ -4,6 +4,7 @@ const constants = require('../utils/constants');
 const { Sequelize } = require('sequelize');
 const { parseLocation, formatLocationResponse, extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { resolveEventDateAndStartTime, normalizeTime } = require('../utils/timezone');
+const businessNotifications = require('../services/business-notification.service');
 
 /**
  * Create a new booking
@@ -469,6 +470,12 @@ exports.updateBooking = async (req, res) => {
       });
     }
 
+    if (Number(booking.user_id) !== Number(userId) && !req.isInternalMember) {
+      return res.status(constants.FORBIDDEN.code).json({ success: false, message: 'You cannot update this booking' });
+    }
+
+    const previousBooking = booking.toJSON();
+
     const {
       order_name,
       project_type,
@@ -583,6 +590,26 @@ exports.updateBooking = async (req, res) => {
 
     // Update booking
     await booking.update(updateData);
+
+    if (Number(previousBooking.is_cancelled) !== 1 && Number(booking.is_cancelled) === 1) {
+      await businessNotifications.notifyShootAudience(booking.stream_project_booking_id, {
+        title: 'Shoot cancelled',
+        message: `Shoot ${booking.stream_project_booking_id} has been cancelled. Review the booking for details.`,
+        topic: 'shoots', category: 'shoots', type: 'shoot_cancelled',
+        referenceType: 'booking', referenceId: String(booking.stream_project_booking_id),
+        payload: { booking_id: String(booking.stream_project_booking_id) }, priority: 'high'
+      }, { excludeUserId: userId, includeOwner: true, includePending: true });
+    } else if (Number(booking.is_cancelled) !== 1 && Number(booking.is_draft) !== 1 &&
+      ['event_date', 'start_time', 'end_time', 'event_location'].some((key) =>
+        updateData[key] !== undefined && String(previousBooking[key] ?? '') !== String(booking[key] ?? ''))) {
+      await businessNotifications.notifyShootAudience(booking.stream_project_booking_id, {
+        title: 'Shoot details changed',
+        message: `The date, time, or location for shoot ${booking.stream_project_booking_id} changed. Please review the latest details.`,
+        topic: 'shoots', category: 'shoots', type: 'shoot_schedule_location_changed',
+        referenceType: 'booking', referenceId: String(booking.stream_project_booking_id),
+        payload: { booking_id: String(booking.stream_project_booking_id) }, priority: 'high'
+      }, { excludeUserId: userId, includeOwner: true });
+    }
 
     // Fetch updated booking
     const updatedBooking = await stream_project_booking.findOne({

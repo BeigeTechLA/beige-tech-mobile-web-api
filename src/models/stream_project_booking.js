@@ -15,6 +15,10 @@ module.exports = function(sequelize, DataTypes) {
         key: 'user_id'
       }
     },
+    producer_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
     updated_by: {
       type: DataTypes.INTEGER,
       allowNull: true,

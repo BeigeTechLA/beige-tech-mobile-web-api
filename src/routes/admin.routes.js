@@ -208,6 +208,7 @@ router.post('/create-crew-member', admin.createCrewMember);
 router.post('/matchEquipments', admin.matchEquipment);
 router.post('/assignMatchEquipment', admin.saveMatchedEquipment);
 router.get('/get-project/:project_id', authMiddleware, projectDetailView, admin.getProjectDetails);
+router.put('/shoots/:project_id/crew-requirements', authMiddleware, shootsEdit, admin.updateProjectCrewRequirements);
 router.put('/shoots/update-date-location/:project_id', authMiddleware, shootsEdit, admin.updateProjectDateLocation);
 router.post('/shoots/update-onboarding-form', authMiddleware, admin.submitProjectFormByAdmin);
 router.get('/get-active-projects', admin.getActiveProjects);
@@ -293,6 +294,8 @@ router.post('/dashboard-detail', authMiddleware, dashboardView, admin.getDashboa
 router.post('/verify-crew-member', authMiddleware, adminCreativePartnersEdit, admin.verifyCrewMember);
 router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
 router.get('/post-production-team-options', authMiddleware, shootsView, admin.getPostProductionTeamOptions);
+router.put('/shoots/:project_id/producer', authMiddleware, shootsEdit, admin.setShootProducer);
+router.get('/my-producer-shoots', authMiddleware, projectListView, admin.getMyProducerShoots);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
 router.post('/remove-post-production-member', authMiddleware, shootsEdit, admin.removePostProductionMember);
@@ -305,7 +308,7 @@ router.get(
 );
 router.get('/archive-history', authMiddleware, adminUsersView, admin.getArchiveHistory);
 router.get('/login-history', authMiddleware, rolesPermissionsView, admin.getLoginHistory);
-router.put('/edit-client/:client_id', admin.editClient);
+router.put('/edit-client/:client_id', authMiddleware, admin.editClient);
 router.delete('/delete-client/:client_id', authMiddleware, adminClientsDelete, admin.deleteClient);
 router.post('/restore-client/:client_id', authMiddleware, adminClientsDelete, admin.restoreClient);
 router.post('/convert-client-to-creative-partner/:client_id', authMiddleware, adminClientsEdit, admin.convertClientToCreativePartner);
@@ -346,6 +349,9 @@ router.get('/users/roles', authMiddleware, rolesPermissionsView, admin.getUsersW
 router.get('/users/:user_id/role-details', authMiddleware, rolesPermissionsView, admin.getUserRoleDetails);
 router.get('/permissions/modules', authMiddleware, rolesPermissionsView, admin.getPermissionModules);
 router.delete('/delete-user/:user_id', authMiddleware, adminUsersDelete, admin.deleteUser);
+router.get('/users/:user_id/reassignments',authMiddleware,adminUsersDelete,admin.getUserReassignments);
+router.post('/users/:user_id/reassignments', authMiddleware, rolesPermissionsEdit, admin.reassignUserSalesRecords);
+router.get('/users/:user_id/reassignment-history', authMiddleware, rolesPermissionsView, admin.getUserReassignmentHistory);
 router.post('/restore-user/:user_id', authMiddleware, adminUsersDelete, admin.restoreUser);
 router.post('/users/permissions/assign', authMiddleware, rolesPermissionsEdit, admin.assignPermissionsToUser);
 router.put('/users/permissions/update', authMiddleware, rolesPermissionsEdit, admin.updateUserPermissions);

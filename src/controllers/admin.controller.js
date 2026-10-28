@@ -7,6 +7,7 @@ const common_model = require('../utils/common_model');
 const { Op, QueryTypes } = require('sequelize');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
+const { randomUUID } = require('crypto');
 const {
   sendTaskAssignmentEmail,
   sendCPNewBookingRequestEmail,
@@ -15,6 +16,7 @@ const {
   sendCreativePartnerProfileReminderEmail
 } = require('../utils/emailService');
 const pushNotificationService = require('../services/push-notification.service');
+const businessNotifications = require('../services/business-notification.service');
 const { Parser } = require('json2csv');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
@@ -46,6 +48,7 @@ const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const { openSalesLeadSql } = require('../utils/salesLeadStatusFilters');
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
@@ -53,6 +56,7 @@ const userExportService = require('../services/user-export.service');
 const detailsPendingCpService = require('../services/details-pending-cp.service');
 const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 const passwordExpiryService = require('../services/internal-password-expiry.service');
+const { describeSignupConflicts } = require('../utils/signup-conflicts');
 const { ipType, deviceDetails, sessionDetails } = require('../utils/login-session-details');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
@@ -64,6 +68,63 @@ const getFrontendBaseUrl = () =>
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
+
+const isSuperAdminRequest = (req) => {
+  const role = normalizeAdminRole(req.user?.userRole || req.userRole);
+  return role === 'super_admin' || role === 'superadmin';
+};
+
+// A shoot is only closed once every currently assigned CP has accepted the
+// shoot and Finance has approved that CP's latest compensation submission.
+// Looking at a single approved earning here incorrectly closes a multi-CP
+// shoot as soon as Finance approves the first CP.
+const getLatestCompensationByCreator = (earnings = []) => {
+  const latestEarningByCreator = new Map();
+  [...earnings]
+    .sort((left, right) => {
+      const leftUpdatedAt = new Date(left.updated_at || left.created_at || 0).getTime();
+      const rightUpdatedAt = new Date(right.updated_at || right.created_at || 0).getTime();
+      return rightUpdatedAt - leftUpdatedAt || Number(right.creator_earning_id || 0) - Number(left.creator_earning_id || 0);
+    })
+    .forEach((earning) => {
+      const creatorId = Number(earning.creator_id);
+      if (creatorId && !latestEarningByCreator.has(creatorId)) {
+        latestEarningByCreator.set(creatorId, earning);
+      }
+    });
+
+  return latestEarningByCreator;
+};
+
+const isCpAssignmentLocked = (assignments = [], earnings = []) => {
+  const activeAssignments = assignments.filter((assignment) => Number(assignment.is_active) === 1);
+  if (!activeAssignments.length) return false;
+
+  const latestEarningByCreator = getLatestCompensationByCreator(earnings);
+
+  return activeAssignments.every((assignment) => {
+    const earning = latestEarningByCreator.get(Number(assignment.crew_member_id));
+    return Number(assignment.crew_accept) === 1 && earning?.approval_status === 'approved';
+  });
+};
+
+const getCpAssignmentLock = async (projectId) => {
+  const assignments = await assigned_crew.findAll({
+    where: { project_id: projectId, is_active: 1 },
+    attributes: ['crew_member_id', 'crew_accept', 'is_active'],
+    raw: true
+  });
+  const creatorIds = [...new Set(assignments.map((assignment) => Number(assignment.crew_member_id)).filter(Boolean))];
+  const earnings = creatorIds.length
+    ? await db.creator_earnings.findAll({
+        where: { booking_id: projectId, creator_id: { [Op.in]: creatorIds } },
+        attributes: ['creator_earning_id', 'creator_id', 'approval_status', 'created_at', 'updated_at'],
+        raw: true
+      })
+    : [];
+
+  return isCpAssignmentLocked(assignments, earnings);
+};
 
 // Roles & Permissions viewers: successful internal sign-ins with account and location details.
 exports.getLoginHistory = async (req, res) => {
@@ -189,7 +250,7 @@ exports.getLoginHistory = async (req, res) => {
 const POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES = [
   'Post Production Manager',
   'Producer',
-  // 'super_admin'
+  'super_admin'
 ];
 const normalizePhoneNumber = (number) => String(number || '').replace(/\D/g, '');
 
@@ -2828,20 +2889,18 @@ exports.getProjectDetails = async (req, res) => {
         booking_id: projectJson.stream_project_booking_id,
         approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] }
       },
-      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount', 'approval_status'],
+      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount', 'approval_status', 'created_at', 'updated_at'],
       order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
     });
 
     const cpCompensationRows = creatorCompensations.map((row) => row.toJSON());
-    const cpCompensationLocked = cpCompensationRows.some((earning) => earning.approval_status === 'approved');
+    const cpCompensationLocked = isCpAssignmentLocked(projectJson.assigned_crews || [], cpCompensationRows);
     const cpCompensationHasPending = cpCompensationRows.some((earning) => earning.approval_status === 'pending_approval');
     const compensationByCreatorId = new Map();
-    cpCompensationRows.forEach((earning) => {
+    const latestCompensationByCreator = getLatestCompensationByCreator(cpCompensationRows);
+    latestCompensationByCreator.forEach((earning, creatorId) => {
       const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
-
-      if (!compensationByCreatorId.has(Number(earning.creator_id))) {
-        compensationByCreatorId.set(Number(earning.creator_id), totalCompensation);
-      }
+      compensationByCreatorId.set(creatorId, totalCompensation);
     });
 
     // 6. Crew Processing & Fulfillment Summary
@@ -2866,7 +2925,10 @@ exports.getProjectDetails = async (req, res) => {
                 roleNames = allRoles.filter(r => roleIds.map(String).includes(String(r.role_id))).map(r => r.role_name);
                 
                 if (ac.crew_accept === 1) {
-                    const cat = roleIds.map(id => ID_TO_ROLE_MAP[String(id)]).find(c => fulfillmentSummary[c]);
+                    const categories = roleIds.map(id => ID_TO_ROLE_MAP[String(id)]);
+                    const cat = categories.includes('videographer') && categories.includes('photographer') && fulfillmentSummary.hybrid?.accepted < fulfillmentSummary.hybrid?.required
+                        ? 'hybrid'
+                        : categories.find(c => fulfillmentSummary[c] && fulfillmentSummary[c].accepted < fulfillmentSummary[c].required);
                     if (cat) fulfillmentSummary[cat].accepted += 1;
                 }
             } catch(e){}
@@ -3130,6 +3192,31 @@ exports.getProjectDetails = async (req, res) => {
   } catch (error) {
     console.error('Error fetching project details:', error);
     return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
+  }
+};
+
+exports.updateProjectCrewRequirements = async (req, res) => {
+  try {
+    const projectId = Number(req.params.project_id);
+    const roles = req.body?.crew_roles;
+    const allowed = ['photographer', 'videographer', 'hybrid', 'cinematographer'];
+    if (!Number.isInteger(projectId) || projectId <= 0 || !roles || typeof roles !== 'object' || Array.isArray(roles) ||
+        Object.keys(roles).some(role => !allowed.includes(role)) ||
+        allowed.some(role => roles[role] != null && (!Number.isInteger(roles[role]) || roles[role] < 0 || roles[role] > 10))) {
+      return res.status(400).json({ success: false, message: 'Invalid crew requirements' });
+    }
+    const counts = Object.fromEntries(allowed.map(role => [role, roles[role] || 0]));
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    if (total < 1 || total > 30) {
+      return res.status(400).json({ success: false, message: 'Select between 1 and 30 CPs' });
+    }
+    const booking = await stream_project_booking.findByPk(projectId);
+    if (!booking) return res.status(404).json({ success: false, message: 'Shoot not found' });
+    await booking.update({ crew_roles: JSON.stringify(counts), crew_size_needed: total });
+    return res.json({ success: true, data: { crew_roles: counts, crew_size_needed: total } });
+  } catch (error) {
+    console.error('Update project crew requirements error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to update crew requirements' });
   }
 };
 
@@ -3452,6 +3539,16 @@ exports.updateProjectDateLocation = async (req, res) => {
     }
 
     await transaction.commit();
+
+    if (historyChanges.length > 0 && Number(project.is_cancelled) !== 1 && Number(project.is_draft) !== 1) {
+      await businessNotifications.notifyShootAudience(project.stream_project_booking_id, {
+        title: 'Shoot details changed',
+        message: `The date, time, or location for shoot ${project.stream_project_booking_id} changed. Please review the latest details.`,
+        topic: 'shoots', category: 'shoots', type: 'shoot_schedule_location_changed',
+        referenceType: 'booking', referenceId: String(project.stream_project_booking_id),
+        payload: { booking_id: String(project.stream_project_booking_id) }, priority: 'high'
+      }, { excludeUserId: updatedByUserId });
+    }
 
     return res.status(200).json({
       error: false,
@@ -5303,9 +5400,16 @@ exports.getGlobalShoots = async (req, res) => {
   try {
     const {range, start_date, end_date, search, status, cp_assignment, post_production_user_id, } = req.query;
 
-    const paidFilter = await getPaidCalendarFilter(req);
+    const paidFilter = req.myProducerScope ? {} : await getPaidCalendarFilter(req);
 
     let whereConditions = { ...paidFilter, is_active: 1};
+    if (req.myProducerScope) {
+      const userId = Number(req.user?.userId);
+      if (!Number.isInteger(userId) || userId <= 0) {
+        return res.status(401).json({ error: true, message: 'Authentication required' });
+      }
+      whereConditions.producer_user_id = userId;
+    }
 
     const andConditions = buildGlobalShootRangeFilter(range, start_date, end_date);
     const appendAndCondition = (
@@ -5423,6 +5527,7 @@ exports.getGlobalShoots = async (req, res) => {
           attributes: [
             'stream_project_booking_id',
             'project_name',
+            'shoot_type',
             'is_active',
             'status',
             'is_cancelled',
@@ -5634,6 +5739,8 @@ exports.getGlobalShoots = async (req, res) => {
             project_name:
               shoot.project_name ||
               null,
+
+            shoot_type: shoot.shoot_type || null,
 
             is_active:
               Number(
@@ -12190,6 +12297,11 @@ exports.getPostProductionTeamOptions = async (req, res) => {
     // who are already actively assigned to that shoot.
     let assignedEmails = new Set();
     if (Number.isInteger(projectId) && projectId > 0) {
+      const project = await stream_project_booking.findByPk(projectId, { attributes: ['producer_user_id'] });
+      if (project?.producer_user_id) {
+        const producer = await users.findByPk(project.producer_user_id, { attributes: ['email'] });
+        if (producer?.email) assignedEmails.add(String(producer.email).trim().toLowerCase());
+      }
       const assignedMembers = await assigned_post_production_member.findAll({
         where: { project_id: projectId, is_active: 1 },
         attributes: [],
@@ -12202,11 +12314,10 @@ exports.getPostProductionTeamOptions = async (req, res) => {
         raw: true
       });
 
-      assignedEmails = new Set(
-        assignedMembers
-          .map((member) => String(member['post_production_member.email'] || '').trim().toLowerCase())
-          .filter(Boolean)
-      );
+      assignedMembers.forEach((member) => {
+        const email = String(member['post_production_member.email'] || '').trim().toLowerCase();
+        if (email) assignedEmails.add(email);
+      });
     }
 
     const availableUsers = activeUsers.filter(
@@ -12229,6 +12340,45 @@ exports.getPostProductionTeamOptions = async (req, res) => {
       success: false,
       message: 'Failed to fetch post-production team options'
     });
+  }
+};
+
+exports.getMyProducerShoots = (req, res) => {
+  req.myProducerScope = true;
+  return exports.getGlobalShoots(req, res);
+};
+
+exports.setShootProducer = async (req, res) => {
+  try {
+    const projectId = Number(req.params.project_id);
+    const producerId = req.body.producer_user_id == null ? null : Number(req.body.producer_user_id);
+    if (!Number.isInteger(projectId) || projectId <= 0 || (producerId !== null && (!Number.isInteger(producerId) || producerId <= 0))) {
+      return res.status(400).json({ success: false, message: 'Valid project and producer IDs are required' });
+    }
+    const project = await stream_project_booking.findOne({ where: { stream_project_booking_id: projectId, is_active: 1 } });
+    if (!project) return res.status(404).json({ success: false, message: 'Shoot not found' });
+
+    if (producerId !== null) {
+      const producer = await users.findOne({
+        where: { id: producerId, is_active: 1 },
+        attributes: ['id', 'name', 'email'],
+        include: [{ model: db.user_type, as: 'userType', attributes: ['user_role'], required: true,
+          where: { user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES }, is_active: 1 } }]
+      });
+      if (!producer) return res.status(400).json({ success: false, message: 'Producer is not an active eligible team member' });
+      const assignments = await assigned_post_production_member.findAll({
+        where: { project_id: projectId, is_active: 1 },
+        include: [{ model: post_production_members, as: 'post_production_member', attributes: ['email'], required: true }]
+      });
+      if (assignments.some((item) => String(item.post_production_member?.email || '').trim().toLowerCase() === String(producer.email || '').trim().toLowerCase())) {
+        return res.status(409).json({ success: false, message: 'This person is already on the post production team' });
+      }
+    }
+    await project.update({ producer_user_id: producerId });
+    return res.status(200).json({ success: true, data: { producer_user_id: producerId } });
+  } catch (error) {
+    console.error('Set shoot producer failed:', error);
+    return res.status(500).json({ success: false, message: 'Failed to update shoot producer' });
   }
 };
 
@@ -12366,6 +12516,13 @@ exports.assignPostProductionMember = async (req, res) => {
         error: true,
         message: 'Project not found or inactive',
       });
+    }
+
+    if (project.producer_user_id) {
+      const producer = await users.findByPk(project.producer_user_id, { attributes: ['email'] });
+      if (producer?.email && String(producer.email).trim().toLowerCase() === String(selectedUserJson.email || '').trim().toLowerCase()) {
+        return res.status(409).json({ error: true, message: 'This person is already the shoot producer' });
+      }
     }
 
     // Prevent duplicate active assignment of the same member for this project.
@@ -13221,6 +13378,9 @@ exports.exportClientsCsv = async (req, res) => {
           '';
 
         return {
+          'Client ID': escapeClientCsvValue(
+            client.client_id || ''
+          ),
           'User ID': escapeClientCsvValue(
             client.user_id ||
             client.user?.id ||
@@ -13281,6 +13441,7 @@ exports.exportClientsCsv = async (req, res) => {
     );
 
     const fields = [
+      'Client ID',
       'User ID',
       'Name',
       'Type',
@@ -13339,75 +13500,96 @@ exports.exportClientsCsv = async (req, res) => {
 
 
 exports.editClient = async (req, res) => {
+  if (!isSuperAdminRequest(req)) {
+    return res.status(403).json({ success: false, message: 'Only super admins can edit clients.' });
+  }
+
+  const name = String(req.body?.name || '').trim();
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const phone_number = String(req.body?.phone_number || '').trim();
+  const clientId = Number(req.params.client_id);
+  if (!Number.isInteger(clientId) || clientId <= 0) {
+    return res.status(400).json({ success: false, message: 'Invalid client.' });
+  }
+  if (!name || !email || !phone_number) {
+    return res.status(400).json({ success: false, message: 'Name, email, and phone number are required.' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ success: false, message: 'Enter a valid email address.' });
+  }
+  if (!/^[0-9+\-\s()]{7,20}$/.test(phone_number)) {
+    return res.status(400).json({ success: false, message: 'Enter a valid phone number.' });
+  }
+
+  const transaction = await db.sequelize.transaction();
   try {
-    const { client_id } = req.params;
-    const { name, email, phone_number } = req.body;
-
-    if (!name || !email || !phone_number) {
-      return res.status(400).json({
-        error: true,
-        message: 'Name, email, and phone number are required'
-      });
-    }
-
     const client = await clients.findOne({
-      where: { client_id, is_active: 1 }
+      where: { client_id: clientId, is_active: 1 }, transaction
     });
 
     if (!client) {
-      return res.status(404).json({
-        error: true,
-        message: 'Client not found or inactive'
-      });
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Client not found or inactive.' });
     }
 
-    const user = await users.findOne({
-      where: { id: client.user_id, is_active: 1 }
+    const user = client.user_id
+      ? await users.scope('all').findOne({ where: { id: client.user_id }, transaction })
+      : null;
+
+    if (client.user_id && !user) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Associated user not found.' });
+    }
+
+    const matchingUsers = await users.scope('all').findAll({
+      where: {
+        [Op.or]: [{ email }, { phone_number }],
+        ...(user ? { id: { [Op.ne]: user.id } } : {})
+      },
+      attributes: ['email', 'phone_number'], transaction
     });
-
-    if (!user) {
-      return res.status(404).json({
-        error: true,
-        message: 'Associated user not found or inactive'
-      });
+    const matchingClients = await clients.findAll({
+      where: { [Op.or]: [{ email }, { phone_number }], client_id: { [Op.ne]: clientId } },
+      attributes: ['email', 'phone_number'], transaction
+    });
+    const conflict = describeSignupConflicts(
+      [...matchingUsers, ...matchingClients],
+      { email, phone_number }
+    );
+    if (conflict) {
+      await transaction.rollback();
+      return res.status(409).json(conflict);
     }
 
-    const updatedClient = await clients.update(
-      {
-        name,
-        email,
-        phone_number
-      },
-      {
-        where: { client_id }
-      }
-    );
-
-    const updatedUser = await users.update(
-      {
-        name,
-        email,
-        phone_number
-      },
-      {
-        where: { id: client.user_id }
-      }
-    );
+    const updated_at = new Date();
+    await client.update({ name, email, phone_number, updated_at }, { transaction });
+    if (user) await user.update({ name, email, phone_number, updated_at }, { transaction });
+    await transaction.commit();
 
     return res.status(200).json({
-      error: false,
-      message: 'Client and user updated successfully',
-      data: {
-        client: updatedClient,
-        user: updatedUser
-      }
+      success: true,
+      message: 'Client details updated successfully.',
+      data: { client: { client_id: client.client_id, name, email, phone_number } }
     });
 
   } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
     console.error("Error updating client:", error);
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      const fields = new Set([
+        ...Object.keys(error.fields || {}),
+        ...(error.errors || []).map((detail) => detail.path)
+      ]);
+      const conflict = describeSignupConflicts([
+        { email: fields.has('email') ? email : null, phone_number: fields.has('phone_number') ? phone_number : null }
+      ], { email, phone_number });
+      return res.status(409).json(conflict || {
+        success: false, message: 'Email or phone number already exists. Please check the details and try again.'
+      });
+    }
     return res.status(500).json({
-      error: true,
-      message: 'Internal server error'
+      success: false,
+      message: 'Something went wrong. Please try again later.'
     });
   }
 };
@@ -14604,6 +14786,59 @@ exports.getArchiveHistory = async (req, res) => {
       };
     });
 
+    // Show reassignment events in the same history feed as deactivate/restore.
+    // Each row retains the previous owner, new owner, actor, and event time.
+    if (target_type === 'internal_user' && target_id) {
+      const reassignmentRows = await db.sequelize.query(
+        `SELECT h.id AS history_id, h.batch_id, h.record_type, h.record_id, h.client_name,
+                h.from_user_id, h.to_user_id, h.actor_user_id, h.created_at,
+                source.name AS previous_sales_rep, target.name AS new_sales_rep,
+                actor.name AS performed_by_name
+         FROM sales_record_reassignment_history h
+         LEFT JOIN users source ON source.id = h.from_user_id
+         LEFT JOIN users target ON target.id = h.to_user_id
+         LEFT JOIN users actor ON actor.id = h.actor_user_id
+         WHERE h.from_user_id = :targetId OR h.to_user_id = :targetId
+         ORDER BY h.created_at DESC, h.id DESC`,
+        { replacements: { targetId: Number(target_id) }, type: QueryTypes.SELECT }
+      );
+
+      const reassignmentGroups = new Map();
+      reassignmentRows.forEach((row) => {
+        // Older rows predate batch IDs. They were written by one request with
+        // the same actor, source user, and database timestamp, so group them
+        // using those fields to keep existing history readable as one action.
+        const groupKey = row.batch_id || `legacy-${row.actor_user_id}-${row.from_user_id}-${row.created_at}`;
+        if (!reassignmentGroups.has(groupKey)) {
+          reassignmentGroups.set(groupKey, {
+            history_id: `reassignment-${row.batch_id || row.history_id}`,
+            target_type: 'internal_user',
+            target_id: Number(target_id),
+            action: 'reassigned',
+            performed_by_name: row.performed_by_name,
+            created_at: row.created_at,
+            metadata: {
+              performed_by: row.performed_by_name,
+              actor_user_id: row.actor_user_id,
+              records: []
+            }
+          });
+        }
+        reassignmentGroups.get(groupKey).metadata.records.push({
+          record_type: row.record_type,
+          record_id: row.record_id,
+          client_name: row.client_name,
+          previous_sales_rep: row.previous_sales_rep,
+          new_sales_rep: row.new_sales_rep,
+          from_user_id: row.from_user_id,
+          to_user_id: row.to_user_id
+        });
+      });
+
+      data.push(...Array.from(reassignmentGroups.values()));
+      data.sort((first, second) => new Date(second.created_at || '').getTime() - new Date(first.created_at || '').getTime());
+    }
+
     return res.status(200).json({
       error: false,
       message: 'Archive history fetched successfully',
@@ -14794,6 +15029,7 @@ exports.getClientsShoots = async (req, res) => {
     const [
       bookedLeadRows,
       bookingPaymentSummaryRows,
+      manualPaymentRows,
       allEventMasterTypes
     ] = bookingIds.length
       ? await Promise.all([
@@ -14818,9 +15054,21 @@ exports.getClientsShoots = async (req, res) => {
               type: QueryTypes.SELECT
             }
           ),
+          db.sequelize.query(
+            `
+            SELECT booking_id, COALESCE(SUM(amount), 0) AS paid_amount
+            FROM booking_manual_payments
+            WHERE booking_id IN (:bookingIds)
+            GROUP BY booking_id
+            `,
+            {
+              replacements: { bookingIds },
+              type: QueryTypes.SELECT
+            }
+          ),
           event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
         ])
-      : [[], [], await event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })];
+      : [[], [], [], await event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })];
 
     const bookedBookingIdSet = new Set(
       bookedLeadRows
@@ -14831,6 +15079,11 @@ exports.getClientsShoots = async (req, res) => {
     const bookingPaymentSummaryByBookingId = new Map(
       bookingPaymentSummaryRows
         .map((row) => [Number(row.booking_id), row])
+        .filter(([bookingId]) => Number.isFinite(bookingId))
+    );
+    const manualPaidAmountByBookingId = new Map(
+      manualPaymentRows
+        .map((row) => [Number(row.booking_id), parseAmountCandidate(row.paid_amount) || 0])
         .filter(([bookingId]) => Number.isFinite(bookingId))
     );
 
@@ -14885,11 +15138,12 @@ exports.getClientsShoots = async (req, res) => {
       }),
       payment_transactions.findOne({
         where: { payment_id: project.payment_id },
-        attributes: ['total_amount']
+        attributes: ['total_amount', 'status']
       })
     ]);
 
     const bookingPaymentSummary = bookingPaymentSummaryByBookingId.get(Number(project.stream_project_booking_id)) || null;
+    const manualPaidAmount = manualPaidAmountByBookingId.get(Number(project.stream_project_booking_id)) || 0;
     const summaryPaidAmount = bookingPaymentSummary
       ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
       : null;
@@ -14912,7 +15166,7 @@ exports.getClientsShoots = async (req, res) => {
     });
     const totalPaidAmount = summaryPaidAmount !== null
       ? summaryPaidAmount
-      : (project.payment_id ? displayAmount : 0);
+      : (manualPaidAmount > 0 ? manualPaidAmount : (project.payment_id ? displayAmount : 0));
     const creditUsedAmount = summaryCreditUsedAmount || 0;
     const resolvedTotalValueAmount = summaryQuoteTotal !== null
       ? summaryQuoteTotal
@@ -14938,6 +15192,7 @@ exports.getClientsShoots = async (req, res) => {
         due_amount: pendingAmount,
         credit_used_amount: creditUsedAmount,
         payment_status: paymentStatus,
+        payment_transaction_status: paymentData?.status || null,
         event_type_labels: formatProjectEventTypeLabels(project.event_type, allEventMasterTypes, lineItems),
         event_location: (() => {
           const loc = project.event_location;
@@ -14966,8 +15221,9 @@ exports.getClientsShoots = async (req, res) => {
 
     projectDetails.forEach(item => {
       const proj = item.project;
-      const isManualPaid = bookedBookingIdSet.has(Number(proj.stream_project_booking_id));
-      const isStripePaid = Boolean(proj.payment_id);
+      const isManualPaid = Number(manualPaidAmountByBookingId.get(Number(proj.stream_project_booking_id)) || 0) > 0;
+      const paymentStatus = String(proj.payment_transaction_status || '').toLowerCase();
+      const isStripePaid = ['paid', 'completed', 'success', 'succeeded'].includes(paymentStatus);
       const hasCollectedPayment = Number(proj.paid_amount || proj.total_paid_amount || 0) > 0 ||
         Number(proj.credit_used_amount || 0) > 0 ||
         String(proj.payment_status || '').toLowerCase() === 'no_payment_due';
@@ -15137,7 +15393,12 @@ exports.searchCrewForLead = async (req, res) => {
             crewWhere.is_available = true;
         }
 
-        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
+        if (requestedRoles.includes('hybrid') && !hasGlobalCrewSearch) {
+            crewWhere[Op.and] = [
+                { [Op.or]: ROLE_GROUPS.videographer.map(id => ({ primary_role: { [Op.like]: `%${id}%` } })) },
+                { [Op.or]: ROLE_GROUPS.photographer.map(id => ({ primary_role: { [Op.like]: `%${id}%` } })) }
+            ];
+        } else if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
@@ -15224,11 +15485,14 @@ exports.searchCrewForLead = async (req, res) => {
             };
         });
 
+        const roleFilteredCrew = requestedRoles.includes('hybrid')
+            ? crewWithRoles.filter(crew => crew.role_names.includes('videographer') && crew.role_names.includes('photographer'))
+            : crewWithRoles;
         const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
-            ? crewWithRoles
+            ? roleFilteredCrew
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles.sort((a, b) => {
+            : roleFilteredCrew.sort((a, b) => {
                 if (a.distance === null && b.distance === null) return 0;
                 if (a.distance === null) return 1;
                 if (b.distance === null) return -1;
@@ -15448,7 +15712,7 @@ exports.searchCrewForLead = async (req, res) => {
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
-        const { lead_id, client_lead_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
+        const { lead_id, client_lead_id, crew_member_ids } = req.body;
 
         if (!lead_id && !client_lead_id) {
             return res.status(400).json({ success: false, message: "lead_id or client_lead_id is required." });
@@ -15457,17 +15721,6 @@ exports.assignCrewBulkSmart = async (req, res) => {
         if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
             return res.status(400).json({ success: false, message: "No crew members selected." });
         }
-
-        const ROLE_GROUPS = {
-            videographer: ["9", "1"],
-            photographer: ["10", "2"],
-            cinematographer: ["11", "3"]
-        };
-
-        const ID_TO_ROLE_MAP = {};
-        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-        });
 
         const leadModel = client_lead_id ? client_leads : sales_leads;
         const activityModel = client_lead_id ? client_lead_activities : sales_lead_activities;
@@ -15496,56 +15749,6 @@ exports.assignCrewBulkSmart = async (req, res) => {
         }
 
         const booking = lead.booking;
-        const approvedCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: booking.stream_project_booking_id,
-            approval_status: 'approved'
-          }
-        });
-
-        if (approvedCompensationCount > 0) {
-            return res.status(409).json({
-                success: false,
-                message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
-            });
-        }
-
-        const pendingCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: booking.stream_project_booking_id,
-            approval_status: 'pending_approval'
-          }
-        });
-
-        if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
-            return res.status(409).json({
-                success: false,
-                message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
-            });
-        }
-
-        const requestedLimits = typeof booking.crew_roles === 'string'
-          ? JSON.parse(booking.crew_roles)
-          : (booking.crew_roles || {});
-
-        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-
-        if (booking.assigned_crews) {
-          booking.assigned_crews.forEach(ac => {
-            if (ac.crew_member?.primary_role) {
-              try {
-                const parsed = JSON.parse(ac.crew_member.primary_role);
-                const roles = Array.isArray(parsed) ? parsed : [parsed];
-                roles.forEach(id => {
-                  const roleName = ID_TO_ROLE_MAP[String(id)];
-                  if (roleName) currentCounts[roleName]++;
-                });
-              } catch (e) {
-                console.error("Parse error in existing crew", e);
-              }
-            }
-          });
-        }
         const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
 
         const newCrewDetails = await crew_members.findAll({
@@ -15553,59 +15756,17 @@ exports.assignCrewBulkSmart = async (req, res) => {
         });
 
         const assignmentsToCreate = [];
-        const errors = [];
-
         newCrewDetails.forEach(crew => {
-            let roles = [];
-            try {
-                const parsed = JSON.parse(crew.primary_role || "[]");
-                roles = Array.isArray(parsed) ? parsed : [parsed];
-            } catch (e) {
-                roles = [crew.primary_role];
-            }
-
-            let roleDetected = null;
-            roles.forEach(id => {
-                if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
+            assignmentsToCreate.push({
+                  project_id: booking.stream_project_booking_id,
+                  crew_member_id: crew.crew_member_id,
+                  assigned_date: new Date(),
+                  status: 'selected',
+                  crew_accept: 0,
+                  is_active: 1,
+                  organization_type: 1
             });
-
-            if (roleDetected) {
-              const acceptedCount = currentCounts[roleDetected];
-              const limit = requestedLimits[roleDetected];
-
-              if (limit !== undefined && acceptedCount >= limit) {
-                errors.push(`Cannot add ${crew.first_name} (${roleDetected}).Limit of ${limit} reached.`);
-              } else {
-                assignmentsToCreate.push({
-                  project_id: booking.stream_project_booking_id,
-                  crew_member_id: crew.crew_member_id,
-                  assigned_date: new Date(),
-                  status: 'selected',
-                  crew_accept: 0,
-                  is_active: 1,
-                  organization_type: 1
-                });
-              }
-            } else {
-              assignmentsToCreate.push({
-                  project_id: booking.stream_project_booking_id,
-                  crew_member_id: crew.crew_member_id,
-                  assigned_date: new Date(),
-                  status: 'selected',
-                  crew_accept: 0,
-                  is_active: 1,
-                  organization_type: 1
-              });
-          }
         });
-
-        if (errors.length > 0 && assignmentsToCreate.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Assignments failed validation.", 
-                errors: errors 
-            });
-        }
 
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
@@ -15681,7 +15842,7 @@ exports.assignCrewBulkSmart = async (req, res) => {
       return res.json({
         success: true,
         message: `${assignmentsToCreate.length} crew members assigned successfully.`,
-        errors: errors.length > 0 ? errors : undefined
+        errors: undefined
       });
 
     } catch (error) {
@@ -15748,7 +15909,43 @@ exports.removeAssignedCrew = async (req, res) => {
             });
         }
 
+        const cpAssignmentLocked = await getCpAssignmentLock(lead.booking_id);
+        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
+            return res.status(403).json({
+                success: false,
+                message: "All assigned CPs have accepted and their compensation has been approved. Only a Super Admin can remove a CP."
+            });
+        }
+
         await assignment.update({ is_active: 0 });
+
+        if (Number(assignment.crew_accept) === 1) {
+            const booking = await stream_project_booking.findByPk(lead.booking_id, { attributes: ['user_id'] });
+            await Promise.all([
+              businessNotifications.notifyCreator(crew_member_id, {
+                title: 'Shoot assignment changed',
+                message: `You are no longer assigned to shoot ${lead.booking_id}. Please review your shoot requests.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed',
+                referenceType: 'booking', referenceId: String(lead.booking_id),
+                payload: { booking_id: String(lead.booking_id) }, priority: 'high'
+              }),
+              businessNotifications.notify({
+                userId: booking?.user_id,
+                title: 'Shoot team changed',
+                message: `The assigned creator for shoot ${lead.booking_id} changed. Please review the latest team.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_team_changed',
+                referenceType: 'booking', referenceId: String(lead.booking_id),
+                payload: { booking_id: String(lead.booking_id) }, priority: 'high'
+              }),
+              businessNotifications.notifyBookingOwner(lead.booking_id, {
+                title: 'Confirmed creator removed',
+                message: `A confirmed creator was removed from shoot ${lead.booking_id}. Arrange a replacement if needed.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed_owner',
+                referenceType: 'booking', referenceId: String(lead.booking_id),
+                payload: { booking_id: String(lead.booking_id) }, priority: 'high'
+              })
+            ]);
+        }
 
         const crewName = assignment.crew_member
             ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
@@ -16473,7 +16670,9 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
 
           const categories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
           
-          const targetCategory = categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
+          const targetCategory = categories.includes('videographer') && categories.includes('photographer') && fulfillment.hybrid?.accepted < fulfillment.hybrid?.required
+            ? 'hybrid'
+            : categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
           
           if (targetCategory) {
             fulfillment[targetCategory].accepted += 1;
@@ -16626,7 +16825,12 @@ exports.searchCrewForProject = async (req, res) => {
             crewWhere.is_available = true;
         }
 
-        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
+        if (requestedRoles.includes('hybrid') && !hasGlobalCrewSearch) {
+            crewWhere[Op.and] = [
+                { [Op.or]: ROLE_GROUPS.videographer.map(id => ({ primary_role: { [Op.like]: `%${id}%` } })) },
+                { [Op.or]: ROLE_GROUPS.photographer.map(id => ({ primary_role: { [Op.like]: `%${id}%` } })) }
+            ];
+        } else if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
@@ -16701,11 +16905,14 @@ exports.searchCrewForProject = async (req, res) => {
             };
         });
 
+        const roleFilteredCrew = requestedRoles.includes('hybrid')
+            ? crewWithRoles.filter(crew => crew.role_names.includes('videographer') && crew.role_names.includes('photographer'))
+            : crewWithRoles;
         const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
-            ? crewWithRoles
+            ? roleFilteredCrew
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles.sort((a, b) => {
+            : roleFilteredCrew.sort((a, b) => {
                 if (a.distance === null && b.distance === null) return 0;
                 if (a.distance === null) return 1;
                 if (b.distance === null) return -1;
@@ -16735,7 +16942,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
         const {
           project_id,
           crew_member_ids,
-          allow_pending_compensation_assignment,
           defer_new_shoot_request_email
         } = req.body;
         const deferNewShootRequestEmail = defer_new_shoot_request_email === true || defer_new_shoot_request_email === 'true';
@@ -16747,17 +16953,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
         if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
             return res.status(400).json({ success: false, message: "No crew members selected." });
         }
-
-        const ROLE_GROUPS = {
-            videographer: ["9", "1"],
-            photographer: ["10", "2"],
-            cinematographer: ["11", "3"]
-        };
-
-        const ID_TO_ROLE_MAP = {};
-        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-        });
 
         const booking = await stream_project_booking.findOne({
           where: { stream_project_booking_id: project_id },
@@ -16781,56 +16976,8 @@ exports.assignProjectCrewBulk = async (req, res) => {
             return res.status(404).json({ success: false, message: "Project booking not found." });
         }
 
-        const approvedCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: project_id,
-            approval_status: 'approved'
-          }
-        });
-
-        if (approvedCompensationCount > 0) {
-            return res.status(409).json({
-                success: false,
-                message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
-            });
-        }
-
-        const pendingCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: project_id,
-            approval_status: 'pending_approval'
-          }
-        });
-
-        if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
-            return res.status(409).json({
-                success: false,
-                message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
-            });
-        }
-
         const leadId = booking.sales_leads?.[0]?.lead_id || null;
 
-        const requestedLimits = typeof booking.crew_roles === 'string'
-          ? JSON.parse(booking.crew_roles)
-          : (booking.crew_roles || {});
-
-        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-
-        if (booking.assigned_crews) {
-          booking.assigned_crews.forEach(ac => {
-            if (ac.crew_member?.primary_role) {
-              try {
-                const raw = ac.crew_member.primary_role;
-                const roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
-                roles.forEach(id => {
-                  const roleName = ID_TO_ROLE_MAP[String(id)];
-                  if (roleName) currentCounts[roleName]++;
-                });
-              } catch (e) { console.error("Parse error", e); }
-            }
-          });
-        }
 
         const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
         const existingAssignments = await assigned_crew.findAll({
@@ -16847,31 +16994,11 @@ exports.assignProjectCrewBulk = async (req, res) => {
         });
 
         const assignmentsToCreate = [];
-        const errors = [];
-
         newCrewDetails.forEach(crew => {
             if (existingCrewIds.has(Number(crew.crew_member_id))) {
               return;
             }
-            let roles = [];
-            try {
-                const raw = crew.primary_role;
-                roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
-            } catch (e) { roles = [crew.primary_role]; }
-
-            let roleDetected = null;
-            roles.forEach(id => {
-                if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
-            });
-
-            if (roleDetected) {
-              const acceptedCount = currentCounts[roleDetected];
-              const limit = requestedLimits[roleDetected] || 0;
-
-              if (limit > 0 && acceptedCount >= limit) {
-                errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
-              } else {
-                assignmentsToCreate.push({
+            assignmentsToCreate.push({
                   project_id: booking.stream_project_booking_id,
                   crew_member_id: crew.crew_member_id,
                   assigned_date: new Date(),
@@ -16879,16 +17006,8 @@ exports.assignProjectCrewBulk = async (req, res) => {
                   crew_accept: 0,
                   is_active: 1,
                   organization_type: 1
-                });
-              }
-            } else {
-                errors.push(`Crew member ${crew.first_name} has no valid role mapping.`);
-            }
+            });
         });
-
-        if (assignmentsToCreate.length === 0 && errors.length > 0) {
-            return res.status(400).json({ success: false, message: "Assignments failed validation.", errors });
-        }
 
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
@@ -16970,7 +17089,7 @@ exports.assignProjectCrewBulk = async (req, res) => {
             message: `${assignmentsToCreate.length} crew members assigned successfully.`,
             newly_assigned_creator_ids: assignmentsToCreate.map((assignment) => assignment.crew_member_id),
             new_shoot_request_email_deferred: deferNewShootRequestEmail,
-            errors: errors.length > 0 ? errors : undefined
+            errors: undefined
         });
 
     } catch (error) {
@@ -17012,8 +17131,44 @@ exports.removeProjectAssignedCrew = async (req, res) => {
             });
         }
 
+        const cpAssignmentLocked = await getCpAssignmentLock(project_id);
+        if (cpAssignmentLocked && !isSuperAdminRequest(req)) {
+            return res.status(403).json({
+                success: false,
+                message: "All assigned CPs have accepted and their compensation has been approved. Only a Super Admin can remove a CP."
+            });
+        }
+
         // 2. Set the assignment to inactive (Soft Delete)
         await assignment.update({ is_active: 0 });
+
+        if (Number(assignment.crew_accept) === 1) {
+            const booking = await stream_project_booking.findByPk(project_id, { attributes: ['user_id'] });
+            await Promise.all([
+              businessNotifications.notifyCreator(crew_member_id, {
+                title: 'Shoot assignment changed',
+                message: `You are no longer assigned to shoot ${project_id}. Please review your shoot requests.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed',
+                referenceType: 'booking', referenceId: String(project_id),
+                payload: { booking_id: String(project_id) }, priority: 'high'
+              }),
+              businessNotifications.notify({
+                userId: booking?.user_id,
+                title: 'Shoot team changed',
+                message: `The assigned creator for shoot ${project_id} changed. Please review the latest team.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_team_changed',
+                referenceType: 'booking', referenceId: String(project_id),
+                payload: { booking_id: String(project_id) }, priority: 'high'
+              }),
+              businessNotifications.notifyBookingOwner(project_id, {
+                title: 'Confirmed creator removed',
+                message: `A confirmed creator was removed from shoot ${project_id}. Arrange a replacement if needed.`,
+                topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed_owner',
+                referenceType: 'booking', referenceId: String(project_id),
+                payload: { booking_id: String(project_id) }, priority: 'high'
+              })
+            ]);
+        }
 
         const crewName = assignment.crew_member
             ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
@@ -19414,6 +19569,608 @@ exports.getPermissionModules = async (req, res) => {
   }
 };
 
+
+const getOpenUserReassignmentCounts = async (userId, transaction, req = null) => {
+  const openLeadsCount = await db.sales_leads.count({
+    where: {
+      assigned_sales_rep_id: userId,
+      is_active: 1,
+      [Op.and]: Sequelize.literal(`(${openSalesLeadSql})`)
+    },
+    include: [{
+      model: db.stream_project_booking,
+      as: 'booking',
+      required: true,
+      attributes: []
+    }],
+    distinct: true,
+    transaction
+  });
+
+  const openQuotesCount = await db.sales_quotes.count({
+    where: {
+      assigned_sales_rep_id: userId,
+      status: { [Op.notIn]: ['rejected', 'expired', 'paid'] },
+      [Op.or]: [
+        { lead_id: null },
+        { lead_id: { [Op.notIn]: db.sequelize.literal("(SELECT lead_id FROM sales_leads WHERE LOWER(lead_source) = 'converted bookings' AND lead_id IS NOT NULL)") } }
+      ]
+    },
+    transaction
+  });
+
+  // Match the reassignment list: paid, active, not cancelled, and assets not delivered.
+  let openPostProductionCount = 0;
+  const ppProjectIds = await getAssignedProjectIdsForPostProductionUser(userId);
+  if (ppProjectIds.length && req) {
+    const paidFilter = await getPaidCalendarFilter(req);
+    openPostProductionCount = await stream_project_booking.count({
+      where: {
+        ...paidFilter,
+        stream_project_booking_id: { [Op.in]: ppProjectIds },
+        is_active: 1,
+        is_cancelled: 0,
+        status: { [Op.notIn]: [4, 5] }
+      },
+      transaction
+    });
+  }
+
+  return { leads: openLeadsCount, quotes: openQuotesCount, post_production: openPostProductionCount };
+};
+
+exports.getUserReassignments = async (req, res) => {
+  try {
+    const user_id = Number(req.params.user_id);
+    const search = String(req.query.search || '').trim();
+    const idSearch = search.replace(/^[lq]\s*-\s*/i, '').trim();
+    const requestedTypeParam = String(req.query.type || 'all').toLowerCase();
+    const requestedType = ['lead', 'quote', 'post_production'].includes(requestedTypeParam) ? requestedTypeParam : 'all';
+    const requestedPage = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 10));
+
+    if (!Number.isInteger(user_id) || user_id <= 0) {
+      return res.status(400).json({
+        error: true,
+        message: 'Valid user_id is required'
+      });
+    }
+
+    const leadWhere = {
+      assigned_sales_rep_id: user_id,
+      is_active: 1,
+      [Op.and]: Sequelize.literal(`(${openSalesLeadSql})`)
+    };
+    if (search) {
+      leadWhere[Op.or] = [
+        { client_name: { [Op.like]: `%${search}%` } },
+        ...(idSearch ? [{ lead_id: { [Op.like]: `%${idSearch}%` } }] : [])
+      ];
+    }
+
+    // Use the same open status rule as the sales representative filters and
+    // the delete guard, including manual full payments and cancelled leads.
+    const leads = await db.sales_leads.findAll({
+      where: leadWhere,
+
+      attributes: [
+        'lead_id',
+        'booking_id',
+        'user_id',
+        'client_name',
+        'guest_email',
+        'lead_status',
+        'created_at',
+        'updated_at'
+      ],
+
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: true,
+          attributes: [
+            'stream_project_booking_id',
+            'event_date',
+            'status',
+            'payment_id'
+          ]
+        }
+      ],
+
+      order: [['created_at', 'DESC']]
+    });
+
+    // Get unique booking IDs
+    const bookingIds = [
+      ...new Set(
+        leads
+          .map((lead) => Number(lead.booking_id))
+          .filter((id) => Number.isInteger(id))
+      )
+    ];
+
+    // Fetch this user's assignable quotes independently of the lead list.
+    const quoteWhere = {
+      assigned_sales_rep_id: user_id,
+      status: { [Op.notIn]: ['rejected', 'expired', 'paid'] },
+      [Op.or]: [
+          { lead_id: null },
+          {
+            lead_id: {
+              [Op.notIn]: db.sequelize.literal(
+                "(SELECT lead_id FROM sales_leads WHERE LOWER(lead_source) = 'converted bookings' AND lead_id IS NOT NULL)"
+              )
+            }
+          }
+      ]
+    };
+    if (search) {
+      quoteWhere[Op.and] = [{
+        [Op.or]: [
+          { client_name: { [Op.like]: `%${search}%` } },
+          ...(idSearch ? [
+            { sales_quote_id: { [Op.like]: `%${idSearch}%` } },
+            { quote_number: { [Op.like]: `%${idSearch}%` } }
+          ] : [])
+        ]
+      }];
+    }
+
+    const quotes = await db.sales_quotes.findAll({
+      where: quoteWhere,
+      attributes: [
+        'sales_quote_id',
+        'quote_number',
+        'client_name',
+        'status',
+        'total',
+        'start_date',
+        'valid_until',
+        'created_at'
+      ],
+      order: [['created_at', 'DESC']]
+    });
+    const quoteData = quotes.map((quote) => quote.toJSON());
+
+    // Post-production data comes from the projects API (getAllProjectDetails),
+    // filtered by post_production_user_id, not from leads.
+    let postProductionData = [];
+
+    if (requestedType === 'all' || requestedType === 'post_production') {
+      const reassignUser = await users.scope('all').findOne({
+        where: { id: user_id },
+        attributes: ['id', 'email'],
+        raw: true
+      });
+      const reassignEmail = String(reassignUser?.email || '').trim().toLowerCase();
+
+      const projectsSnapshot = await invokeProjectsBoardSnapshot(req, {
+        post_production_user_id: String(user_id),
+        search: search || undefined,
+        // clear this endpoint's own paging/type params so the projects API returns all matches
+        page: undefined,
+        limit: undefined,
+        type: undefined,
+        summary_only: undefined,
+        board_view: undefined,
+        status: undefined,
+        range: undefined,
+        start_date: undefined,
+        end_date: undefined,
+        date_on: undefined
+      });
+
+      const projectEntries = Array.isArray(projectsSnapshot?.data?.projects)
+        ? projectsSnapshot.data.projects
+        : [];
+
+      postProductionData = projectEntries
+        .filter((entry) => {
+          const project = entry?.project || {};
+          const status = Number(project.status);
+          return (
+            Number(project.is_active) === 1 &&
+            Number(project.is_cancelled || 0) !== 1 &&
+            ![4, 5].includes(status)
+          );
+        })
+        .map((entry) => {
+          const project = entry.project;
+          const members = Array.isArray(entry.assignedPostProductionMembers)
+            ? entry.assignedPostProductionMembers
+            : [];
+          const assignment = members.find(
+            (member) =>
+              String(member?.post_production_member?.email || '').trim().toLowerCase() === reassignEmail
+          ) || null;
+
+          return {
+            record_type: 'post_production',
+            record_id: `P-${project.stream_project_booking_id}`,
+            project_id: project.stream_project_booking_id,
+            client_name: project.client_name || null,
+            total_value_amount: Number(project.total_value_amount ?? project.budget ?? 0),
+            event_date: project.event_date,
+            booking_status: project.status,
+            timeline_label: project.timeline_label || null,
+            assignment_status: assignment?.status || null,
+            post_production_member_id: assignment?.post_production_member_id || null,
+            post_production_member: assignment?.post_production_member || null,
+            assigned_post_production_members: members,
+            created_at: assignment?.created_at || assignment?.assigned_date || project.created_at || null
+          };
+        })
+        .filter((record) => record.post_production_member_id);
+    }
+
+    // Attach payment details when a booking payment summary exists.
+    const paymentRows = bookingIds.length ? await db.sequelize.query(
+      `
+        SELECT
+          booking_id,
+          paid_amount,
+          payment_status,
+          quote_total,
+          due_amount
+        FROM booking_payment_summary
+        WHERE booking_id IN (:bookingIds)
+        
+      `,
+      {
+        replacements: {
+          bookingIds
+        },
+        type: QueryTypes.SELECT
+      }
+    ) : [];
+
+    // Create payment map
+    const paymentMap = new Map();
+
+    paymentRows.forEach((payment) => {
+      paymentMap.set(Number(payment.booking_id), payment);
+    });
+
+    // Final response
+    const result = leads.map((lead) => {
+      const payment = paymentMap.get(Number(lead.booking_id));
+      const data = lead.toJSON();
+      const paymentState = bookingPaymentSummaryService.normalizePaymentSummaryState(payment, {
+        quoteTotal: payment?.quote_total,
+        paidAmount: payment?.paid_amount,
+        paymentStatus: data.booking?.payment_id ? 'paid' : 'unpaid'
+      });
+
+      return {
+        is_paid: paymentState.isPaid,
+        lead_id: data.lead_id,
+        booking_id: data.booking_id,
+        user_id: data.user_id,
+        client_name: data.client_name,
+        guest_email: data.guest_email,
+        lead_status: data.lead_status,
+        event_date: data.booking?.event_date || null,
+        paid_amount: Number(payment?.paid_amount || 0),
+        payment_status: paymentState.paymentStatus,
+        quote_total: Number(payment?.quote_total || 0),
+        due_amount: Number(payment?.due_amount || 0),
+        created_at: data.created_at,
+        updated_at: data.updated_at
+      };
+    }).filter((lead) => !lead.is_paid);
+    const allRecords = [
+      ...result.map((lead) => ({ ...lead, record_type: 'lead' })),
+      ...quoteData.map((quote) => ({ ...quote, record_type: 'quote' })),
+      ...postProductionData
+    ].sort((first, second) => new Date(second.created_at || 0) - new Date(first.created_at || 0));
+    const filteredRecords = requestedType === 'all'
+      ? allRecords
+      : allRecords.filter((record) => record.record_type === requestedType);
+    const total_pages = Math.ceil(filteredRecords.length / limit);
+    const page = Math.min(requestedPage, Math.max(1, total_pages));
+    const offset = (page - 1) * limit;
+    const pageRecords = filteredRecords.slice(offset, offset + limit);
+
+    return res.status(200).json({
+      error: false,
+      success: true,
+      message: 'User reassignment leads and quotes fetched successfully',
+      count: result.length,
+      quote_count: quoteData.length,
+      post_production_count: postProductionData.length,
+      total_count: filteredRecords.length,
+      page,
+      limit,
+      total_pages,
+      data: {
+        records: pageRecords,
+        leads: pageRecords.filter((record) => record.record_type === 'lead'),
+        quotes: pageRecords.filter((record) => record.record_type === 'quote'),
+        post_production: pageRecords.filter((record) => record.record_type === 'post_production')
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching user reassignment leads and quotes:', error);
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.reassignUserSalesRecords = async (req, res) => {
+  const fromUserId = Number(req.params.user_id);
+  const assignments = req.body?.assignments;
+  if (!Number.isInteger(fromUserId) || fromUserId <= 0 || !Array.isArray(assignments) || !assignments.length) {
+    return res.status(400).json({ success: false, message: 'A valid user_id and at least one assignment are required' });
+  }
+  if (assignments.length > 500) {
+    return res.status(400).json({ success: false, message: 'A maximum of 500 records can be reassigned at once' });
+  }
+
+  const actor = await getRequestActor(req);
+  if (!actor) return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const reassignmentBatchId = randomUUID();
+    const reassignmentCreatedAt = new Date().toISOString().slice(0, 23).replace('T', ' ');
+    const historyRows = [];
+    const uniqueRecordIds = new Set();
+    for (const assignment of assignments) {
+      const recordId = String(assignment?.recordId || '');
+      const toUserId = Number(assignment?.repId);
+      const match = recordId.match(/^([LQP])-(.+)$/);
+      if (!match || !Number.isInteger(toUserId) || toUserId <= 0 || toUserId === fromUserId || uniqueRecordIds.has(recordId)) {
+        throw Object.assign(new Error(`Invalid assignment for record ${recordId || '(missing)'}`), { statusCode: 400 });
+      }
+      uniqueRecordIds.add(recordId);
+      const [, kind, rawRecordId] = match;
+      const target = await users.findOne({
+        where: { id: toUserId, is_active: 1 }, attributes: ['id'], transaction
+      });
+      if (!target) throw Object.assign(new Error(`Target sales representative ${toUserId} is unavailable`), { statusCode: 400 });
+
+      if (kind === 'P') {
+        if (!/^\d+$/.test(rawRecordId)) {
+          throw Object.assign(new Error(`Invalid record ${recordId}`), { statusCode: 400 });
+        }
+        const projectId = Number(rawRecordId);
+
+        const sourceUser = await users.scope('all').findOne({
+          where: { id: fromUserId }, attributes: ['id', 'email'], transaction, raw: true
+        });
+        // Target must be an active user with an allowed post-production role
+        const targetUser = await users.findOne({
+          where: { id: toUserId, is_active: 1 },
+          attributes: ['id', 'name', 'email'],
+          include: [{
+            model: db.user_type,
+            as: 'userType',
+            attributes: [],
+            required: true,
+            where: { user_role: { [Op.in]: POST_PRODUCTION_ASSIGNABLE_ROLE_NAMES }, is_active: 1 }
+          }],
+          transaction
+        });
+        if (!sourceUser?.email || !targetUser?.email) {
+          throw Object.assign(new Error(`Target user ${toUserId} cannot be assigned post-production work`), { statusCode: 400 });
+        }
+
+        const currentAssignment = await assigned_post_production_member.findOne({
+          where: { project_id: projectId, is_active: 1 },
+          include: [{
+            model: post_production_members,
+            as: 'post_production_member',
+            required: true,
+            where: { email: sourceUser.email }
+          }],
+          transaction
+        });
+        if (!currentAssignment) {
+          throw Object.assign(new Error(`${recordId} is no longer assigned to this user`), { statusCode: 409 });
+        }
+
+        const project = await stream_project_booking.findOne({
+          where: {
+            stream_project_booking_id: projectId,
+            is_active: 1,
+            is_cancelled: 0,
+            status: { [Op.notIn]: [4, 5] }
+          },
+          attributes: ['stream_project_booking_id', 'project_name'],
+          transaction, raw: true
+        });
+        if (!project) {
+          throw Object.assign(new Error(`${recordId} is no longer eligible for reassignment`), { statusCode: 409 });
+        }
+
+        let targetMember = await post_production_members.findOne({
+          where: { email: targetUser.email, is_active: 1 }, transaction
+        });
+        if (!targetMember) {
+          const [firstName, ...rest] = String(targetUser.name || '').trim().split(/\s+/).filter(Boolean);
+          targetMember = await post_production_members.create({
+            first_name: firstName || 'Unknown',
+            last_name: rest.join(' '),
+            email: targetUser.email,
+            phone_number: null,
+            is_active: 1
+          }, { transaction });
+        }
+
+        const alreadyAssigned = await assigned_post_production_member.findOne({
+          where: {
+            project_id: projectId,
+            post_production_member_id: targetMember.post_production_member_id,
+            is_active: 1
+          },
+          transaction
+        });
+
+        await currentAssignment.update({ is_active: 0 }, { transaction });
+        if (!alreadyAssigned) {
+          await assigned_post_production_member.create({
+            project_id: projectId,
+            post_production_member_id: targetMember.post_production_member_id,
+            assigned_date: new Date(),
+            status: 'assigned',
+            is_active: 1
+          }, { transaction });
+        }
+
+        const oldName = `${currentAssignment.post_production_member?.first_name || ''} ${currentAssignment.post_production_member?.last_name || ''}`.trim();
+        await writeShootHistory({
+          projectId, action: 'post_production_member_removed', actor,
+          reason: 'Post production member reassigned',
+          metadata: {
+            post_production_member_id: currentAssignment.post_production_member_id,
+            post_production_member_name: oldName,
+            post_production_member_email: sourceUser.email
+          },
+          transaction
+        });
+        await writeShootHistory({
+          projectId, action: 'post_production_member_assigned', actor,
+          reason: 'Post production member reassigned',
+          metadata: {
+            post_production_member_id: targetMember.post_production_member_id,
+            post_production_member_name: targetUser.name,
+            post_production_member_email: targetUser.email
+          },
+          transaction
+        });
+
+        historyRows.push({
+          record_type: 'post_production', record_id: `P-${projectId}`,
+          client_name: project?.project_name || null,
+          from_user_id: fromUserId, to_user_id: toUserId, actor_user_id: actor.id,
+          created_at: reassignmentCreatedAt
+        });
+        continue;
+      }
+
+      let model;
+      let where;
+      let recordNumber;
+      let clientName;
+      if (kind === 'L' && /^\d+$/.test(rawRecordId)) {
+        model = db.sales_leads;
+        where = { lead_id: Number(rawRecordId), assigned_sales_rep_id: fromUserId, is_active: 1 };
+        recordNumber = recordId;
+      } else if (kind === 'Q') {
+        model = db.sales_quotes;
+        where = { assigned_sales_rep_id: fromUserId, [Op.or]: [{ quote_number: rawRecordId }, ...( /^\d+$/.test(rawRecordId) ? [{ sales_quote_id: Number(rawRecordId) }] : [])] };
+      } else {
+        throw Object.assign(new Error(`Unsupported record ${recordId}`), { statusCode: 400 });
+      }
+
+      const record = await model.findOne({ where, transaction, lock: transaction.LOCK.UPDATE });
+      if (!record) throw Object.assign(new Error(`${recordId} is no longer assigned to this user`), { statusCode: 409 });
+      if (kind === 'Q') {
+        recordNumber = `Q-${record.quote_number || record.sales_quote_id}`;
+        clientName = record.client_name || null;
+      } else {
+        clientName = record.client_name || record.guest_email || null;
+      }
+      await record.update({ assigned_sales_rep_id: toUserId }, { transaction });
+      historyRows.push({
+        record_type: kind === 'L' ? 'lead' : 'quote', record_id: recordNumber,
+        client_name: clientName, from_user_id: fromUserId, to_user_id: toUserId,
+        actor_user_id: actor.id, created_at: reassignmentCreatedAt
+      });
+    }
+
+    await db.sequelize.query(
+      `INSERT INTO sales_record_reassignment_history
+        (batch_id, record_type, record_id, client_name, from_user_id, to_user_id, actor_user_id, created_at)
+       VALUES ${historyRows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}`,
+      { replacements: historyRows.flatMap((row) => [reassignmentBatchId, row.record_type, row.record_id, row.client_name, row.from_user_id, row.to_user_id, row.actor_user_id, row.created_at]), transaction }
+    );
+    await transaction.commit();
+    return res.status(200).json({ success: true, message: 'Sales records reassigned successfully', count: historyRows.length });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Reassign User Sales Records Error:', error);
+    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Failed to reassign sales records' });
+  }
+};
+
+exports.getUserReassignmentHistory = async (req, res) => {
+  const userId = Number(req.params.user_id);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ success: false, message: 'Valid user_id is required' });
+  }
+  try {
+    const history = await db.sequelize.query(
+      `SELECT h.record_type, h.record_id, h.client_name,
+              CONCAT(DATE_FORMAT(h.created_at, '%Y-%m-%dT%H:%i:%s'), '.000Z') AS created_at_utc,
+              source.name AS from_name, target.name AS to_name, actor.name AS actor_name
+       FROM sales_record_reassignment_history h
+       LEFT JOIN users source ON source.id = h.from_user_id
+       LEFT JOIN users target ON target.id = h.to_user_id
+       LEFT JOIN users actor ON actor.id = h.actor_user_id
+       WHERE h.from_user_id = :userId OR h.to_user_id = :userId
+       ORDER BY h.created_at DESC, h.id DESC
+       LIMIT 100`,
+      { replacements: { userId }, type: QueryTypes.SELECT }
+    );
+    const leadIds = history
+      .filter((row) => row.record_type === 'lead' && /^L-\d+$/.test(String(row.record_id || '')))
+      .map((row) => Number(String(row.record_id).slice(2)));
+    const quoteRefs = history
+      .filter((row) => row.record_type === 'quote' && String(row.record_id || '').startsWith('Q-'))
+      .map((row) => String(row.record_id).slice(2));
+    const numericQuoteIds = quoteRefs.filter((value) => /^\d+$/.test(value)).map(Number);
+    const [leads, quoteRows] = await Promise.all([
+      leadIds.length
+        ? db.sales_leads.findAll({
+            where: { lead_id: { [Op.in]: leadIds } },
+            attributes: ['lead_id', 'booking_id'],
+            raw: true
+          })
+        : [],
+      quoteRefs.length
+        ? db.sales_quotes.findAll({
+            where: {
+              [Op.or]: [
+                { quote_number: { [Op.in]: quoteRefs } },
+                ...(numericQuoteIds.length ? [{ sales_quote_id: { [Op.in]: numericQuoteIds } }] : [])
+              ]
+            },
+            attributes: ['sales_quote_id', 'quote_number'],
+            raw: true
+          })
+        : []
+    ]);
+    const bookingIdByLeadId = new Map(leads.map((lead) => [String(lead.lead_id), lead.booking_id]));
+    const quoteByRef = new Map();
+    quoteRows.forEach((quote) => {
+      if (quote.quote_number != null) quoteByRef.set(String(quote.quote_number), quote.sales_quote_id);
+      quoteByRef.set(String(quote.sales_quote_id), quote.sales_quote_id);
+    });
+    history.forEach((row) => {
+      const rawId = String(row.record_id || '');
+      if (row.record_type === 'lead' && /^L-\d+$/.test(rawId)) {
+        row.display_record_id = bookingIdByLeadId.get(rawId.slice(2)) ?? null;
+      } else if (row.record_type === 'quote' && rawId.startsWith('Q-')) {
+        row.display_record_id = quoteByRef.get(rawId.slice(2)) ?? null;
+      } else if (row.record_type === 'post_production' && /^P-\d+$/.test(rawId)) {
+        row.display_record_id = Number(rawId.slice(2));
+      } else {
+        row.display_record_id = null;
+      }
+    });
+    return res.status(200).json({ success: true, count: history.length, data: history });
+  } catch (error) {
+    console.error('Get User Reassignment History Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch reassignment history' });
+  }
+};
+
 exports.deleteUser = async (req, res) => {
   const user_id = Number(req.params.user_id);
   const { reason = null } = req.body || {};
@@ -19451,6 +20208,17 @@ exports.deleteUser = async (req, res) => {
       return res.status(404).json({
         error: true,
         message: 'User not found or inactive'
+      });
+    }
+
+    const openReassignmentCounts = await getOpenUserReassignmentCounts(user_id, transaction, req);
+    if (openReassignmentCounts.leads + openReassignmentCounts.quotes + openReassignmentCounts.post_production > 0) {
+      await transaction.rollback();
+      return res.status(409).json({
+        error: true,
+        success: false,
+        message: 'Cannot delete this user while open sales records are assigned. Reassign them first.',
+        data: openReassignmentCounts
       });
     }
 

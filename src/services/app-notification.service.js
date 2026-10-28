@@ -3,8 +3,8 @@ const db = require('../models');
 const constants = require('../utils/constants');
 const pushNotificationService = require('./push-notification.service');
 
-const VALID_STATUSES = new Set(['all', 'read', 'unread']);
-const PROJECT_CATEGORIES = ['projects', 'project', 'shoots', 'meetings', 'proposals'];
+const VALID_STATUSES = new Set(['all', 'read', 'unread', 'archived']);
+const PROJECT_CATEGORIES = ['projects', 'project', 'shoots', 'meetings', 'proposals', 'agreements', 'leads'];
 const DEFAULT_DELIVERY_SURFACES = ['mobile_app', 'web_app'];
 
 const httpError = (httpCode, message) => {
@@ -89,7 +89,7 @@ const buildFilterWhere = ({
 }) => {
   const where = {
     user_id: userId,
-    is_active: 1,
+    is_active: status === 'archived' ? 0 : 1,
     ...buildSurfaceWhere({ deliverySurface, appUserType })
   };
 
@@ -139,6 +139,7 @@ const formatNotification = (notification) => {
     priority: data.priority || 'normal',
     is_read: Boolean(data.is_read),
     read_at: data.read_at,
+    archived_at: data.archived_at || null,
     created_at: data.created_at,
     sender: data.sender_user ? {
       id: data.sender_user.id,
@@ -298,19 +299,26 @@ exports.createAndPushNotification = async ({
 
   if (sendPush) {
     try {
-      await pushNotificationService.sendPushToUser({
+      const pushAllowed = await pushNotificationService.isPushCategoryAllowedForUser({
         userId,
-        title: pushTitle || title,
-        body: pushBody || message,
-        data: {
-          ...(pushData || {
-            topic,
-            category: category || topic,
-            type
-          }),
-          notification_id: String(webNotification.notification_id)
-        }
+        category: category || topic,
+        priority
       });
+      if (pushAllowed) {
+        await pushNotificationService.sendPushToUser({
+          userId,
+          title: pushTitle || title,
+          body: pushBody || message,
+          data: {
+            ...(pushData || {
+              topic,
+              category: category || topic,
+              type
+            }),
+            notification_id: String(webNotification.notification_id)
+          }
+        });
+      }
     } catch (err) {
       console.error('[AppNotification] Push send failed:', {
         user_id: userId,
@@ -392,7 +400,8 @@ exports.getCounts = async ({ userId, deliverySurface = 'web_app', appUserType = 
     projects,
     files,
     messages,
-    meetings
+    meetings,
+    archived
   ] = await Promise.all([
     modelNotification.count({ where: baseWhere }),
     modelNotification.count({ where: { ...baseWhere, is_read: 0 } }),
@@ -401,10 +410,17 @@ exports.getCounts = async ({ userId, deliverySurface = 'web_app', appUserType = 
     modelNotification.count({ where: { ...baseWhere, category: { [Op.in]: PROJECT_CATEGORIES } } }),
     modelNotification.count({ where: { ...baseWhere, category: 'files' } }),
     modelNotification.count({ where: { ...baseWhere, category: 'messages' } }),
-    modelNotification.count({ where: { ...baseWhere, category: 'meetings' } })
+    modelNotification.count({ where: { ...baseWhere, category: 'meetings' } }),
+    modelNotification.count({
+      where: {
+        user_id: userId,
+        is_active: 0,
+        ...buildSurfaceWhere({ deliverySurface, appUserType })
+      }
+    })
   ]);
 
-  return { all, unread, mentions, payments, projects, files, messages, meetings };
+  return { all, unread, mentions, payments, projects, files, messages, meetings, archived };
 };
 
 exports.getNotificationById = async ({
@@ -486,6 +502,36 @@ exports.markAllRead = async ({
   return { updated_count: affected };
 };
 
+exports.markReadByReference = async ({
+  userId,
+  referenceType,
+  referenceId,
+  deliverySurface = 'web_app',
+  appUserType = null
+}) => {
+  const normalizedType = normalizeString(referenceType);
+  const normalizedId = normalizeString(referenceId);
+  if (!normalizedType || !normalizedId) {
+    throw httpError(constants.BAD_REQUEST.code, 'reference_type and reference_id are required.');
+  }
+
+  const [affected] = await getNotificationModel().update(
+    { is_read: 1, read_at: new Date() },
+    {
+      where: {
+        user_id: userId,
+        is_active: 1,
+        is_read: 0,
+        reference_type: normalizedType,
+        reference_id: normalizedId,
+        ...buildSurfaceWhere({ deliverySurface, appUserType })
+      }
+    }
+  );
+
+  return { updated_count: affected };
+};
+
 exports.deleteNotification = async ({
   userId,
   notificationId,
@@ -494,7 +540,7 @@ exports.deleteNotification = async ({
 }) => {
   const modelNotification = getNotificationModel();
   const [affected] = await modelNotification.update(
-    { is_active: 0 },
+    { is_active: 0, archived_at: new Date() },
     {
       where: {
         notification_id: notificationId,
@@ -506,4 +552,26 @@ exports.deleteNotification = async ({
   );
 
   if (!affected) throw httpError(constants.NOT_FOUND.code, 'Notification not found.');
+};
+
+exports.restoreNotification = async ({
+  userId,
+  notificationId,
+  deliverySurface = 'web_app',
+  appUserType = null
+}) => {
+  const modelNotification = getNotificationModel();
+  const [affected] = await modelNotification.update(
+    { is_active: 1, archived_at: null },
+    {
+      where: {
+        notification_id: notificationId,
+        user_id: userId,
+        is_active: 0,
+        ...buildSurfaceWhere({ deliverySurface, appUserType })
+      }
+    }
+  );
+
+  if (!affected) throw httpError(constants.NOT_FOUND.code, 'Archived notification not found.');
 };

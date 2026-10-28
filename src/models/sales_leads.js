@@ -70,6 +70,14 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: true
     },
+    response_due_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    owner_responded_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

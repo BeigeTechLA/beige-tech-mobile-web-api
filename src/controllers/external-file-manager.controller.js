@@ -3455,7 +3455,11 @@ const getWorkspaceSearchMetadataByExternalIds = async (externalIds = []) => {
     (Array.isArray(rows) ? rows : []).map((row) => [
       String(row.stream_project_booking_id),
       {
-        projectName: row.project_name || '',
+        // Keep File Manager consistent with the name shown in the Shoots
+        // module. For example, "CUSTOM Shoot - Nerdstage" is displayed as
+        // "CUSTOM - Nerdstage" there.
+        projectName: String(row.project_name || '').replace(/^CUSTOM Shoot\b/i, 'CUSTOM'),
+        rawProjectName: row.project_name || '',
         clientName: row.client_name || row.user_name || '',
         clientEmail: row.client_email || row.user_email || row.guest_email || '',
       },
@@ -4505,10 +4509,13 @@ exports.listWorkspaces = async (req, res) => {
       );
     }
 
+    let workspaceSearchMetadata = new Map();
+    let hasWorkspaceSearchMetadata = false;
     if (search) {
-      const workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
+      workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
         filteredWorkspaces.map((workspace) => workspace?.externalId)
       );
+      hasWorkspaceSearchMetadata = true;
 
       filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
         const folderName = String(workspace.folderName || '').toLowerCase();
@@ -4516,6 +4523,7 @@ exports.listWorkspaces = async (req, res) => {
         const eventName = String(workspace.eventName || '').toLowerCase();
         const bookingSearchMetadata = workspaceSearchMetadata.get(String(workspace.externalId || '').trim()) || {};
         const projectName = String(bookingSearchMetadata.projectName || '').toLowerCase();
+        const rawProjectName = String(bookingSearchMetadata.rawProjectName || '').toLowerCase();
         const clientName = String(bookingSearchMetadata.clientName || '').toLowerCase();
         const clientEmail = String(bookingSearchMetadata.clientEmail || '').toLowerCase();
 
@@ -4524,11 +4532,30 @@ exports.listWorkspaces = async (req, res) => {
           externalId.includes(search) ||
           eventName.includes(search) ||
           projectName.includes(search) ||
+          rawProjectName.includes(search) ||
           clientName.includes(search) ||
           clientEmail.includes(search)
         );
       });
     }
+
+    // Keep the source shoot information alongside a workspace display label.
+    // A display label is intentionally editable in File Manager, whereas the
+    // project name is the canonical, current name shown in Shoots.
+    if (!hasWorkspaceSearchMetadata) {
+      workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
+        filteredWorkspaces.map((workspace) => workspace?.externalId)
+      );
+    }
+    filteredWorkspaces = filteredWorkspaces.map((workspace) => {
+      const metadata = workspaceSearchMetadata.get(String(workspace?.externalId || '').trim());
+      if (!metadata?.projectName) return workspace;
+
+      return {
+        ...workspace,
+        projectName: metadata.projectName,
+      };
+    });
     filteredWorkspaces = [...filteredWorkspaces].sort((a, b) => {
       const diff = getWorkspaceUpdatedTimestamp(b) - getWorkspaceUpdatedTimestamp(a);
       if (diff !== 0) return diff;
@@ -5253,6 +5280,39 @@ exports.copyFiles = async (req, res) => {
       success: false,
       message: error.message,
     });
+  }
+};
+
+exports.moveEntries = async (req, res) => {
+  try {
+    const role = getNormalizedRequestUserRole(req).replace(/\s+/g, '_');
+    if (Number(req.user?.userTypeId || req.userTypeId) !== 8 && !['super_admin', 'superadmin'].includes(role)) {
+      return res.status(403).json({ success: false, message: 'Only super admins can move files' });
+    }
+    const externalId = String(req.body.externalId || '').trim();
+    const phase = normalizeWorkspacePhase(req.body.phase, null);
+    const targetPath = String(req.body.targetPath || '').trim().replace(/^\/+|\/+$/g, '');
+    const sourcePaths = Array.isArray(req.body.sourcePaths) ? req.body.sourcePaths : [];
+    if (!externalId || !['pre', 'post'].includes(phase) || !sourcePaths.length || sourcePaths.length > 250 ||
+      sourcePaths.some((path) => typeof path !== 'string' || !path.trim()) ||
+      [targetPath, ...sourcePaths].some((path) => String(path).split('/').some((segment) => segment === '..' || segment === '.'))) {
+      return res.status(400).json({ success: false, message: 'Valid externalId, phase, targetPath and up to 250 sourcePaths are required' });
+    }
+    const result = await proxyRequest('/move-entries', {
+      method: 'POST',
+      body: JSON.stringify({ externalId, phase, targetPath, sourcePaths,
+        userId: getRequestUserId(req),
+        authorName: await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User') }),
+    });
+    if (result?.success && Array.isArray(result?.data?.items)) {
+      for (const item of result.data.items.filter((entry) => entry.success)) {
+        await deactivateSharesForDeletedPath(item.sourcePath).catch((error) => console.error('Failed to invalidate moved share:', error));
+        await deleteFaceEmbeddingRecordsByPath(item.sourcePath).catch(() => null);
+      }
+    }
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
   }
 };
 

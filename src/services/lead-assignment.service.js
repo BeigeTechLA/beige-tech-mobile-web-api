@@ -8,6 +8,7 @@ const {
 } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../db');
+const businessNotifications = require('./business-notification.service');
 
 function normalizeDate(value) {
   if (!value) return null;
@@ -365,6 +366,27 @@ async function manuallyAssignLead(leadId, salesRepId, performedByUserId) {
     },
     performed_by_user_id: performedByUserId
   });
+
+  if (Number(previousRepId || 0) > 0 && Number(previousRepId) !== Number(salesRepId) && performedByUserId) {
+    await sequelize.query(
+      `INSERT INTO sales_record_reassignment_history
+        (record_type, record_id, client_name, from_user_id, to_user_id, actor_user_id, created_at)
+       VALUES ('lead', :recordId, :clientName, :fromUserId, :toUserId, :actorUserId, CURRENT_TIMESTAMP)`,
+      {
+        replacements: {
+          recordId: `L-${leadId}`,
+          clientName: lead.client_name || lead.guest_email || null,
+          fromUserId: previousRepId,
+          toUserId: salesRepId,
+          actorUserId: performedByUserId
+        }
+      }
+    );
+  }
+
+  if (Number(previousRepId || 0) !== Number(salesRepId) && lead.lead_type === 'self_serve') {
+    await businessNotifications.notifyLeadAssigned(lead, salesRepId);
+  }
   
   console.log(`Lead ${leadId} manually assigned to sales rep ${salesRep.name} (ID: ${salesRepId})`);
 }

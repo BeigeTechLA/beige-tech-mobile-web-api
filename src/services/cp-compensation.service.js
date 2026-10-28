@@ -4,6 +4,8 @@ const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const bookingPricingService = require('./booking-pricing.service');
 const emailService = require('../utils/emailService');
 const appNotificationService = require('./app-notification.service');
+const businessNotifications = require('./business-notification.service');
+const { getCanonicalCpEarningRows, payoutAmountsByEarningId, buildCpCompensationOverview } = require('../utils/cp-compensation-summary');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -16,6 +18,14 @@ const VALID_PAYMENT_METHODS = new Set(['stripe', 'manual']);
 
 function toMoney(value) {
   return Number(Number(value || 0).toFixed(2));
+}
+
+async function notifyCompensationChange(earning, type, title, message) {
+  return businessNotifications.notifyCreator(earning.creator_id, {
+    title, message, topic: 'shoots', category: 'payouts', type,
+    referenceType: 'creator_earning', referenceId: String(earning.creator_earning_id),
+    payload: { creator_earning_id: String(earning.creator_earning_id), booking_id: String(earning.booking_id) }
+  });
 }
 
 function parseAmountCandidate(value) {
@@ -333,6 +343,22 @@ function getSummaryEarningAttempts(earnings = []) {
   const latestEarnings = getLatestEarningAttemptsByCreator(earnings);
   const activeEarnings = latestEarnings.filter((earning) => earning.approval_status !== 'rejected');
   return activeEarnings.length ? activeEarnings : latestEarnings;
+}
+
+// Financial reporting must use one current compensation record per CP per
+// shoot. Keeping older attempts here double-counts a modification, rejection,
+// or resubmission as additional payout.
+async function getCpCompensationOverview(filters = {}) {
+  const [earnings, payoutRequests] = await Promise.all([
+    db.creator_earnings.findAll({ raw: true }),
+    db.creator_payout_requests.findAll({ raw: true })
+  ]);
+  const allowedPeriods = ['all_time', 'this_month', 'last_3_months', 'this_year'];
+  const period = allowedPeriods.includes(filters.period) ? filters.period : 'all_time';
+  return buildCpCompensationOverview(earnings, {
+    period,
+    paidAmountsByEarningId: payoutAmountsByEarningId(payoutRequests)
+  });
 }
 
 function resolveCompensationDueDate(earnings = [], booking = {}) {
@@ -1777,6 +1803,7 @@ async function listCpCompensations(filters = {}) {
       const paymentSummary = paymentSummaryByBookingId.get(bookingId) || {};
       const shootAmount = await resolveShootAmountLikeShoots(booking, breakdown, paymentSummary);
       const cpPayout = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
+      const paymentState = await getCompensationPaymentState(earning);
       const marginAmount = toMoney(Math.max(shootAmount - cpPayout, 0));
       const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
       const status = await buildCompensationStatus([earning]);
@@ -1795,6 +1822,9 @@ async function listCpCompensations(filters = {}) {
         customer: buildCustomer(booking),
         shoot_amount: shootAmount,
         cp_payout: cpPayout,
+        advance_paid: paymentState.advance_paid,
+        paid_total: paymentState.paid_total,
+        remaining_balance: paymentState.remaining_balance,
         margin_amount: marginAmount,
         margin_percent: marginPercent,
         status,
@@ -2306,6 +2336,9 @@ async function approveCompensation(creatorEarningId, payload = {}, options = {})
 
     if (!externalTransaction) await transaction.commit();
 
+    if (!externalTransaction) await notifyCompensationChange(earning, 'creator_compensation_approved',
+      'Compensation approved', `Your compensation for booking ${earning.booking_id} was approved.`);
+
     return {
       creator_earning_id: earning.creator_earning_id,
       booking_id: earning.booking_id,
@@ -2351,6 +2384,9 @@ async function rejectCompensation(creatorEarningId, payload = {}, options = {}) 
     }, { transaction });
 
     if (!externalTransaction) await transaction.commit();
+
+    if (!externalTransaction) await notifyCompensationChange(earning, 'creator_compensation_rejected',
+      'Compensation rejected', `Your compensation for booking ${earning.booking_id} was rejected. Review the details.`);
 
     return {
       creator_earning_id: earning.creator_earning_id,
@@ -2404,6 +2440,9 @@ async function modifyCompensation(creatorEarningId, payload = {}, options = {}) 
     }
 
     if (!externalTransaction) await transaction.commit();
+
+    if (!externalTransaction) await notifyCompensationChange(earning, 'creator_compensation_changed',
+      'Compensation updated', `Your compensation for booking ${earning.booking_id} has changed. Review the details.`);
 
     return {
       creator_earning_id: earning.creator_earning_id,
@@ -2628,6 +2667,8 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
         earning.creator_earning_id,
         payload.paid_at || payload.payment_date || new Date()
       );
+      await notifyCompensationChange(earning, 'creator_compensation_paid',
+        'Compensation paid', `Payment for booking ${earning.booking_id} has been processed.`);
     }
 
     return {
@@ -2718,6 +2759,7 @@ module.exports = {
   upsertCreatorCompensation,
   upsertBulkCreatorCompensations,
   listCpCompensations,
+  getCpCompensationOverview,
   getCpCompensationDetails,
   approveCompensation,
   rejectCompensation,
@@ -2725,5 +2767,6 @@ module.exports = {
   addAdvancePayment,
   processCompensationPayment,
   updateBookingCompensationDueDate,
-  listPendingCompensationShoots
+  listPendingCompensationShoots,
+  _private: { getCanonicalCpEarningRows, payoutAmountsByEarningId, buildCpCompensationOverview }
 };

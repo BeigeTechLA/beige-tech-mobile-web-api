@@ -104,7 +104,13 @@ const {
   OVERDUE_PIPELINE_SALES_REP_TEMPLATE_ID,
   OVERDUE_PIPELINE_SALES_ADMIN_TEMPLATE_ID,
   CP_PAYMENT_COMPLETED_TEMPLATE_ID,
-  MANUAL_PAYMENT_RECORD_TEMPLATE_ID
+  MANUAL_PAYMENT_RECORD_TEMPLATE_ID,
+  FINANCE_DISPUTE_RAISED_ADMIN_TEMPLATE_ID,
+  FINANCE_DISPUTE_RECEIVED_TEMPLATE_ID,
+  FINANCE_DISPUTE_RESOLVED_TEMPLATE_ID,
+  FINANCE_DISPUTE_REJECTED_TEMPLATE_ID,
+  FINANCE_DISPUTE_REOPENED_TEMPLATE_ID,
+  FINANCE_DISPUTE_UPDATED_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -4452,11 +4458,11 @@ const sendFinanceDisputeRaisedAdminEmail = async ({ recipients = [], data = {} }
   const disputeCode = data.dispute_code || '';
   const bookingId = data.booking_id || data.shoot_id || '';
 
-  return sendRenderedTemplateEmail({
+  return sendEmail({
     to: recipients,
     subject: data.subject || `New Finance Dispute Raised${disputeCode ? ` - ${disputeCode}` : ''}`,
-    templateName: 'NewDisputeRaisedByClient.html',
-    values: {
+    templateId: FINANCE_DISPUTE_RAISED_ADMIN_TEMPLATE_ID,
+    dynamicTemplateData: {
       booking_id: bookingId,
       raised_by_type_label: raisedByLabel,
       raised_by_name_label: raisedByNameLabel,
@@ -4464,88 +4470,76 @@ const sendFinanceDisputeRaisedAdminEmail = async ({ recipients = [], data = {} }
       creative_partner: data.creative_partner || data.creator_name || 'N/A',
       dispute_reason: data.dispute_reason || data.reason || data.category || data.description || 'N/A',
       view_details_url: data.view_details_url || data.dispute_link || ''
-    },
-    text: [
-      'New finance dispute raised.',
-      disputeCode ? `Dispute: ${disputeCode}` : null,
-      bookingId ? `Booking: ${bookingId}` : null,
-      data.raised_by_name ? `Raised by: ${data.raised_by_name}` : null,
-      data.view_details_url || data.dispute_link || null
-    ].filter(Boolean).join('\n')
+    }
   });
 };
 
 const sendFinanceDisputeReceivedEmail = async ({ to, data = {} } = {}) =>
-  sendRenderedTemplateEmail({
+  sendEmail({
     to,
     subject: data.subject || 'We Received Your Dispute',
-    templateName: 'ClientNotificationDisputeReceived.html',
-    values: {
+    templateId: FINANCE_DISPUTE_RECEIVED_TEMPLATE_ID,
+    dynamicTemplateData: {
       client_name: data.recipient_name || data.client_name || 'there',
       booking_id: data.booking_id || data.shoot_id || '',
       view_details_url: data.view_details_url || data.dispute_link || ''
-    },
-    text: `We received your dispute for booking ${data.booking_id || data.shoot_id || ''}.`
+    }
   });
 
 const sendFinanceDisputeResolvedEmail = async ({ to, data = {} } = {}) =>
-  sendRenderedTemplateEmail({
+  sendEmail({
     to,
     subject: data.subject || 'Your Dispute Has Been Resolved',
-    templateName: 'ClientNotificationDisputeResolved.html',
-    values: {
+    templateId: FINANCE_DISPUTE_RESOLVED_TEMPLATE_ID,
+    dynamicTemplateData: {
       client_name: data.recipient_name || data.client_name || 'there',
       booking_id: data.booking_id || data.shoot_id || '',
       resolution_summary: data.resolution_summary || data.resolution_notes || data.notes || 'Resolved by the Beige finance team',
       view_details_url: data.view_details_url || data.dispute_link || ''
-    },
-    text: `Your dispute for booking ${data.booking_id || data.shoot_id || ''} has been resolved.`
+    }
   });
 
 const sendFinanceDisputeRejectedEmail = async ({ to, data = {} } = {}) =>
-  sendRenderedTemplateEmail({
+  sendEmail({
     to,
     subject: data.subject || 'Update on Your Dispute',
-    templateName: 'ClientNotificationDisputeRejected.html',
-    values: {
+    templateId: FINANCE_DISPUTE_REJECTED_TEMPLATE_ID,
+    dynamicTemplateData: {
       client_name: data.recipient_name || data.client_name || 'there',
       booking_id: data.booking_id || data.shoot_id || '',
       rejection_reason: data.rejection_reason || data.resolution_notes || data.notes || 'Reviewed by the Beige finance team',
       view_details_url: data.view_details_url || data.dispute_link || ''
-    },
-    text: `Your dispute for booking ${data.booking_id || data.shoot_id || ''} has been rejected.`
+    }
   });
 
 const sendFinanceDisputeReopenedEmail = async ({ to, data = {} } = {}) =>
-  sendRenderedTemplateEmail({
+  sendEmail({
     to,
     subject: data.subject || 'Dispute Reopened - Action Required',
-    templateName: 'ClientNotificationDisputeReopened.html',
-    values: {
+    templateId: FINANCE_DISPUTE_REOPENED_TEMPLATE_ID,
+    dynamicTemplateData: {
       client_name: data.recipient_name || data.client_name || 'there',
       booking_id: data.booking_id || data.shoot_id || '',
       reopened_by: data.reopened_by || data.updated_by || 'the Beige finance team',
       dispute_reason: data.dispute_reason || data.reason || data.category || 'N/A',
       previous_resolution: data.previous_resolution || data.resolution_notes || 'N/A',
       dispute_link: data.dispute_link || data.view_details_url || ''
-    },
-    text: `Your dispute for booking ${data.booking_id || data.shoot_id || ''} has been reopened.`
+    }
   });
 
 const sendFinanceDisputeUpdatedEmail = async ({ to, data = {} } = {}) =>
-  sendRenderedTemplateEmail({
+  sendEmail({
     to,
     subject: data.subject || 'Finance Dispute Updated',
-    templateName: 'NotificationDisputeUpdated.html',
-    values: {
+    templateId: FINANCE_DISPUTE_UPDATED_TEMPLATE_ID,
+    dynamicTemplateData: {
       client_name: data.recipient_name || data.client_name || 'there',
       booking_id: data.booking_id || data.shoot_id || '',
       reopened_by: data.updated_by || data.reopened_by || 'the Beige finance team',
       update_message: data.update_message || `A dispute for Booking ${data.booking_id || data.shoot_id || ''} has been updated.`,
       update_detail: data.update_detail || 'Please review the latest comments/files and take the necessary action.',
       dispute_link: data.dispute_link || data.view_details_url || ''
-    },
-    text: data.update_message || `Finance dispute updated for booking ${data.booking_id || data.shoot_id || ''}.`
+    }
   });
 
 module.exports = {

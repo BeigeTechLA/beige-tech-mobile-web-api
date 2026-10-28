@@ -1,6 +1,90 @@
 const financeService = require('../services/finance.service');
+const financeAnalyticsService = require('../services/finance-analytics.service');
+const financeAnalyticsAuditService = require('../services/finance-analytics-audit.service');
 const accountCreditService = require('../services/account-credit.service');
 const financeDisputeService = require('../services/finance-dispute.service');
+
+exports.getAdminAnalytics = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getAnalytics(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get finance analytics error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch finance analytics'
+    });
+  }
+};
+
+exports.exportAdminAnalyticsAudit = async (req, res) => {
+  try {
+    const { buffer, filters } = await financeAnalyticsAuditService.exportAnalyticsAudit(req.query);
+    const range = filters.start_date ? `${filters.start_date}-to-${filters.end_date}` : 'all-time';
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="finance-analytics-reconciliation-${range}.xlsx"`);
+    return res.status(200).send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('Export finance analytics reconciliation error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to export finance analytics reconciliation'
+    });
+  }
+};
+
+exports.getAdminShootHistory = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getShootHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get shoot history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch shoot history'
+    });
+  }
+};
+
+exports.getAdminCpPayoutHistory = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getCpPayoutHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get CP payout history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch CP payout history'
+    });
+  }
+};
+
+exports.getAdminCpOverdueHistory = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getCpOverdueHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get CP overdue history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch CP overdue history'
+    });
+  }
+};
+
+exports.getAdminPayoutScheduleHistory = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.getPayoutScheduleHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get payout schedule history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch payout schedule'
+    });
+  }
+};
 
 exports.syncBookingFinance = async (req, res) => {
   try {
