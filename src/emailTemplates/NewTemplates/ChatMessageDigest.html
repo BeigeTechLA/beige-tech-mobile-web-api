@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
+  <!-- Tells clients this email ships BOTH themes, so they apply our palettes instead of auto-inverting -->
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>New messages in your chat room</title>
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+  <![endif]-->
+
+  <!-- =====================================================================
+       RESPONSIVE BLOCK
+       Kept in its OWN <style> tag on purpose: Gmail discards an entire <style> block
+       if it dislikes any selector in it (e.g. the Outlook [data-ogsb] hooks below).
+       Isolating the media queries means the responsive rules survive even if the
+       theme block gets dropped.
+       ===================================================================== -->
+  <style type="text/css">
+    @media only screen and (max-width: 620px) {
+
+      /* ---- outer frame ---- */
+      .wrap-outer {
+        padding: 8px 4px !important;
+      }
+
+      .main-card {
+        width: 100% !important;
+      }
+
+      /* ---- top section ---- */
+      .top-ribbon {
+        background-size: 100% auto !important;
+        background-position: center 60px !important;
+      }
+
+      .sec-logo {
+        padding: 28px 0 22px !important;
+      }
+
+      .logo-pill {
+        padding: 10px 24px !important;
+      }
+
+      .sec-logo-sep {
+        padding: 24px 16px 0 !important;
+      }
+
+      .sec-header {
+        padding: 0 12px 26px !important;
+      }
+
+      .head-plate-pad {
+        padding: 14px 10px !important;
+      }
+
+      .h1 {
+        font-size: 34px !important;
+        line-height: 1.1 !important;
+        letter-spacing: -1px !important;
+      }
+
+      /* ---- message card ---- */
+      .sec-card {
+        padding: 0 12px !important;
+      }
+
+      .msg-card,
+      .msg-top,
+      .msg-bottom {
+        border-radius: 22px !important;
+      }
+
+      .msg-top {
+        padding: 26px 16px 20px !important;
+        border-radius: 22px 22px 0 0 !important;
+      }
+
+      .msg-bottom {
+        padding: 20px 16px 24px !important;
+        border-radius: 0 0 22px 22px !important;
+      }
+
+      .hello {
+        font-size: 26px !important;
+        margin-bottom: 10px !important;
+      }
+
+      .msg-text {
+        font-size: 16px !important;
+        line-height: 1.6 !important;
+      }
+
+      .msg-text-last {
+        margin-bottom: 4px !important;
+      }
+
+      .btn {
+        padding: 15px 32px !important;
+      }
+
+      .jump-in {
+        margin-top: 20px !important;
+        font-size: 18px !important;
+      }
+
+      /* ---- connectors ---- */
+      .conn-gap {
+        width: 70px !important;
+      }
+
+      .conn-mid {
+        width: 80px !important;
+      }
+
+      .conn-line {
+        height: 26px !important;
+      }
+
+      /* ---- lower sections ---- */
+      .sec-laptop {
+        padding-bottom: 18px !important;
+      }
+
+      .team-text {
+        font-size: 22px !important;
+      }
+
+      .sec-platform {
+        padding-bottom: 36px !important;
+      }
+
+      .rule-cell {
+        width: 16% !important;
+      }
+
+      .pill-cell {
+        width: 68% !important;
+      }
+
+      .platform-pill {
+        padding: 16px 26px !important;
+        font-size: 20px !important;
+      }
+
+      .sec-help {
+        padding: 0 16px 12px !important;
+      }
+
+      .sep-gap {
+        padding-bottom: 28px !important;
+      }
+
+      .footer-text {
+        font-size: 13px !important;
+        line-height: 20px !important;
+      }
+
+      .help-title,
+      .help-link {
+        font-size: 18px !important;
+      }
+
+      .help-link {
+        word-break: break-all !important;
+      }
+
+      .sec-footer {
+        padding: 28px 16px 24px !important;
+      }
+
+      .brand-name {
+        margin-bottom: 28px !important;
+        font-size: 20px !important;
+      }
+    }
+
+    /* small phones (≤ 400px, e.g. 360px Androids, iPhone SE) */
+    @media only screen and (max-width: 400px) {
+      .h1 {
+        font-size: 30px !important;
+      }
+
+      .hello {
+        font-size: 24px !important;
+      }
+
+      .conn-gap {
+        width: 56px !important;
+      }
+
+      .conn-mid {
+        width: 64px !important;
+      }
+
+      .platform-pill {
+        padding: 14px 20px !important;
+        font-size: 18px !important;
+      }
+
+      .footer-text {
+        font-size: 12px !important;
+      }
+    }
+  </style>
+
+  <!-- THEME / RESET BLOCK -->
+  <style type="text/css">
+    :root {
+      color-scheme: light dark;
+      supported-color-schemes: light dark;
+    }
+
+    body,
+    table,
+    td,
+    p,
+    a,
+    h1,
+    div,
+    span,
+    strong {
+      font-family: 'Instrument Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+    }
+
+    body,
+    table,
+    td,
+    a {
+      -webkit-text-size-adjust: 100%;
+      -ms-text-size-adjust: 100%;
+    }
+
+    table,
+    td {
+      mso-table-lspace: 0pt;
+      mso-table-rspace: 0pt;
+    }
+
+    img {
+      -ms-interpolation-mode: bicubic;
+      border: 0;
+      outline: none;
+      text-decoration: none;
+    }
+
+    /* =====================================================================
+       THEMES
+       LIGHT = the inline styles in the markup (original colours).
+       DARK  = the palette below, declared twice because clients use different hooks:
+         1. @media (prefers-color-scheme: dark) -> Apple Mail, iOS Mail, Outlook.com /
+            new Outlook, Samsung Mail, Thunderbird, Yahoo, most webmail
+         2. [data-ogsb] / [data-ogsc]           -> Outlook desktop + Outlook iOS/Android
+         Gmail iOS/Android ignore both and force-invert INLINE colours only. So:
+           - every section is a SOLID INLINE base + a LOW-ALPHA tint (never an opaque
+             light gradient, which Gmail leaves light while turning the text white)
+           - the heading sits on an INLINE backing plate, because the ribbon image behind
+             it can't be recoloured: Gmail (iOS included) darkens the plate with the text.
+             Clients that use our dark palette make the plate transparent.
+           - the ribbon, glows and tint are separate nested layers, so a client that
+             drops radial-gradient still keeps the ribbon image
+           - "black" elements use #000010, not #000000 (Gmail iOS flips pure black)
+
+       DARK PALETTE
+         page                #121212
+         top section         #1C1B19 (ribbon + glows removed where the client allows)
+         message card        #26241F / border + dashed rule #3A362C
+         lower sections      #1C1B19 -> #211F1B
+         logo pills          #26241F
+         headings / links    #F5F1E8
+         body text           #D8D2C4
+         muted / footer      #C9C3B6 / #B5AEA0
+         connectors          #E8D1AB (gold, so they stay visible on dark)
+         side rules          #5A5444
+         button + pill       unchanged (#EAD2A8 on #000010)
+       ===================================================================== */
+
+    /* 1 ---- standards-based dark mode ---- */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-bg {
+        background-color: #121212 !important;
+        color: #D8D2C4 !important;
+      }
+
+      .main-card,
+      .top-base,
+      .lower {
+        background-color: #1C1B19 !important;
+      }
+
+      .top-tint,
+      .lower-tint {
+        background-image: linear-gradient(180deg, rgba(43, 37, 23, 0) 0%, rgba(43, 37, 23, 0.6) 100%) !important;
+      }
+
+      .top-glow,
+      .top-ribbon {
+        background-image: none !important;
+      }
+
+      .head-plate,
+      .head-plate-pad {
+        background-color: transparent !important;
+      }
+
+      .msg-card,
+      .msg-top,
+      .msg-bottom,
+      .logo-pill {
+        background-color: #26241F !important;
+      }
+
+      .msg-card {
+        border-color: #3A362C !important;
+      }
+
+      .dash-rule {
+        border-top-color: #3A362C !important;
+        background-color: #26241F !important;
+      }
+
+      .conn-line {
+        background-color: #E8D1AB !important;
+      }
+
+      .side-rule {
+        background-color: #5A5444 !important;
+      }
+
+      .text-black {
+        color: #F5F1E8 !important;
+      }
+
+      .text-default {
+        color: #D8D2C4 !important;
+      }
+
+      .footer-text {
+        color: #C9C3B6 !important;
+      }
+
+      .footer-muted {
+        color: #B5AEA0 !important;
+      }
+
+      .force-black-bg {
+        background-color: #000010 !important;
+      }
+
+      .force-accent-text {
+        color: #EAD2A8 !important;
+      }
+    }
+
+    /* 2 ---- Outlook (desktop + mobile + Outlook.com) ---- */
+    [data-ogsb] body,
+    [data-ogsb] .body-bg {
+      background-color: #121212 !important;
+    }
+
+    [data-ogsc] body,
+    [data-ogsc] .body-bg {
+      color: #D8D2C4 !important;
+    }
+
+    [data-ogsb] .main-card,
+    [data-ogsb] .top-base,
+    [data-ogsb] .lower {
+      background-color: #1C1B19 !important;
+    }
+
+    [data-ogsb] .top-tint,
+    [data-ogsb] .lower-tint {
+      background-image: linear-gradient(180deg, rgba(43, 37, 23, 0) 0%, rgba(43, 37, 23, 0.6) 100%) !important;
+    }
+
+    [data-ogsb] .top-glow,
+    [data-ogsb] .top-ribbon {
+      background-image: none !important;
+    }
+
+    [data-ogsb] .head-plate,
+    [data-ogsb] .head-plate-pad {
+      background-color: transparent !important;
+    }
+
+    [data-ogsb] .msg-card,
+    [data-ogsb] .msg-top,
+    [data-ogsb] .msg-bottom,
+    [data-ogsb] .logo-pill {
+      background-color: #26241F !important;
+    }
+
+    [data-ogsb] .msg-card {
+      border-color: #3A362C !important;
+    }
+
+    [data-ogsb] .dash-rule {
+      border-top-color: #3A362C !important;
+      background-color: #26241F !important;
+    }
+
+    [data-ogsb] .conn-line {
+      background-color: #E8D1AB !important;
+    }
+
+    [data-ogsb] .side-rule {
+      background-color: #5A5444 !important;
+    }
+
+    [data-ogsc] .text-black {
+      color: #F5F1E8 !important;
+    }
+
+    [data-ogsc] .text-default {
+      color: #D8D2C4 !important;
+    }
+
+    [data-ogsc] .footer-text {
+      color: #C9C3B6 !important;
+    }
+
+    [data-ogsc] .footer-muted {
+      color: #B5AEA0 !important;
+    }
+
+    [data-ogsb] .force-black-bg {
+      background-color: #000010 !important;
+    }
+
+    [data-ogsc] .force-accent-text {
+      color: #EAD2A8 !important;
+    }
+  </style>
+</head>
+
+<body class="body-bg"
+  style="margin: 0; padding: 0; width: 100%; background-color: #F3F3F3; color: #4F4A45; font-family: 'Instrument Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-bg" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F3F3F3"
+    style="width: 100%; background-color: #F3F3F3;">
+    <tr>
+      <td class="wrap-outer" align="center" style="padding: 18px 8px;">
+
+        <!-- Outlook (Windows) ignores max-width; this ghost table caps it at 600px -->
+        <!--[if mso]>
+        <table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td>
+        <![endif]-->
+
+        <table class="main-card" role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+          bgcolor="#FFF7ED"
+          style="width: 100%; max-width: 600px; background-color: #FFF7ED; box-shadow: 0 8px 26px rgba(63, 44, 16, 0.05); border-collapse: collapse;">
+
+          <!-- ============ TOP SECTION ============
+               Four nested layers (bottom -> top), so each degrades on its own:
+               base colour | low-alpha tint | side glows (radial) | ribbon image -->
+          <tr>
+            <td class="top-base" bgcolor="#FFFDFA" style="padding: 0; background-color: #FFFDFA;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <!-- tint: over #FFFDFA this reproduces the original #FFFDFA -> #FFF5E8 fade -->
+                  <td class="top-tint"
+                    style="padding: 0; background-image: linear-gradient(180deg, rgba(232,190,130,0) 0%, rgba(232,190,130,0.08) 64%, rgba(232,190,130,0.13) 100%);">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td class="top-glow"
+                          style="padding: 0; background-image: radial-gradient(circle at 4% 38%, rgba(224,185,121,0.25) 0%, rgba(224,185,121,0.10) 28%, rgba(255,250,241,0) 55%), radial-gradient(circle at 98% 45%, rgba(224,185,121,0.28) 0%, rgba(224,185,121,0.10) 30%, rgba(255,250,241,0) 56%); background-repeat: no-repeat, no-repeat; background-position: left 120px, right 145px; background-size: 210px 310px, 230px 340px;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                              <td class="top-ribbon"
+                                background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/RibbonBackground.png"
+                                style="padding: 0; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/RibbonBackground.png'); background-repeat: no-repeat; background-position: center 70px; background-size: 600px auto;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+
+                                  <!-- TOP LOGO -->
+                                  <tr>
+                                    <td class="sec-logo" align="center" style="padding: 40px 0 36px;">
+                                      <div class="logo-pill"
+                                        style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                                          alt="Beige" width="110"
+                                          style="display: block; border: 0; width: 110px; max-width: 110px;">
+                                      </div>
+                                      <div class="sec-logo-sep" style="padding: 36px 40px 0;">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="" width="100%"
+                                          style="display: block; border: 0; width: 100%; max-width: 100%;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- HEADING on an INLINE backing plate (see GMAIL notes in the theme block) -->
+                                  <tr>
+                                    <td class="sec-header" style="padding: 0 24px 42px;">
+                                      <table class="head-plate" role="presentation" width="100%" cellpadding="0"
+                                        cellspacing="0" border="0" bgcolor="#FFFAF1"
+                                        style="background-color: #FFFAF1; border-radius: 24px; border-collapse: separate;">
+                                        <tr>
+                                          <td class="head-plate-pad" align="center" bgcolor="#FFFAF1"
+                                            style="padding: 18px 16px; background-color: #FFFAF1; border-radius: 24px;">
+                                            <h1 class="text-black h1"
+                                              style="margin: 0; color: #000000; font-size: 54px; font-weight: 500; line-height: 1; letter-spacing: -2.4px; text-align: center;">
+                                              New messages in your chat room
+                                            </h1>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                    </td>
+                                  </tr>
+
+                                  <!-- MESSAGE CARD -->
+                                  <tr>
+                                    <td class="sec-card" style="padding: 0 24px;">
+                                      <table class="msg-card" role="presentation" width="100%" cellpadding="0"
+                                        cellspacing="0" border="0" bgcolor="#F9F9F9"
+                                        style="width: 100%; border-collapse: separate; border-spacing: 0; background-color: #F9F9F9; border: 1px solid #D8D2CA; border-radius: 30px; box-shadow: 0 12px 26px rgba(36, 30, 21, 0.12);">
+                                        <tr>
+                                          <td class="msg-top" align="center" bgcolor="#F9F9F9"
+                                            style="padding: 34px 24px 28px; background-color: #F9F9F9; border-radius: 30px 30px 0 0;">
+                                            <p class="text-black hello"
+                                              style="margin: 0 0 14px; font-size: 35px; line-height: 1.2; color: #000000; font-weight: 700;">
+                                              Hello, {{client_name}}
+                                            </p>
+                                            <p class="text-default msg-text"
+                                              style="margin: 0 0 10px; font-size: 20px; line-height: 1.75; color: #5D564F;">
+                                              There are new messages in your conversation. Open the conversation to
+                                              catch up.</p>
+                                            <p class="text-default msg-text msg-text-last"
+                                              style="margin: 0 0 28px; font-size: 20px; line-height: 1.75; color: #5D564F;">
+                                              Review the conversation for the latest updates.
+                                            </p>
+                                          </td>
+                                        </tr>
+
+                                        <tr>
+                                          <td class="dash-rule" bgcolor="#F9F9F9"
+                                            style="border-top: 1px dashed #CFC8BE; font-size: 0; line-height: 0; height: 1px; background-color: #F9F9F9;">
+                                            &nbsp;
+                                          </td>
+                                        </tr>
+
+                                        <tr>
+                                          <td class="msg-bottom" align="center" bgcolor="#F9F9F9"
+                                            style="padding: 24px 24px 28px; background-color: #F9F9F9; border-radius: 0 0 30px 30px;">
+                                            <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                                              align="center"
+                                              style="margin: 0 auto; border-collapse: separate; border-spacing: 0;">
+                                              <tr>
+                                                <td align="center" style="padding: 0;">
+                                                  <a class="force-black-bg force-accent-text btn" href="{{chat_url}}"
+                                                    target="_blank"
+                                                    style="display: inline-block; padding: 18px 44px; border-radius: 999px; background-color: #000010; box-shadow: 0 8px 16px rgba(0,0,0,0.16); color: #EAD2A8; text-decoration: none; font-size: 14px; line-height: 1.2; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap;">
+                                                    Open Chat &rarr;
+                                                  </a>
+                                                </td>
+                                              </tr>
+                                            </table>
+
+                                            <p class="text-black jump-in"
+                                              style="margin: 28px 0 0; font-size: 22px; line-height: 1.5; color: #000000; font-style: italic; font-weight: 600; text-align: center;">
+                                              Feel free to jump in &amp; connect with the team.
+                                            </p>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                    </td>
+                                  </tr>
+
+                                  <!-- CONNECTOR LINES -->
+                                  <tr>
+                                    <td align="center" style="padding: 0 24px;">
+                                      <table role="presentation" cellpadding="0" cellspacing="0" border="0"
+                                        align="center"
+                                        style="border-collapse: collapse; border-spacing: 0; margin: 0 auto;">
+                                        <tr>
+                                          <td class="conn-gap" style="width: 110px; font-size: 0; line-height: 0;">
+                                            &nbsp;</td>
+                                          <td class="conn-line" bgcolor="#000010"
+                                            style="width: 6px; height: 34px; background-color: #000010; font-size: 0; line-height: 0;">
+                                            &nbsp;</td>
+                                          <td class="conn-mid" style="width: 120px; font-size: 0; line-height: 0;">
+                                            &nbsp;</td>
+                                          <td class="conn-line" bgcolor="#000010"
+                                            style="width: 6px; height: 34px; background-color: #000010; font-size: 0; line-height: 0;">
+                                            &nbsp;</td>
+                                          <td class="conn-gap" style="width: 110px; font-size: 0; line-height: 0;">
+                                            &nbsp;</td>
+                                        </tr>
+                                      </table>
+                                    </td>
+                                  </tr>
+
+                                </table>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- LAPTOP IMAGE (solid base; the original #FFF5E8 -> #FFF7ED fade is too subtle to need a tint) -->
+          <tr>
+            <td class="lower sec-laptop" bgcolor="#FFF6EB" style="padding: 0 0 26px; background-color: #FFF6EB;">
+              <img
+                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLaptopMockup.png"
+                alt="Beige platform preview" width="600"
+                style="display: block; width: 100%; max-width: 600px; border: 0; height: auto;">
+            </td>
+          </tr>
+
+          <!-- TEAM TEXT -->
+          <tr>
+            <td class="lower" align="center" bgcolor="#FFF7ED" style="padding: 0 20px 16px; background-color: #FFF7ED;">
+              <p class="text-black team-text"
+                style="margin: 0; font-size: 27px; line-height: 1.3; color: #000000; font-weight: 700;">
+                The Beige Team
+              </p>
+            </td>
+          </tr>
+
+          <!-- PLATFORM PILL WITH SIDE LINES -->
+          <tr>
+            <td class="lower sec-platform" align="center" bgcolor="#FFF7ED"
+              style="padding: 0 0 52px; text-align: center; background-color: #FFF7ED;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                style="width: 100%; border-collapse: collapse; border-spacing: 0;">
+                <tr>
+                  <td class="rule-cell" width="24%" style="width: 24%; vertical-align: middle;">
+                    <div class="side-rule"
+                      style="height: 1px; background-color: #8F887E; font-size: 0; line-height: 0;">&nbsp;</div>
+                  </td>
+                  <td class="pill-cell" width="52%" align="center" style="width: 52%; text-align: center; padding: 0;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"
+                      style="margin: 0 auto; border-collapse: separate; border-spacing: 0;">
+                      <tr>
+                        <td class="force-black-bg force-accent-text platform-pill" bgcolor="#000010"
+                          style="background-color: #000010; border-radius: 999px; color: #EAD2A8; font-size: 27px; line-height: 1; font-weight: 700; font-style: italic; text-align: center; padding: 24px 50px; white-space: nowrap; box-shadow: 0 8px 16px rgba(0,0,0,0.16);">
+                          Beige AI Platform
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td class="rule-cell" width="24%" style="width: 24%; vertical-align: middle;">
+                    <div class="side-rule"
+                      style="height: 1px; background-color: #8F887E; font-size: 0; line-height: 0;">&nbsp;</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- FOOTER HELP TEXT: solid base + low-alpha tint (original #FFF7ED -> #FBF0DF) -->
+          <tr>
+            <td class="lower" bgcolor="#FFF7ED" style="padding: 0; background-color: #FFF7ED;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td class="lower-tint sec-help" align="center"
+                    style="padding: 0 22px 14px; text-align: center; background-image: linear-gradient(180deg, rgba(232,190,130,0) 0%, rgba(232,190,130,0.17) 100%);">
+                    <div class="sep-gap" style="padding-bottom: 48px;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+                    <p class="footer-text" style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #3C3B3B;">
+                      This is an automated email from BeigeAI. Please do not reply to this email.
+                    </p>
+                    <p class="text-black help-title"
+                      style="margin: 0 0 4px; font-size: 22px; line-height: 1.25; color: #000000; font-weight: 800;">
+                      Need Help?
+                    </p>
+                    <a class="text-black help-link" href="mailto:sales@beigecorporation.io" target="_blank"
+                      style="color: #000000; font-size: 22px; line-height: 1.4; font-weight: 800; text-decoration: underline;">sales@beigecorporation.io</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- FOOTER LINKS + LOGO: solid base + low-alpha tint (original #FBF0DF -> #FFF9EF) -->
+          <tr>
+            <td class="lower" bgcolor="#FFF9EF" style="padding: 0; background-color: #FFF9EF;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td class="lower-tint sec-footer" align="center"
+                    style="padding: 32px 22px 28px; text-align: center; background-image: linear-gradient(180deg, rgba(232,190,130,0.17) 0%, rgba(232,190,130,0) 100%);">
+                    <div class="sep-gap" style="padding-bottom: 48px;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+                    <p class="footer-muted footer-text"
+                      style="margin: 0 0 10px; font-size: 16px; line-height: 1.5; color: #8A8278;">
+                      Help Center &nbsp;<span style="color: #C89F5D;">&bull;</span>&nbsp;
+                      Term of Services &nbsp;<span style="color: #C89F5D;">&bull;</span>&nbsp;
+                      Privacy Policy
+                    </p>
+                    <p class="text-black brand-name"
+                      style="margin: 0 0 45px; font-size: 26px; line-height: 1.2; color: #000000; font-weight: 800;">
+                      Beige AI
+                    </p>
+                    <div class="logo-pill"
+                      style="display: inline-block; padding: 14px 28px; background-color: #FFFFFF; border-radius: 999px; box-shadow: 0 10px 24px rgba(47, 38, 26, 0.08);">
+                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                        alt="Beige" width="86"
+                        style="display: block; border: 0; width: 86px; max-width: 100%; height: auto;">
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+
+        <!--[if mso]>
+        </td></tr></table>
+        <![endif]-->
+
+      </td>
+    </tr>
+  </table>
+</body>
+
+</html>
