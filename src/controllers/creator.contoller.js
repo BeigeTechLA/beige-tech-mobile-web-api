@@ -489,6 +489,29 @@ exports.getPendingRequests = async (req, res) => {
       });
     }
 
+    const bookingIds = pendingRequests.map((request) => request.project.stream_project_booking_id);
+    const compensationRows = await db.creator_earnings.findAll({
+      where: {
+        creator_id: Number(crew_member_id),
+        booking_id: { [Op.in]: bookingIds },
+        compensation_source: { [Op.in]: ['admin', 'sales_admin'] },
+        approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] },
+        status: { [Op.ne]: 'cancelled' },
+      },
+      attributes: ['booking_id', 'net_earning_amount', 'gross_amount', 'currency'],
+      order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']],
+    });
+    const compensationByBookingId = new Map();
+    compensationRows.forEach((earning) => {
+      const bookingId = Number(earning.booking_id);
+      if (compensationByBookingId.has(bookingId)) return;
+      const rawAmount = earning.net_earning_amount ?? earning.gross_amount;
+      compensationByBookingId.set(bookingId, {
+        compensation_amount: rawAmount == null ? null : Number(rawAmount),
+        compensation_currency: earning.currency || 'USD',
+      });
+    });
+
     const projectDetails = pendingRequests.map((request) => ({
       project_id: request.project.stream_project_booking_id,
       project_name: request.project.project_name,
@@ -498,6 +521,7 @@ exports.getPendingRequests = async (req, res) => {
       event_location: request.project.event_location,
       budget: request.project.budget,
       is_completed: request.project.is_completed,
+      ...(compensationByBookingId.get(Number(request.project.stream_project_booking_id)) || {}),
     }));
 
     return res.status(200).json({
@@ -1021,6 +1045,29 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
       });
     }
 
+    const bookingIds = projects.map((request) => request.project.stream_project_booking_id);
+    const compensationRows = await db.creator_earnings.findAll({
+      where: {
+        creator_id: Number(crew_member_id),
+        booking_id: { [Op.in]: bookingIds },
+        compensation_source: { [Op.in]: ['admin', 'sales_admin'] },
+        approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] },
+        status: { [Op.ne]: 'cancelled' },
+      },
+      attributes: ['booking_id', 'net_earning_amount', 'gross_amount', 'currency'],
+      order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']],
+    });
+    const compensationByBookingId = new Map();
+    compensationRows.forEach((earning) => {
+      const bookingId = Number(earning.booking_id);
+      if (compensationByBookingId.has(bookingId)) return;
+      const rawAmount = earning.net_earning_amount ?? earning.gross_amount;
+      compensationByBookingId.set(bookingId, {
+        compensation_amount: rawAmount == null ? null : Number(rawAmount),
+        compensation_currency: earning.currency || 'USD',
+      });
+    });
+
     const projectDetails = projects.map((request) => ({
       project_id: request.project.stream_project_booking_id,
       project_name: request.project.project_name,
@@ -1030,6 +1077,7 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
       event_location: request.project.event_location,
       budget: request.project.budget,
       is_completed: request.project.is_completed,
+      ...(compensationByBookingId.get(Number(request.project.stream_project_booking_id)) || {}),
     }));
 
     return res.status(200).json({
