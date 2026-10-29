@@ -29,7 +29,7 @@ function buildWorkbook(data) {
   workbook.created = new Date();
 
   const revenueRows = audit.revenue.map((row) => ({ ...row, in_range: row.in_range ? 'Yes' : 'No' }));
-  const cpRows = audit.cp.map((row) => ({ ...row, in_range: row.in_range ? 'Yes' : 'No' }));
+  const cpRows = audit.cp.map((row) => ({ ...row, in_range: row.in_range ? 'Yes' : 'No', timeline_in_range: row.timeline_in_range ? 'Yes' : 'No' }));
   const clientBookingRows = audit.client_bookings.map((row) => ({ ...row, included: row.included ? 'Yes' : 'No' }));
   const disputeRows = audit.disputes.map((row) => ({
     ...row,
@@ -102,16 +102,23 @@ function buildWorkbook(data) {
   const today = audit.as_of_date;
   const overdueCp = includedCp.filter((row) => row.payable_amount > 0 && row.due_date && row.due_date < today);
   const timelineRules = [
-    ['this_week', (row) => row.days_until_due >= 0 && row.days_until_due <= 6, 'This Week'],
-    ['next_week', (row) => row.days_until_due >= 7 && row.days_until_due <= 13, 'Next Week'],
-    ['2_4_weeks', (row) => row.days_until_due >= 14 && row.days_until_due <= 27, '2-4 Weeks'],
-    ['overdue', (row) => row.days_until_due < 0, 'Overdue']
+    ['this_week', (row) => row.days_until_scheduled >= 0 && row.days_until_scheduled <= 6, 'This Week'],
+    ['next_week', (row) => row.days_until_scheduled >= 7 && row.days_until_scheduled <= 13, 'Next Week'],
+    ['2_4_weeks', (row) => row.days_until_scheduled >= 14 && row.days_until_scheduled <= 27, '2-4 Weeks'],
+    ['overdue', (row) => row.days_until_scheduled < 0, 'Overdue']
   ];
   timelineRules.forEach(([id, predicate, label]) => {
     const bucket = cps.payout_timeline.find((row) => row.id === id);
     const dashboard = Object.values(bucket?.segments || {}).reduce((total, value) => total + Number(value || 0), 0);
-    check(`CP Timeline - ${label}`, dashboard, sum(includedCp.filter((row) => row.payable_amount > 0 && row.due_date && predicate(row)), 'payable_amount'), 'CP Compensation', 'Remaining payable by due-date bucket');
+    const sourceRows = audit.cp.filter((row) => row.timeline_in_range && row.payable_amount > 0 && row.scheduled_payout_date && row.timeline_segment && predicate(row));
+    check(`CP Timeline - ${label}`, dashboard, sum(sourceRows, 'payable_amount'), 'CP Compensation', 'Remaining payable by scheduled date; colors by original deadline');
+    for (const segment of ['upcoming', 'dueSoon', 'later', 'overdue']) {
+      check(`CP Timeline - ${label} - ${segment}`, bucket?.segments[segment], sum(sourceRows.filter((row) => row.timeline_segment === segment), 'payable_amount'), 'CP Compensation', 'Remaining payable for schedule window and original due-date category');
+    }
   });
+  check('CP Unplotted Payouts', cps.payout_timeline_unshown_amount,
+    sum(audit.cp.filter((row) => row.timeline_in_range && row.payable_amount > 0 && (!row.timeline_bucket || !row.timeline_segment)), 'payable_amount'),
+    'CP Compensation', 'Remaining payable missing dates or outside the four-week windows');
   const overdueByCreator = new Map();
   overdueCp.forEach((row) => overdueByCreator.set(String(row.creator_id), round((overdueByCreator.get(String(row.creator_id)) || 0) + row.payable_amount)));
   const largestOverdue = [...overdueByCreator.values()].sort((a, b) => b - a).slice(0, 100).reduce((total, amount) => total + amount, 0);
@@ -185,7 +192,10 @@ function buildWorkbook(data) {
     ['CP Name', 'creator_name', 26], ['Status', 'status', 18], ['Approval', 'approval_status', 18],
     ['Activity Date', 'activity_date', 18], ['Due Date', 'due_date', 18], ['Full Amount', 'amount', 18],
     ['Paid Amount', 'paid_amount', 18], ['Payable Amount', 'payable_amount', 20],
-    ['In Range', 'in_range', 12], ['Days Until Due', 'days_until_due', 18]
+    ['In Range', 'in_range', 12], ['Days Until Due', 'days_until_due', 18],
+    ['Original Due Date', 'original_due_date', 20], ['Scheduled Payout Date', 'scheduled_payout_date', 24],
+    ['Timeline In Range', 'timeline_in_range', 20], ['Timeline Bucket', 'timeline_bucket', 20],
+    ['Timeline Segment', 'timeline_segment', 20], ['Days Until Scheduled', 'days_until_scheduled', 24]
   ], cpRows);
   addSheet(workbook, 'Client Bookings', [
     ['Shoot ID', 'booking_id', 15], ['Client ID', 'client_id', 16], ['Guest Email', 'guest_email', 30],

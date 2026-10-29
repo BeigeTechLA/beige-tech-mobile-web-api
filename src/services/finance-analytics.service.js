@@ -131,6 +131,43 @@ function resolveDueDate(earning, booking) {
   return eventDate ? addDays(eventDate, 15) : null;
 }
 
+// Date-only values must stay date-only: interpreting midnight UTC in a user's
+// timezone would move deadlines to the previous day in the Americas.
+function validDateOnly(value) {
+  try { return value ? parseDateOnly(value, 'date') : null; } catch (_) { return null; }
+}
+
+function payoutDates(earning, booking) {
+  const metadata = parseMetadata(earning.metadata_json);
+  const dueDate = validDateOnly(metadata.original_payout_due_date) || validDateOnly(resolveDueDate(earning, booking));
+  return {
+    original_due_date: dueDate,
+    scheduled_payout_date: validDateOnly(metadata.scheduled_payout_date) || dueDate
+  };
+}
+
+function daysFrom(date, today) {
+  return date ? Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000) : null;
+}
+
+function payoutBucket(date, today) {
+  const days = daysFrom(date, today);
+  if (days === null) return null;
+  if (days < 0) return 'overdue';
+  if (days <= 6) return 'this_week';
+  if (days <= 13) return 'next_week';
+  if (days <= 27) return '2_4_weeks';
+  return null;
+}
+
+function payoutSegment(date, today) {
+  return { this_week: 'upcoming', next_week: 'dueSoon', '2_4_weeks': 'later', overdue: 'overdue' }[payoutBucket(date, today)] || null;
+}
+
+function dateOnlyInRange(date, filters) {
+  return !filters.start_date || Boolean(date && date >= filters.start_date && date <= filters.end_date);
+}
+
 function statusForClient(totalCollected, totalOutstanding) {
   if (totalOutstanding <= 0) return 'fully_paid';
   return totalCollected > 0 ? 'partially_paid' : 'pending';
@@ -236,6 +273,7 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date(),
         booking,
         creator: creators.get(Number(earning.creator_id)) || {},
         due_date: dueDate,
+        ...payoutDates(earning, booking),
         activity_date: activityDate,
         is_paid: isPaid,
         amount,
@@ -300,12 +338,12 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date(),
     { id: '2_4_weeks', label: '2-4 Weeks', segments: { upcoming: 0, dueSoon: 0, later: 0, overdue: 0 } },
     { id: 'overdue', label: 'Overdue', segments: { upcoming: 0, dueSoon: 0, later: 0, overdue: 0 } }
   ];
-  cpRows.filter((row) => !row.is_paid && row.due_date).forEach((row) => {
-    const days = Math.floor((Date.parse(`${row.due_date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
-    if (days < 0) timeline[3].segments.overdue += row.payable_amount;
-    else if (days <= 6) timeline[0].segments.upcoming += row.payable_amount;
-    else if (days <= 13) timeline[1].segments.dueSoon += row.payable_amount;
-    else if (days <= 27) timeline[2].segments.later += row.payable_amount;
+  let timelineUnshownAmount = 0;
+  allCpRows.filter((row) => row.payable_amount > 0 && dateOnlyInRange(row.scheduled_payout_date, filters)).forEach((row) => {
+    const bucket = payoutBucket(row.scheduled_payout_date, today);
+    const segment = payoutSegment(row.original_due_date, today);
+    if (bucket && segment) timeline.find((item) => item.id === bucket).segments[segment] += row.payable_amount;
+    else timelineUnshownAmount += row.payable_amount;
   });
   timeline.forEach((bucket) => Object.keys(bucket.segments).forEach((key) => { bucket.segments[key] = money(bucket.segments[key]); }));
 
@@ -371,7 +409,7 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date(),
     creative_partners: {
       top_by_payout: topByPayout, top_by_shoots: topByShoots,
       averages: { payout_per_assignment: averageCpPayout, cp_payout_percent_of_revenue: averageCpMargin, cps_per_shoot: averageCpsPerShoot },
-      payout_timeline: timeline, top_overdue: topOverdue
+      payout_timeline: timeline, payout_timeline_unshown_amount: money(timelineUnshownAmount), top_overdue: topOverdue
     },
     clients: {
       top_by_shoots: topClientsByShoots, top_by_spend: topClientsBySpend,
@@ -421,6 +459,12 @@ function buildAnalyticsData(input, filters = resolveFilters(), now = new Date(),
         approval_status: row.approval_status,
         activity_date: dateKey(row.activity_date, filters.timezone),
         due_date: row.due_date,
+        original_due_date: row.original_due_date,
+        scheduled_payout_date: row.scheduled_payout_date,
+        timeline_in_range: dateOnlyInRange(row.scheduled_payout_date, filters),
+        timeline_bucket: payoutBucket(row.scheduled_payout_date, today),
+        timeline_segment: payoutSegment(row.original_due_date, today),
+        days_until_scheduled: daysFrom(row.scheduled_payout_date, today),
         amount: row.amount,
         paid_amount: row.paid_amount,
         payable_amount: row.payable_amount,
@@ -678,8 +722,10 @@ async function getCpOverdueHistory(query = {}, now = new Date()) {
 
 async function getPayoutScheduleHistory(query = {}, now = new Date()) {
   const bucket = String(query.bucket_id || '').trim();
-  const bucketIds = new Set(['this_week', 'next_week', '2_4_weeks', 'overdue']);
+  const bucketIds = new Set(['this_week', 'next_week', '2_4_weeks', 'overdue', 'outside']);
   if (!bucketIds.has(bucket)) throw badRequest('A valid payout bucket_id is required');
+  const segment = String(query.segment_id || '').trim();
+  if (segment && !['upcoming', 'dueSoon', 'later', 'overdue'].includes(segment)) throw badRequest('Invalid payout segment_id');
 
   const filters = resolveFilters(query);
   const timezone = filters.timezone;
@@ -731,14 +777,12 @@ async function getPayoutScheduleHistory(query = {}, now = new Date()) {
     const pendingAmount = money(Math.max(amount - paidAmount, 0));
     if (!(pendingAmount > 0)) return [];
 
-    const dueDate = resolveDueDate(earning, booking);
-    if (!dueDate || !isInRange(`${dueDate}T00:00:00.000Z`, filters)) return [];
-    const dueDays = Math.floor((Date.parse(`${dueDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
-    const matchesBucket = bucket === 'overdue' ? dueDays < 0
-      : bucket === 'this_week' ? dueDays >= 0 && dueDays <= 6
-        : bucket === 'next_week' ? dueDays >= 7 && dueDays <= 13
-          : dueDays >= 14 && dueDays <= 27;
-    if (!matchesBucket) return [];
+    const dates = payoutDates(earning, booking);
+    const dueDate = dates.original_due_date;
+    const dueSegment = payoutSegment(dueDate, today);
+    const scheduleBucket = payoutBucket(dates.scheduled_payout_date, today);
+    const matchesBucket = bucket === 'outside' ? !scheduleBucket || !dueSegment : scheduleBucket === bucket && Boolean(dueSegment);
+    if (!dateOnlyInRange(dates.scheduled_payout_date, filters) || !matchesBucket || (segment && dueSegment !== segment)) return [];
 
     const creator = creatorById.get(Number(earning.creator_id)) || {};
     const user = userById.get(Number(booking.user_id)) || {};
@@ -764,9 +808,11 @@ async function getPayoutScheduleHistory(query = {}, now = new Date()) {
       cp_payout: amount,
       pending_amount: pendingAmount,
       due_date: dueDate,
+      ...dates,
+      segment_id: dueSegment,
       status
     }];
-  }).sort((a, b) => a.due_date.localeCompare(b.due_date) || a.creator_name.localeCompare(b.creator_name) || a.shoot_id.localeCompare(b.shoot_id));
+  }).sort((a, b) => (a.scheduled_payout_date || '').localeCompare(b.scheduled_payout_date || '') || (a.due_date || '').localeCompare(b.due_date || '') || a.creator_name.localeCompare(b.creator_name) || a.shoot_id.localeCompare(b.shoot_id));
 
   const total = rows.length;
   const totalPending = money(rows.reduce((sum, row) => sum + row.pending_amount, 0));
@@ -774,6 +820,46 @@ async function getPayoutScheduleHistory(query = {}, now = new Date()) {
   const page = Math.min(Math.max(parseInt(query.page, 10) || 1, 1), totalPages);
   rows = rows.slice((page - 1) * limit, page * limit);
   return { summary: { total_pending: totalPending, total_rows: total }, rows, pagination: { page, limit, total, total_pages: totalPages } };
+}
+
+async function updatePayoutSchedule(earningId, payload = {}, userId = null) {
+  const id = Number(earningId);
+  if (!Number.isSafeInteger(id) || id <= 0) throw badRequest('Valid earning ID is required');
+  const scheduledDate = parseDateOnly(payload.scheduled_payout_date, 'scheduled_payout_date');
+  return db.sequelize.transaction(async (transaction) => {
+    const earning = await db.creator_earnings.findOne({
+      where: { creator_earning_id: id, ...acceptedCompensationWhere() },
+      transaction, lock: transaction.LOCK.UPDATE
+    });
+    if (!earning) throw Object.assign(new Error('Compensation record not found'), { statusCode: 404 });
+    const siblings = await db.creator_earnings.findAll({
+      where: { booking_id: earning.booking_id, creator_id: earning.creator_id }, transaction, raw: true
+    });
+    const current = getCanonicalCpEarningRows(siblings)[0];
+    if (!current || Number(current.creator_earning_id) !== id) {
+      throw Object.assign(new Error('Only the current active compensation can be scheduled'), { statusCode: 409 });
+    }
+    const payouts = await db.creator_payout_requests.findAll({ where: { creator_id: earning.creator_id }, transaction, raw: true });
+    const paid = payoutAmountsByEarningId(payouts).get(id) || 0;
+    if (earning.status === 'paid' || paid >= Number(earning.net_earning_amount)) {
+      throw Object.assign(new Error('Fully paid compensation cannot be scheduled'), { statusCode: 409 });
+    }
+    const booking = await db.stream_project_booking.findByPk(earning.booking_id, { transaction, raw: true });
+    const dates = payoutDates(earning, booking);
+    if (!dates.original_due_date) throw badRequest('Set a valid compensation due date before scheduling a payout');
+    const metadata = parseMetadata(earning.metadata_json);
+    const now = new Date().toISOString();
+    const history = Array.isArray(metadata.payout_schedule_history) ? metadata.payout_schedule_history : [];
+    await earning.update({ metadata_json: JSON.stringify({
+      ...metadata,
+      original_payout_due_date: dates.original_due_date,
+      scheduled_payout_date: scheduledDate,
+      payout_schedule_updated_at: now,
+      payout_schedule_updated_by_user_id: userId,
+      payout_schedule_history: [...history, { previous_date: dates.scheduled_payout_date, scheduled_date: scheduledDate, updated_at: now, updated_by_user_id: userId }]
+    }) }, { transaction });
+    return { earning_id: id, original_due_date: dates.original_due_date, scheduled_payout_date: scheduledDate };
+  });
 }
 
 const SHOOT_FAILED_STATUSES = new Set(['failed', 'cancelled', 'canceled', 'declined', 'expired']);
@@ -1048,4 +1134,4 @@ async function getAnalyticsData(query = {}, includeAudit = false) {
 const getAnalytics = (query = {}) => getAnalyticsData(query);
 const getAnalyticsAudit = (query = {}) => getAnalyticsData(query, true);
 
-module.exports = { getAnalytics, getAnalyticsAudit, getCpPayoutHistory, getCpOverdueHistory, getPayoutScheduleHistory, getShootHistory, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate, outstandingBalance, isOutstandingReceivable, creatorRoleNames } };
+module.exports = { getAnalytics, getAnalyticsAudit, getCpPayoutHistory, getCpOverdueHistory, getPayoutScheduleHistory, updatePayoutSchedule, getShootHistory, _private: { resolveFilters, dateKey, isInRange, buildAnalyticsData, statusForClient, resolveDueDate, payoutDates, payoutBucket, payoutSegment, dateOnlyInRange, outstandingBalance, isOutstandingReceivable, creatorRoleNames } };
