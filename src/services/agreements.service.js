@@ -513,22 +513,14 @@ async function sendShootAgreement(id, actor) {
 async function reviseShootAgreement(id, payload, actor) {
   return db.sequelize.transaction(async (transaction) => {
     const source = await getDocument(id, { transaction, lock: transaction.LOCK.UPDATE });
-    if (source.agreement_type !== SHOOT) throw error('Only shoot agreements can be revised', 409);
-    const canReviseCurrent = Boolean(source.is_current) && ['accepted', PENDING, 'rejected'].includes(source.status);
-    if (!canReviseCurrent && source.status === 'cancelled' && !source.is_current) {
-      const activeVersion = await db.agreement_documents.findOne({
-        where: { agreement_type: SHOOT, assignment_id: source.assignment_id, is_current: 1 },
-        attributes: ['agreement_document_id'], transaction, lock: transaction.LOCK.UPDATE
-      });
-      if (activeVersion) throw error('A current shoot agreement already exists. Create a version from that agreement instead.', 409);
-      const assignment = await db.assigned_crew.findOne({
-        where: { id: source.assignment_id, crew_member_id: source.creator_id, is_active: 1 },
-        transaction, lock: transaction.LOCK.UPDATE
-      });
-      if (!assignment) throw error('The CP request is no longer active for this shoot', 409);
-    } else if (!canReviseCurrent) {
-      throw error('Only a current sent or cancelled shoot agreement can be revised', 409);
+    if (source.agreement_type !== SHOOT || !source.is_current || !['accepted', PENDING, 'rejected'].includes(source.status)) {
+      throw error('Only the current sent shoot agreement can be revised', 409);
     }
+    const assignment = await db.assigned_crew.findOne({
+      where: { id: source.assignment_id, project_id: source.booking_id, crew_member_id: source.creator_id, is_active: 1 },
+      transaction, lock: transaction.LOCK.UPDATE
+    });
+    if (!assignment) throw error('The CP assignment is no longer active for this shoot', 409);
     const existingDraft = await db.agreement_documents.findOne({ where: { assignment_id: source.assignment_id, status: 'draft' }, transaction });
     if (existingDraft) throw error('A draft revision already exists for this shoot agreement', 409);
     const versions = await db.agreement_documents.findAll({
@@ -642,20 +634,28 @@ async function cancelAgreement(id, actor) {
   return db.sequelize.transaction(async (transaction) => {
     const { document } = await lockAgreementAndBooking(id, transaction);
     if (!['draft', PENDING].includes(document.status)) throw error('Only draft or pending agreements can be cancelled', 409);
-    const wasPending = document.status === PENDING;
     await document.update({ status: 'cancelled', is_current: 0, cancelled_at: new Date() }, { transaction });
-    if (document.agreement_type === SHOOT && wasPending) {
-      const previous = document.parent_document_id
-        ? await db.agreement_documents.findByPk(document.parent_document_id, { transaction, lock: transaction.LOCK.UPDATE }) : null;
-      if (previous && ['accepted', PENDING, 'rejected'].includes(previous.status)) {
-        await previous.update({ is_current: 1 }, { transaction });
-        await db.assigned_crew.update({ crew_accept: previous.status === 'accepted' ? 1 : 0 }, { where: { id: document.assignment_id }, transaction });
-      }
-      // Without a previous accepted version, leave the CP request row and its
-      // status untouched. Its existing crew_accept=0 state keeps the request
-      // available for a replacement agreement.
+    if (document.agreement_type === SHOOT && document.assignment_id) {
+      const now = new Date();
+      await db.agreement_documents.update({ is_current: 0 }, {
+        where: { assignment_id: document.assignment_id, is_current: 1 }, transaction
+      });
+      await db.assigned_crew.update({ is_active: 0, updated_at: now }, {
+        where: { id: document.assignment_id, project_id: document.booking_id, crew_member_id: document.creator_id, is_active: 1 }, transaction
+      });
+      await db.creator_earnings.update({ status: 'cancelled', approval_status: 'draft', updated_at: now }, {
+        where: {
+          booking_id: document.booking_id,
+          creator_id: document.creator_id,
+          approval_status: { [Op.in]: ['draft', 'pending_approval'] },
+          status: 'pending'
+        }, transaction
+      });
     }
-    await event(document.agreement_document_id, 'agreement_cancelled', actor, {}, transaction);
+    await event(document.agreement_document_id, 'agreement_cancelled', actor, {
+      assignment_id: document.assignment_id || null,
+      assignment_cancelled: document.agreement_type === SHOOT
+    }, transaction);
     return document;
   });
 }
