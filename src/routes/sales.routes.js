@@ -10,6 +10,10 @@ const cpCompensationController = require('../controllers/cp-compensation.control
 const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
+// sales_rep may only touch their own leads/bookings. All other roles pass through.
+const ownLead = salesLeadsController.restrictSalesRepToOwnLead;
+const ownBooking = salesLeadsController.restrictSalesRepToOwnBooking;
+
 const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
 const allowSalesRepAndClientRoles = { allowRoles: ['sales_rep', 'sales_admin', 'client'] };
 const dashboardOrSalesView = requireAnyPermission([
@@ -254,7 +258,7 @@ router.get('/client-leads', authenticate, adminSalesRepresentativeView, salesLea
  * @desc    Get lead details by ID
  * @access  Sales Rep / Admin
  */
-router.get('/leads/:id', authenticate, adminQuotesOrSalesRepresentativeView, salesLeadsController.getLeadById);
+router.get('/leads/:id', authenticate, adminQuotesOrSalesRepresentativeView, ownLead, salesLeadsController.getLeadById);
 router.get('/client-leads/:id', authenticate, adminSalesRepresentativeView, salesLeadsController.getClientLeadById);
 
 /**
@@ -263,11 +267,11 @@ router.get('/client-leads/:id', authenticate, adminSalesRepresentativeView, sale
  * @body    sales_rep_id
  * @access  Sales Rep / Admin
  */
-router.put('/leads/:id/assign', authenticate, adminSalesRepresentativeEdit, salesLeadsController.assignLead);
+router.put('/leads/:id/assign', authenticate, adminSalesRepresentativeEdit, ownLead, salesLeadsController.assignLead);
 router.put('/leads/:id/assign-self', authenticate, adminSalesRepresentativeEdit, salesLeadsController.assignLeadToSelf);
-router.put('/leads/:id/change-sales-rep', authenticate, adminSalesRepresentativeEdit, salesLeadsController.changeLeadSalesRep);
+router.put('/leads/:id/change-sales-rep', authenticate, adminSalesRepresentativeEdit, ownLead, salesLeadsController.changeLeadSalesRep);
 router.put('/client-leads/:id/change-sales-rep', authenticate, adminSalesRepresentativeEdit, salesLeadsController.changeClientLeadSalesRep);
-router.delete('/leads/:id', authenticate, adminSalesRepresentativeDelete, salesLeadsController.softDeleteLead);
+router.delete('/leads/:id', authenticate, adminSalesRepresentativeDelete, ownLead, salesLeadsController.softDeleteLead);
 router.delete('/client-leads/:id', authenticate, adminSalesRepresentativeDelete, salesLeadsController.softDeleteClientLead);
 
 /**
@@ -276,13 +280,13 @@ router.delete('/client-leads/:id', authenticate, adminSalesRepresentativeDelete,
  * @body    status
  * @access  Sales Rep / Admin
  */
-router.put('/leads/:id/status', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadStatus);
-router.put('/leads/:id/response-deadline', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadResponseDeadline);
-router.put('/leads/:id/mark-responded', authenticate, adminSalesRepresentativeEdit, salesLeadsController.markLeadResponded);
+router.put('/leads/:id/status', authenticate, adminSalesRepresentativeEdit, ownLead, salesLeadsController.updateLeadStatus);
+router.put('/leads/:id/response-deadline', authenticate, adminSalesRepresentativeEdit, ownLead, salesLeadsController.updateLeadResponseDeadline);
+router.put('/leads/:id/mark-responded', authenticate, adminSalesRepresentativeEdit, ownLead, salesLeadsController.markLeadResponded);
 router.put('/client-leads/:id/status', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadStatus);
 router.post('/leads/manual-payment/upload-proof', authenticate, quoteOrSalesPaymentEdit, ...salesLeadsController.uploadManualPaymentProof);
-router.post('/leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordManualPayment);
-router.put('/leads/:id/manual-payment/:paymentId', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.editManualPaymentAmount);
+router.post('/leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, ownLead, salesLeadsController.recordManualPayment);
+router.put('/leads/:id/manual-payment/:paymentId', authenticate, quoteOrSalesPaymentCreate, ownLead, salesLeadsController.editManualPaymentAmount);
 router.post('/client-leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordClientManualPayment);
 router.post('/availability', authenticate, salesRepAvailabilityView, salesAvailabilityController.getSalesRepAvailability);
 router.post('/add-availability', authenticate, salesRepAvailabilityCreate, salesAvailabilityController.setSalesRepAvailability);
@@ -294,42 +298,49 @@ router.post(
   '/leads/:id/post-production-status-update',
   authenticate,
   adminSalesRepresentativeEdit,
+  ownLead,
   salesLeadsController.sendPostProductionStatusUpdate
 );
 router.post(
   '/leads/:id/raw-footage-ready',
   authenticate,
   adminSalesRepresentativeEdit,
+  ownLead,
   salesLeadsController.sendRawFootageReady
 );
 router.post(
   '/leads/:id/final-assets-delivered-without-revision',
   authenticate,
   adminSalesRepresentativeEdit,
+  ownLead,
   salesLeadsController.sendFinalAssetsDeliveredWithoutRevision
 );
 router.post(
   '/leads/:id/revision-request-received',
   authenticate,
   adminSalesRepresentativeEdit,
+  ownLead,
   salesLeadsController.sendRevisionRequestReceived
 );
 router.post(
   '/leads/:id/revised-content-delivered',
   authenticate,
   adminSalesRepresentativeEdit,
+  ownLead,
   salesLeadsController.sendRevisedContentDelivered
 );
 router.post(
   '/leads/:id/final-assets-delivered-with-revision',
   authenticate,
   adminSalesRepresentativeEdit,
+  ownLead,
   salesLeadsController.sendFinalAssetsDeliveredWithRevision
 );
 router.post(
   '/leads/:id/cp-confirmed',
   authenticate,
   adminSalesRepresentativeEdit,
+  ownLead,
   salesLeadsController.confirmLeadCreativePartner
 );
 router.post(
@@ -412,7 +423,7 @@ router.post('/preview-invoice', authenticate, adminSalesRepresentativeInvoiceVie
 router.get('/invoice-pdf/:booking_id', paymentLinksController.getStripeInvoicePdf);
 router.post('/send-invoice', authenticate, adminSalesRepresentativeCreate, paymentLinksController.sendStripeInvoice);
 router.post('/payment-links/notify', paymentLinksController.sendPaymentLinkEmail);
-router.get('/get-lead-stats/:id', authenticate, adminSalesRepresentativeView, salesLeadsController.getLeadFulfillmentStatus);
+router.get('/get-lead-stats/:id', authenticate, adminSalesRepresentativeView, ownLead,salesLeadsController.getLeadFulfillmentStatus);
 router.get('/get-client-lead-stats/:id', authenticate, adminSalesRepresentativeView, salesLeadsController.getClientLeadFulfillmentStatus);
 
 /**
@@ -561,11 +572,11 @@ router.patch(
 );
 router.post('/bookings/cp-compensation', authenticate, shootsEditOrSalesEdit, cpCompensationController.submitFromSalesAdmin);
 
-router.post('/leads/intent', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadIntent);
-router.post('/client-leads/intent', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadIntent);
-router.put('/leads/:id/booking', authenticate, shootsEditOrSalesEdit, salesLeadsController.finalizeGuestBooking);
-router.put('/client/:id/booking', authenticate, salesLeadsController.finalizeGuestBooking);
 router.put('/leads/:id/booking-schedule', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadBookingSchedule);
+router.post('/client-leads/intent', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadIntent);
+router.put('/leads/:id/booking', authenticate, shootsEditOrSalesEdit, ownBooking, salesLeadsController.finalizeGuestBooking);
+router.put('/client/:id/booking', authenticate, ownBooking, salesLeadsController.finalizeGuestBooking);
+router.put('/leads/:id/booking-schedule', authenticate, adminSalesRepresentativeEdit, ownLead, salesLeadsController.updateLeadBookingSchedule);
 router.put('/client-leads/:id/booking', authenticate, shootsEditOrSalesEdit, salesLeadsController.finalizeClientLeadBooking);
 router.put('/client-leads/:id/booking-schedule', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateClientLeadBookingSchedule);
 router.post('/deals/finalize', authenticate, salesRepOrSalesAdminDashboardCreate, salesLeadsController.finalizeCreateDeal);

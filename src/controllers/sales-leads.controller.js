@@ -146,6 +146,63 @@ function isManualSalesActor(req) {
   return Boolean(req.userId) && !['guest', 'client'].includes(role);
 }
 
+function isSalesRepRole(req) {
+  return String(req.userRole || req.user?.userRole || '').trim().toLowerCase() === 'sales_rep';
+}
+
+// Route middleware: sales reps may only act on leads assigned to them.
+// Other roles pass straight through. Use it on every sales-lead route with :id.
+exports.restrictSalesRepToOwnLead = async (req, res, next) => {
+  try {
+    if (!isSalesRepRole(req)) return next();
+
+    const leadId = Number(req.params.id || req.body?.lead_id);
+    if (!Number.isInteger(leadId) || leadId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid lead ID required' });
+    }
+
+    const lead = await sales_leads.findOne({
+      where: { lead_id: leadId, is_active: 1 },
+      attributes: ['lead_id', 'assigned_sales_rep_id']
+    });
+
+    if (!lead || Number(lead.assigned_sales_rep_id) !== Number(req.userId)) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    return next();
+  } catch (error) {
+    console.error('restrictSalesRepToOwnLead error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to verify lead access' });
+  }
+};
+
+// Same idea, but for routes where the param is a BOOKING id.
+exports.restrictSalesRepToOwnBooking = async (req, res, next) => {
+  try {
+    if (!isSalesRepRole(req)) return next();
+
+    const bookingId = Number(req.params.id || req.params.bookingId);
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid booking ID required' });
+    }
+
+    const where = { booking_id: bookingId, is_active: 1, assigned_sales_rep_id: Number(req.userId) };
+    const [ownLead, ownClientLead] = await Promise.all([
+      sales_leads.findOne({ where, attributes: ['lead_id'] }),
+      client_leads.findOne({ where, attributes: ['lead_id'] })
+    ]);
+
+    if (!ownLead && !ownClientLead) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+    return next();
+  } catch (error) {
+    console.error('restrictSalesRepToOwnBooking error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to verify booking access' });
+  }
+};
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, path.join(__dirname, '../../public/uploads/media'));
@@ -2662,6 +2719,18 @@ exports.getLeads = async (req, res) => {
       }
     }
 
+    // Sales reps can only ever see their own leads, regardless of query params.
+    if (isSalesRepRole(req)) {
+      const salesRepUserId = Number(req.userId || req.user?.userId || req.user?.id || 0);
+      if (!Number.isInteger(salesRepUserId) || salesRepUserId <= 0) {
+        return res.status(403).json({
+          success: false,
+          message: 'Unable to resolve sales representative'
+        });
+      }
+      whereClause.assigned_sales_rep_id = salesRepUserId;
+    }
+
     if (search?.trim()) {
       const normalizedSearch = search.trim();
       whereClause[Op.or] = [
@@ -3019,6 +3088,10 @@ const invokeGetLeadsSnapshot = async (baseReq, queryOverrides = {}) => {
     const mergedQuery = { ...baseReq.query, ...queryOverrides };
     const reqLike = {
       ...baseReq,
+      userId: baseReq.userId,
+      userRole: baseReq.userRole,
+      user: baseReq.user,
+      headers: baseReq.headers,
       query: mergedQuery,
     };
 
@@ -3263,9 +3336,10 @@ exports.getLeadById = async (req, res) => {
 
     let whereClause = { lead_id: id, is_active: 1 };
 
-    // if (req.userRole === 'sales_rep') {
-    //   whereClause.assigned_sales_rep_id = req.userId;
-    // }
+    // Sales reps can only open leads assigned to them.
+    if (isSalesRepRole(req)) {
+      whereClause.assigned_sales_rep_id = Number(req.userId);
+    }
 
     const lead = await sales_leads.findOne({
       where: whereClause,
@@ -3728,8 +3802,13 @@ exports.getLeadFulfillmentStatus = async (req, res) => {
   try {
     const { id } = req.params;
 
+    const fulfillmentWhere = { lead_id: id, is_active: 1 };
+    if (isSalesRepRole(req)) {
+      fulfillmentWhere.assigned_sales_rep_id = Number(req.userId);
+    }
+
     const lead = await sales_leads.findOne({
-      where: { lead_id: id, is_active: 1 },
+      where: fulfillmentWhere,
       include: [
         {
           model: stream_project_booking,
