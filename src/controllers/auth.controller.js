@@ -3880,6 +3880,7 @@ exports.createInternalCredential = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const transaction = await db.sequelize.transaction();
+    const createdByUserId = Number(req.user?.userId || req.userId || 0) || null;
 
     try {
       const createdUser = await User.create({
@@ -3892,6 +3893,7 @@ exports.createInternalCredential = async (req, res) => {
         is_active: 1,
         email_verified: 1,
         created_from: 1,
+        created_by_user_id: createdByUserId,
         created_at: new Date()
       }, { transaction });
 

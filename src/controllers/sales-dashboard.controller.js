@@ -1239,7 +1239,7 @@ exports.getSalesRepsWorkload = async (req, res) => {
 
 exports.getSalesRepsList = async (req, res) => {
   try {
-    const salesReps = await leadAssignmentService.getActiveSalesReps({
+    const salesReps = await leadAssignmentService.getSalesRepsAndAdmins({
       attributes: ['id', 'name', 'email', 'user_type', 'role']
     });
     salesReps.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));

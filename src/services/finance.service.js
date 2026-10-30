@@ -1,4 +1,5 @@
 const db = require('../models');
+const { requireAcceptedCompensation } = require('../utils/cp-compensation-eligibility');
 const pricingService = require('./pricing.service');
 
 const DEFAULT_PLATFORM_FEE_PERCENT = Number(process.env.BEIGE_MARGIN_PERCENT || 25);
@@ -3082,6 +3083,12 @@ async function releaseCreatorEarnings(payload = {}, options = {}) {
 
     let releasedAmount = 0;
     for (const earning of earnings) {
+      if (['admin', 'sales_admin'].includes(earning.compensation_source)) {
+        if (earning.approval_status !== 'approved') {
+          throw Object.assign(new Error('CP compensation must be approved by finance before release'), { statusCode: 409 });
+        }
+        await requireAcceptedCompensation(earning, transaction);
+      }
       const amount = toMoney(earning.net_earning_amount);
       await earning.update({
         status: 'earned',

@@ -3,6 +3,7 @@ const db = require('../models');
 const businessNotifications = require('./business-notification.service');
 const cpCompensation = require('./cp-compensation.service');
 const { validateAgreementSignature } = require('../utils/agreement-signature');
+const { assertCrewPositionAvailable, closeUnavailableCrewRequests } = require('./crew-acceptance.service');
 const { Op } = db.Sequelize;
 
 const GENERAL = 'general';
@@ -392,6 +393,7 @@ async function assignCompensateAndSend(bookingId, payload = {}, actor = {}) {
     if (partners.length !== ids.length) throw error('One or more Creative Partners were not found', 404);
     const existing = await db.assigned_crew.findAll({ where: { project_id: Number(bookingId), crew_member_id: ids, is_active: 1 }, transaction });
     if (existing.length) throw error('One or more Creative Partners are already assigned to this shoot', 409);
+    for (const creatorId of ids) await assertCrewPositionAvailable(booking, creatorId, transaction);
     const assignments = [];
     for (const creatorId of ids) {
       assignments.push(await db.assigned_crew.create({
@@ -467,19 +469,34 @@ async function notifyCreator(document, title, message, actor) {
   }
 }
 
+async function lockAgreementAndBooking(id, transaction) {
+  const hint = await getDocument(id, { transaction });
+  let booking = null;
+  if (hint.agreement_type === SHOOT) {
+    booking = await db.stream_project_booking.findByPk(hint.booking_id, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!booking) throw error('Shoot not found', 404);
+  }
+  const document = await getDocument(id, { transaction, lock: transaction.LOCK.UPDATE });
+  return { document, booking };
+}
+
 async function sendShootAgreement(id, actor) {
   const document = await db.sequelize.transaction(async (transaction) => {
-    const row = await getDocument(id, { transaction, lock: transaction.LOCK.UPDATE });
+    const { document: row, booking } = await lockAgreementAndBooking(id, transaction);
     if (row.agreement_type !== SHOOT || !['draft', 'rejected'].includes(row.status)) throw error('Only a draft or rejected shoot agreement can be sent', 409);
     validateAgreementContent(row.content_html, row.content_json);
     const assignment = await db.assigned_crew.findOne({ where: { id: row.assignment_id, crew_member_id: row.creator_id, is_active: 1 }, transaction, lock: transaction.LOCK.UPDATE });
     if (!assignment) throw error('The active crew assignment no longer exists', 409);
+    await assertCrewPositionAvailable(booking, row.creator_id, transaction);
     await db.agreement_documents.update({ is_current: 0 }, { where: { assignment_id: row.assignment_id, agreement_document_id: { [Op.ne]: row.agreement_document_id }, is_current: 1 }, transaction });
     await row.update({ status: PENDING, is_current: 1, sent_at: new Date(), sent_by_user_id: actor.userId }, { transaction });
     // The agreement document is the source of truth for the awaiting-response
     // state. Keep the legacy assignment status unchanged because older
     // environments restrict that column to a fixed set of values.
-    await assignment.update({ crew_accept: 0, responded_at: null }, { transaction });
+    // A revision does not release a position that this CP already accepted.
+    if (Number(assignment.crew_accept) !== 1) {
+      await assignment.update({ crew_accept: 0, responded_at: null }, { transaction });
+    }
     await event(row.agreement_document_id, 'shoot_agreement_sent', actor, { assignment_id: row.assignment_id }, transaction);
     return row;
   });
@@ -496,10 +513,20 @@ async function sendShootAgreement(id, actor) {
 async function reviseShootAgreement(id, payload, actor) {
   return db.sequelize.transaction(async (transaction) => {
     const source = await getDocument(id, { transaction, lock: transaction.LOCK.UPDATE });
-    if (source.agreement_type !== SHOOT || !source.is_current || !['accepted', PENDING, 'rejected'].includes(source.status)) throw error('Only the current sent shoot agreement can be revised', 409);
+    if (source.agreement_type !== SHOOT || !source.is_current || !['accepted', PENDING, 'rejected'].includes(source.status)) {
+      throw error('Only the current sent shoot agreement can be revised', 409);
+    }
+    const assignment = await db.assigned_crew.findOne({
+      where: { id: source.assignment_id, project_id: source.booking_id, crew_member_id: source.creator_id, is_active: 1 },
+      transaction, lock: transaction.LOCK.UPDATE
+    });
+    if (!assignment) throw error('The CP assignment is no longer active for this shoot', 409);
     const existingDraft = await db.agreement_documents.findOne({ where: { assignment_id: source.assignment_id, status: 'draft' }, transaction });
     if (existingDraft) throw error('A draft revision already exists for this shoot agreement', 409);
-    const nextVersion = Number(source.version_no) + 1;
+    const versions = await db.agreement_documents.findAll({
+      where: { assignment_id: source.assignment_id }, attributes: ['version_no'], transaction, lock: transaction.LOCK.UPDATE
+    });
+    const nextVersion = Math.max(0, ...versions.map((row) => Number(row.version_no) || 0)) + 1;
     const contentHtml = payload.content_html == null ? source.content_html : String(payload.content_html).trim();
     const contentJson = payload.content_json === undefined ? source.content_json : stringify(payload.content_json);
     validateAgreementContent(contentHtml, contentJson);
@@ -519,7 +546,7 @@ async function reviseShootAgreement(id, payload, actor) {
 async function respondToAgreement(id, creatorId, action, payload = {}, request = {}, expectedAgreementType = null) {
   if (!['accepted', 'rejected'].includes(action)) throw error('Invalid agreement action');
   const respondedDocument = await db.sequelize.transaction(async (transaction) => {
-    const document = await getDocument(id, { transaction, lock: transaction.LOCK.UPDATE });
+    const { document, booking } = await lockAgreementAndBooking(id, transaction);
     if (Number(document.creator_id) !== Number(creatorId)) throw error('You cannot respond to this agreement', 403);
     if (expectedAgreementType && document.agreement_type !== expectedAgreementType) throw error('Agreement type does not match this response endpoint', 409);
     if (document.status !== PENDING || !document.is_current) throw error('This agreement is no longer awaiting your response', 409);
@@ -530,6 +557,9 @@ async function respondToAgreement(id, creatorId, action, payload = {}, request =
     if (action === 'rejected' && !String(payload.rejection_reason || '').trim()) throw error('rejection_reason is required when rejecting an agreement');
     if (document.agreement_type === SHOOT && action === 'accepted' && !await creatorHasCurrentGeneralAcceptance(creatorId, transaction)) {
       throw error('Accept the current general agreement before accepting a shoot agreement', 409);
+    }
+    if (document.agreement_type === SHOOT && action === 'accepted') {
+      await assertCrewPositionAvailable(booking, creatorId, transaction);
     }
     const now = new Date();
     await db.agreement_responses.create({ agreement_document_id: document.agreement_document_id, creator_id: creatorId, action,
@@ -543,6 +573,10 @@ async function respondToAgreement(id, creatorId, action, payload = {}, request =
       const assignment = await db.assigned_crew.findOne({ where: { id: document.assignment_id, crew_member_id: creatorId, is_active: 1 }, transaction, lock: transaction.LOCK.UPDATE });
       if (!assignment) throw error('Active crew assignment no longer exists', 409);
       await assignment.update({ crew_accept: action === 'accepted' ? 1 : 2, status: action === 'accepted' ? 'confirmed' : 'rejected', responded_at: now }, { transaction });
+      if (action === 'accepted') {
+        await cpCompensation.submitAcceptedCreatorCompensation(document.creator_earning_id, transaction);
+        await closeUnavailableCrewRequests(booking, transaction);
+      }
       if (action === 'accepted' && document.creator_earning_id && db.creator_earning_timeline_events) {
         const timelineEvent = await db.creator_earning_timeline_events.findOne({
           where: { creator_earning_id: document.creator_earning_id, event_type: 'shoot_accepted' }, transaction, lock: transaction.LOCK.UPDATE
@@ -598,21 +632,30 @@ async function respondToAgreement(id, creatorId, action, payload = {}, request =
 
 async function cancelAgreement(id, actor) {
   return db.sequelize.transaction(async (transaction) => {
-    const document = await getDocument(id, { transaction, lock: transaction.LOCK.UPDATE });
+    const { document } = await lockAgreementAndBooking(id, transaction);
     if (!['draft', PENDING].includes(document.status)) throw error('Only draft or pending agreements can be cancelled', 409);
-    const wasPending = document.status === PENDING;
     await document.update({ status: 'cancelled', is_current: 0, cancelled_at: new Date() }, { transaction });
-    if (document.agreement_type === SHOOT && wasPending) {
-      const previous = document.parent_document_id
-        ? await db.agreement_documents.findByPk(document.parent_document_id, { transaction, lock: transaction.LOCK.UPDATE }) : null;
-      if (previous && ['accepted', PENDING, 'rejected'].includes(previous.status)) {
-        await previous.update({ is_current: 1 }, { transaction });
-        await db.assigned_crew.update({ crew_accept: previous.status === 'accepted' ? 1 : 0 }, { where: { id: document.assignment_id }, transaction });
-      } else {
-        await db.assigned_crew.update({ status: 'assigned', crew_accept: 0 }, { where: { id: document.assignment_id, crew_accept: 0 }, transaction });
-      }
+    if (document.agreement_type === SHOOT && document.assignment_id) {
+      const now = new Date();
+      await db.agreement_documents.update({ is_current: 0 }, {
+        where: { assignment_id: document.assignment_id, is_current: 1 }, transaction
+      });
+      await db.assigned_crew.update({ is_active: 0, updated_at: now }, {
+        where: { id: document.assignment_id, project_id: document.booking_id, crew_member_id: document.creator_id, is_active: 1 }, transaction
+      });
+      await db.creator_earnings.update({ status: 'cancelled', approval_status: 'draft', updated_at: now }, {
+        where: {
+          booking_id: document.booking_id,
+          creator_id: document.creator_id,
+          approval_status: { [Op.in]: ['draft', 'pending_approval'] },
+          status: 'pending'
+        }, transaction
+      });
     }
-    await event(document.agreement_document_id, 'agreement_cancelled', actor, {}, transaction);
+    await event(document.agreement_document_id, 'agreement_cancelled', actor, {
+      assignment_id: document.assignment_id || null,
+      assignment_cancelled: document.agreement_type === SHOOT
+    }, transaction);
     return document;
   });
 }
@@ -623,13 +666,36 @@ async function listDocuments(filters = {}, creatorId = null) {
   if (Number(filters.booking_id)) where.booking_id = Number(filters.booking_id);
   if (filters.status) where.status = filters.status;
   if (filters.booking_id) where.booking_id = Number(filters.booking_id);
+  if (filters.search) {
+    const search = `%${String(filters.search).trim()}%`;
+    where[Op.or] = [
+      { title: { [Op.like]: search } },
+      { snapshot_json: { [Op.like]: search } }
+    ];
+  }
   if (creatorId) {
     where.creator_id = Number(creatorId);
     // Drafts and cancelled versions have never been sent for CP review.
     where.status = filters.status && !['draft', 'cancelled'].includes(filters.status)
       ? filters.status : { [Op.notIn]: ['draft', 'cancelled'] };
   }
-  const rows = await db.agreement_documents.findAll({ where, order: [['created_at', 'DESC']], limit: Math.min(Number(filters.limit) || 50, 100) });
+  const limit = Math.min(Math.max(Number(filters.limit) || 50, 1), 100);
+  const page = Math.max(Number(filters.page) || 1, 1);
+  const query = { where, order: [['created_at', 'DESC'], ['agreement_document_id', 'DESC']] };
+  if (Number(filters.page) > 0) {
+    const { count, rows } = await db.agreement_documents.findAndCountAll({
+      ...query,
+      limit,
+      offset: (page - 1) * limit
+    });
+    return {
+      items: await Promise.all(rows.map(documentPayloadWithCreativePartner)),
+      total: count,
+      page,
+      limit
+    };
+  }
+  const rows = await db.agreement_documents.findAll({ ...query, limit });
   return Promise.all(rows.map(documentPayloadWithCreativePartner));
 }
 

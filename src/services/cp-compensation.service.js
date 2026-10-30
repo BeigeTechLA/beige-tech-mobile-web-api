@@ -7,6 +7,8 @@ const appNotificationService = require('./app-notification.service');
 const businessNotifications = require('./business-notification.service');
 const financeGoogleCalendarService = require('./finance-google-calendar.service');
 const { getCanonicalCpEarningRows, payoutAmountsByEarningId, buildCpCompensationOverview } = require('../utils/cp-compensation-summary');
+const { acceptedCompensationWhere, requireAcceptedCompensation } = require('../utils/cp-compensation-eligibility');
+const { getCrewRequirements } = require('../utils/crew-requirements');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -364,7 +366,7 @@ function getSummaryEarningAttempts(earnings = []) {
 // or resubmission as additional payout.
 async function getCpCompensationOverview(filters = {}) {
   const [earnings, payoutRequests] = await Promise.all([
-    db.creator_earnings.findAll({ raw: true }),
+    db.creator_earnings.findAll({ where: acceptedCompensationWhere(), raw: true }),
     db.creator_payout_requests.findAll({ raw: true })
   ]);
   const allowedPeriods = ['all_time', 'this_month', 'last_3_months', 'this_year'];
@@ -851,7 +853,9 @@ function normalizeCompensationItems(items = []) {
 }
 
 async function getBooking(bookingId, transaction = null) {
-  const booking = await db.stream_project_booking.findByPk(bookingId, { transaction });
+  const booking = await db.stream_project_booking.findByPk(bookingId, {
+    transaction, ...(transaction ? { lock: transaction.LOCK.UPDATE } : {})
+  });
   if (!booking) throw buildError('Booking not found', 404);
   return booking;
 }
@@ -863,7 +867,8 @@ async function getAssignedCreator(bookingId, creatorId, transaction = null) {
       crew_member_id: creatorId,
       is_active: 1
     },
-    transaction
+    transaction,
+    ...(transaction ? { lock: transaction.LOCK.UPDATE } : {})
   });
 
   if (!assignedCreator) {
@@ -954,14 +959,16 @@ async function listPendingCompensationShoots(filters = {}) {
       'budget',
       'guest_email',
       'user_id',
-      'created_at'
+      'created_at',
+      'crew_roles',
+      'crew_size_needed'
     ],
     include: [
       {
         model: db.assigned_crew,
         as: 'assigned_crews',
         required: true,
-        where: { is_active: 1 },
+        where: { is_active: 1, crew_accept: 1 },
         attributes: ['id', 'crew_member_id', 'status'],
         include: [
           {
@@ -1025,6 +1032,7 @@ async function listPendingCompensationShoots(filters = {}) {
         event_date: formatDateOnly(booking.event_date),
         customer: buildCustomer(booking),
         shoot_amount: shootAmount,
+        required_cp_count: getCrewRequirements(booking).total,
         existing_cp_payout: toMoney(breakdown.creator_earnings_amount || 0),
         margin_percent: breakdown.platform_fee_percent ? toMoney(breakdown.platform_fee_percent) : null,
         creators,
@@ -1278,7 +1286,7 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
   const bookingId = Number(payload.booking_id || payload.bookingId);
   const creatorId = Number(payload.creator_id || payload.creatorId);
   const userId = getUserId(options);
-  const approvalStatus = options.approvalStatus;
+  let approvalStatus = options.approvalStatus;
   const compensationSource = options.compensationSource;
   const compensationMethod = normalizeCompensationMethod(payload.compensation_method);
   const normalized = normalizeCompensationItems(payload.items);
@@ -1298,7 +1306,12 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
 
   try {
     const booking = await getBooking(bookingId, transaction);
-    await getAssignedCreator(bookingId, creatorId, transaction);
+    const assignment = await getAssignedCreator(bookingId, creatorId, transaction);
+    if (approvalStatus === 'approved') {
+      await requireAcceptedCompensation({ booking_id: bookingId, creator_id: creatorId }, transaction);
+    } else if (Number(assignment.crew_accept) !== 1) {
+      approvalStatus = 'draft';
+    }
     const earning = await ensureCreatorEarning(bookingId, creatorId, {
       payment_id: booking.payment_id || null,
       currency: 'USD'
@@ -1317,9 +1330,9 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
           rejection_reason: null
         }
       : {
-          approval_status: 'pending_approval',
+          approval_status: approvalStatus,
           submitted_by_user_id: userId,
-          submitted_at: now,
+          submitted_at: approvalStatus === 'draft' ? null : now,
           approved_by_user_id: null,
           approved_at: null,
           rejected_by_user_id: null,
@@ -1337,7 +1350,8 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
       approval_notes: payload.notes || payload.approval_notes || null,
       metadata_json: stringifyMetadata({
         ...parseJson(earning.metadata_json, {}),
-        rate_type: payload.rate_type || null
+        rate_type: payload.rate_type || null,
+        awaiting_creator_acceptance: approvalStatus === 'draft'
       }),
       ...approvalPayload,
       updated_at: now
@@ -1493,7 +1507,8 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
 
     return {
       booking_id: bookingId,
-      approval_status: options.approvalStatus,
+      approval_status: creators.every(creator => creator.approval_status === creators[0]?.approval_status)
+        ? creators[0]?.approval_status : 'mixed',
       compensation_source: options.compensationSource,
       compensation_method: payload.compensation_method || null,
       creators,
@@ -1738,6 +1753,7 @@ async function listCpCompensations(filters = {}) {
   const offset = (page - 1) * limit;
   const view = String(filters.view || filters.tab || 'shoots').trim().toLowerCase();
   const where = {
+    ...acceptedCompensationWhere(),
     approval_status: getApprovalWhere(filters)
   };
   const bookingWhere = {};
@@ -1943,7 +1959,7 @@ async function getCpCompensationDetails(bookingId) {
         model: db.creator_earnings,
         as: 'creator_earnings',
         required: false,
-        where: { approval_status: { [Op.in]: ACTIVE_APPROVAL_STATUSES } },
+        where: { ...acceptedCompensationWhere(), approval_status: { [Op.in]: ACTIVE_APPROVAL_STATUSES } },
         include: [
       {
         model: db.crew_members,
@@ -1998,6 +2014,7 @@ async function getCpCompensationDetails(bookingId) {
 
   const plain = toPlain(booking);
   const earnings = plain.creator_earnings || [];
+  if (!earnings.length) throw buildError('No accepted CP compensation is available for this shoot', 404);
   const summaryEarnings = getSummaryEarningAttempts(earnings);
   const breakdown = plain.finance_breakdown || {};
   const paymentSummaryByBookingId = await fetchBookingPaymentSummaries([bookingId]);
@@ -2080,6 +2097,7 @@ async function getCpCompensationDetails(bookingId) {
 async function getCreatorEarningForReview(creatorEarningId, transaction = null) {
   const earning = await db.creator_earnings.findByPk(creatorEarningId, { transaction });
   if (!earning) throw buildError('Creator earning not found', 404);
+  await requireAcceptedCompensation(earning, transaction);
   if (!ACTIVE_APPROVAL_STATUSES.includes(earning.approval_status)) {
     throw buildError('Creator earning does not have submitted compensation', 409);
   }
@@ -2565,6 +2583,7 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
 
   try {
     const earning = await db.creator_earnings.findByPk(creatorEarningId, { transaction });
+    if (earning) await requireAcceptedCompensation(earning, transaction);
     if (!earning) throw buildError('Creator earning not found', 404);
     if (earning.approval_status !== 'approved') {
       throw buildError('Only approved CP compensation can be paid', 409);
@@ -2729,6 +2748,7 @@ async function updateBookingCompensationDueDate(bookingId, payload = {}, options
   const earnings = await db.creator_earnings.findAll({
     where: {
       booking_id: normalizedBookingId,
+      ...acceptedCompensationWhere(),
       approval_status: { [db.Sequelize.Op.in]: ACTIVE_APPROVAL_STATUSES }
     }
   });
@@ -2763,6 +2783,23 @@ async function updateBookingCompensationDueDate(bookingId, payload = {}, options
   };
 }
 
+async function submitAcceptedCreatorCompensation(creatorEarningId, transaction) {
+  if (!creatorEarningId) return;
+  const earning = await db.creator_earnings.findByPk(creatorEarningId, { transaction, lock: transaction.LOCK.UPDATE });
+  if (!earning || earning.approval_status !== 'draft' || !['admin', 'sales_admin'].includes(earning.compensation_source)) return;
+  await requireAcceptedCompensation(earning, transaction);
+  const now = new Date();
+  await earning.update({
+    approval_status: 'pending_approval', status: 'pending', submitted_at: now, updated_at: now,
+    metadata_json: stringifyMetadata({ ...parseJson(earning.metadata_json, {}), awaiting_creator_acceptance: false })
+  }, { transaction });
+  await upsertTimelineEvent(earning, {
+    event_type: 'awaiting_finance_approval', label: 'Awaiting Finance Approval',
+    sub_label: 'CP accepted the shoot; compensation is ready for finance review',
+    is_completed: 0, sort_order: 5
+  }, transaction);
+}
+
 async function submitSalesAdminCompensation(payload = {}, options = {}) {
   return upsertBulkCreatorCompensations(payload, {
     ...options,
@@ -2780,6 +2817,7 @@ async function addAdminCompensation(payload = {}, options = {}) {
 }
 
 module.exports = {
+  submitAcceptedCreatorCompensation,
   submitSalesAdminCompensation,
   addAdminCompensation,
   upsertCreatorCompensation,

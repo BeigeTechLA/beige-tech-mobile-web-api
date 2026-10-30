@@ -145,7 +145,7 @@ All monetary amounts are numbers, rounded to two decimal places. The current fin
     }
   ],
   "top_overdue": [
-    { "id": "2010", "name": "Creative Partner", "amount": 2500, "days_overdue": 5 }
+    { "id": "2010", "name": "Creative Partner", "amount": 2500, "days_overdue": 5, "shoots": 2 }
   ]
 }
 ```
@@ -158,7 +158,7 @@ All monetary amounts are numbers, rounded to two decimal places. The current fin
 | `averages.cp_payout_percent_of_revenue` | Average CP Margin | Paid CP payout ÷ total eligible shoot revenue × 100; this is a payout ratio, not profit margin. |
 | `averages.cps_per_shoot` | Average CPs per Shoot | Paid CP earning/assignment count ÷ distinct paid CP-assigned bookings. |
 | `payout_timeline` | CP Payout Timeline | Outstanding CP amount bucketed by due date. `this_week` = 0–6 days; `next_week` = 7–13 days; `2_4_weeks` = 14–27 days; `overdue` = before today. |
-| `top_overdue` | Top Overdue CPs | Up to 100 CPs with the largest remaining payable amount past their due date. |
+| `top_overdue` | Top Overdue CPs | Up to 100 CPs with the largest remaining payable amount past their due date, including their count of distinct overdue shoots. |
 
 For paid CP earnings, the date filter uses the payout finance transaction date. For payable earnings, it uses the CP due date. The due date comes from `creator_earnings.metadata_json.due_date` / `payout_due_date`; if absent, it defaults to 15 days after the booking event date.
 

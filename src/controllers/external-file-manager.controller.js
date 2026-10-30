@@ -5649,9 +5649,12 @@ exports.downloadSelectedFilesZip = async (req, res) => {
       });
     }
 
-    for (const filepath of filepaths) {
-      await ensureCreatorFileAccess(req, filepath);
-      await ensureClientFileAccess(req, filepath);
+    const accessCheckBatchSize = 20;
+    for (let index = 0; index < filepaths.length; index += accessCheckBatchSize) {
+      await Promise.all(filepaths.slice(index, index + accessCheckBatchSize).map(async (filepath) => {
+        await ensureCreatorFileAccess(req, filepath);
+        await ensureClientFileAccess(req, filepath);
+      }));
     }
 
     return proxyZipResponse({
@@ -6969,6 +6972,108 @@ exports.getSharedDownloadUrl = async (req, res) => {
     }
     const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+  }
+};
+
+exports.getSharedFolderDownloadUrl = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    const rawFilepaths = Array.isArray(req.body.filepaths) ? req.body.filepaths : [];
+    const filepaths = Array.from(new Set(rawFilepaths.map((value) => normalizePathForAccess(value)).filter(Boolean)));
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+    if (!filepaths.length) {
+      return res.status(400).json({ success: false, message: 'Select at least one file to download' });
+    }
+    if (filepaths.length > 5000 || filepaths.some((filepath) => filepath.split('/').includes('..'))) {
+      return res.status(400).json({ success: false, message: 'The selected files are not valid for a folder ZIP' });
+    }
+
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+    const share = await getShareByToken(shareToken);
+    if (!share) return sendSharedResourceUnavailable(res);
+    if (String(share.resource_type || '').toLowerCase() === 'file') {
+      return res.status(403).json({ success: false, message: 'This share does not allow folder downloads' });
+    }
+    if (
+      String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
+      normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
+    ) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+
+    const folderPaths = filepaths.map((filepath) => filepath.split('/').slice(0, -1).join('/'));
+    const folderPath = folderPaths[0];
+    if (!folderPath || folderPaths.some((candidate) => candidate !== folderPath)) {
+      return res.status(400).json({ success: false, message: 'Select files from one folder to create a ZIP' });
+    }
+
+    const requestedPhase = normalizeWorkspacePhase(req.body.phase, null);
+    const requestedPath = normalizePathForAccess(req.body.path || '');
+    const scopeRequest = await resolveSharedScopeRequestFromFilepath(
+      share,
+      filepaths[0],
+      requestedPhase,
+      requestedPath
+    );
+    ensureSharedScopeAccess(share, scopeRequest.phase, scopeRequest.path);
+    await recordShareAccessLog(req, share, claims.email, 'download', accessToken);
+
+    const downloadToken = jwt.sign(
+      {
+        purpose: 'external_file_share_folder_download',
+        shareToken,
+        email: normalizeEmailAddress(claims.email),
+        folderPath,
+      },
+      getShareAccessSecret(),
+      { expiresIn: '5m' }
+    );
+    const downloadUrl = `${req.protocol}://${req.get('host')}${req.baseUrl}/share/${encodeURIComponent(shareToken)}/download-folder?token=${encodeURIComponent(downloadToken)}`;
+    return res.status(200).json({ success: true, data: { url: downloadUrl } });
+  } catch (error) {
+    if (isMissingSharedResourceError(error)) return sendSharedResourceUnavailable(res);
+    const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
+    return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+  }
+};
+
+exports.downloadSharedFolderZip = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const downloadToken = String(req.query.token || '').trim();
+    const claims = jwt.verify(downloadToken, getShareAccessSecret());
+    if (
+      claims?.purpose !== 'external_file_share_folder_download' ||
+      String(claims.shareToken || '') !== shareToken ||
+      !claims.email ||
+      !claims.folderPath
+    ) {
+      return res.status(403).json({ success: false, message: 'Invalid or expired ZIP download link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return sendSharedResourceUnavailable(res);
+    if (String(share.resource_type || '').toLowerCase() === 'file') {
+      return res.status(403).json({ success: false, message: 'This share does not allow folder downloads' });
+    }
+    if (
+      String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
+      normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
+    ) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+
+    const query = new URLSearchParams({ folderpath: String(claims.folderPath) });
+    return proxyZipResponse({ res, externalPath: `/download-folder?${query.toString()}` });
+  } catch (error) {
+    const statusCode = error?.name === 'TokenExpiredError' || error?.name === 'JsonWebTokenError' ? 403 : (error.status || 500);
+    return res.status(statusCode).json({ success: false, message: error.message || 'Failed to download shared folder ZIP' });
   }
 };
 

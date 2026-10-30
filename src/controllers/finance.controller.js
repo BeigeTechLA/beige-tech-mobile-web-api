@@ -86,6 +86,17 @@ exports.getAdminPayoutScheduleHistory = async (req, res) => {
   }
 };
 
+exports.updateAdminPayoutSchedule = async (req, res) => {
+  try {
+    const data = await financeAnalyticsService.updatePayoutSchedule(
+      req.params.earningId, req.body, req.userId || req.user?.userId || req.user?.id || null
+    );
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Failed to update payout schedule' });
+  }
+};
+
 exports.syncBookingFinance = async (req, res) => {
   try {
     const bookingId = parseInt(req.params.bookingId, 10);

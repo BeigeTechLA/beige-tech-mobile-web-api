@@ -76,7 +76,9 @@ exports.submitFromSalesAdmin = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: 'CP compensation submitted for approval',
+      message: data.approval_status === 'draft'
+        ? 'Compensation offers saved. Finance review becomes available when the CP accepts.'
+        : 'CP compensation submitted for approval',
       data
     });
   } catch (error) {

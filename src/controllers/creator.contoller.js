@@ -202,7 +202,7 @@ const getSmartPendingRequestsForCrew = async (crew_member_id, extraProjectWhere 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const pendingRecords = await assigned_crew.findAll({
-    where: { crew_member_id, crew_accept: 0 },
+    where: { crew_member_id, crew_accept: 0, is_active: 1 },
     include: [{
       model: stream_project_booking,
       as: "project",
@@ -1677,7 +1677,7 @@ exports.getDashboardRequestCounts = async (req, res) => {
     if (!currentCrew) return res.status(404).json({ error: true, message: "Creator not found" });
 
     const pendingRecords = await assigned_crew.findAll({
-      where: { crew_member_id: creator_id, crew_accept: 0 },
+      where: { crew_member_id: creator_id, crew_accept: 0, is_active: 1 },
       include: [{
         model: stream_project_booking, as: "project",
         where: { 

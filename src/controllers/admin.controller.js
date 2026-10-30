@@ -12,6 +12,7 @@ const {
   sendTaskAssignmentEmail,
   sendCPNewBookingRequestEmail,
   sendPostProductionAssignmentEmail,
+  sendProducerAssignedEmail,
   sendOnboardingFormCriticalEmail,
   sendCreativePartnerProfileReminderEmail
 } = require('../utils/emailService');
@@ -45,6 +46,8 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 const leadAssignmentService = require('../services/lead-assignment.service');
 const { extractCoordinatesFromPayload, calculateDistance, parseLocation } = require('../utils/locationHelpers');
 const db = require('../models');
+const { matchCrewToRequirements } = require('../utils/crew-requirements');
+const { closeUnavailableCrewRequests } = require('../services/crew-acceptance.service');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
@@ -65,6 +68,12 @@ const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beig
 
 const getFrontendBaseUrl = () =>
   String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+const formatShootEmailTime = (value) => {
+  if (!value) return 'TBD';
+  const parsed = moment(String(value), ['HH:mm:ss', 'HH:mm'], true);
+  return parsed.isValid() ? parsed.format('h:mm A') : String(value);
+};
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
@@ -2947,7 +2956,12 @@ exports.getProjectDetails = async (req, res) => {
         };
     });
 
-    Object.keys(fulfillmentSummary).forEach(k => { fulfillmentSummary[k].display = `${fulfillmentSummary[k].accepted}/${fulfillmentSummary[k].required}`; });
+    const acceptedCreators = processedCrew.filter(ac => Number(ac.crew_accept) === 1).map(ac => ac.crew_member || {});
+    const acceptedMatch = matchCrewToRequirements(projectJson, acceptedCreators);
+    Object.keys(fulfillmentSummary).forEach(k => {
+        if (acceptedMatch.fits) fulfillmentSummary[k].accepted = acceptedMatch.roles.filter(role => role === k).length;
+        fulfillmentSummary[k].display = `${fulfillmentSummary[k].accepted}/${fulfillmentSummary[k].required}`;
+    });
     projectJson.assigned_crews = processedCrew;
 
     // 7. Payment Link Logic
@@ -3210,13 +3224,24 @@ exports.updateProjectCrewRequirements = async (req, res) => {
     if (total < 1 || total > 30) {
       return res.status(400).json({ success: false, message: 'Select between 1 and 30 CPs' });
     }
-    const booking = await stream_project_booking.findByPk(projectId);
-    if (!booking) return res.status(404).json({ success: false, message: 'Shoot not found' });
-    await booking.update({ crew_roles: JSON.stringify(counts), crew_size_needed: total });
+    await db.sequelize.transaction(async transaction => {
+      const booking = await stream_project_booking.findByPk(projectId, { transaction, lock: transaction.LOCK.UPDATE });
+      if (!booking) throw Object.assign(new Error('Shoot not found'), { statusCode: 404 });
+      const accepted = await assigned_crew.findAll({
+        where: { project_id: projectId, crew_accept: 1, is_active: 1 },
+        include: [{ model: crew_members, as: 'crew_member', attributes: ['primary_role'] }],
+        transaction, lock: transaction.LOCK.UPDATE
+      });
+      if (!matchCrewToRequirements({ crew_roles: counts }, accepted.map(row => row.crew_member || {})).fits) {
+        throw Object.assign(new Error('CP requirements must include the positions already accepted'), { statusCode: 409 });
+      }
+      await booking.update({ crew_roles: JSON.stringify(counts), crew_size_needed: total }, { transaction });
+      await closeUnavailableCrewRequests(booking, transaction);
+    });
     return res.json({ success: true, data: { crew_roles: counts, crew_size_needed: total } });
   } catch (error) {
     console.error('Update project crew requirements error:', error);
-    return res.status(500).json({ success: false, message: 'Failed to update crew requirements' });
+    return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Failed to update crew requirements' });
   }
 };
 
@@ -12324,6 +12349,82 @@ exports.getPostProductionTeamOptions = async (req, res) => {
       (user) => !assignedEmails.has(String(user.email || '').trim().toLowerCase())
     );
 
+    // ---- Open shoot count per post-production member ----
+    // Excludes deleted, cancelled, completed and assets-delivered shoots.
+    const emailToUserId = new Map(
+      availableUsers.map((user) => [String(user.email || '').trim().toLowerCase(), Number(user.id)])
+    );
+    const availableEmails = [...emailToUserId.keys()].filter(Boolean);
+    const availableUserIds = availableUsers.map((user) => Number(user.id));
+
+    // userId -> Set(projectId); a Set prevents double counting
+    const candidateProjectsByUser = new Map(availableUserIds.map((id) => [id, new Set()]));
+
+    if (availableEmails.length) {
+      const [memberAssignments, producerShoots] = await Promise.all([
+        assigned_post_production_member.findAll({
+          where: { is_active: 1 },
+          attributes: ['project_id'],
+          include: [{
+            model: post_production_members,
+            as: 'post_production_member',
+            attributes: ['email'],
+            required: true,
+            where: { email: { [Op.in]: availableEmails } }
+          }],
+          raw: true
+        }),
+        // Shoots where the user is the producer also count as their workload
+        stream_project_booking.findAll({
+          where: { producer_user_id: { [Op.in]: availableUserIds } },
+          attributes: ['stream_project_booking_id', 'producer_user_id'],
+          raw: true
+        })
+      ]);
+
+      memberAssignments.forEach((row) => {
+        const email = String(row['post_production_member.email'] || '').trim().toLowerCase();
+        const userId = emailToUserId.get(email);
+        if (userId) candidateProjectsByUser.get(userId).add(Number(row.project_id));
+      });
+
+      producerShoots.forEach((row) => {
+        const set = candidateProjectsByUser.get(Number(row.producer_user_id));
+        if (set) set.add(Number(row.stream_project_booking_id));
+      });
+    }
+
+    const allCandidateProjectIds = [
+      ...new Set([...candidateProjectsByUser.values()].flatMap((set) => [...set]))
+    ];
+
+    const openProjectIdSet = new Set();
+    if (allCandidateProjectIds.length) {
+      const openProjects = await stream_project_booking.findAll({
+        where: {
+          stream_project_booking_id: { [Op.in]: allCandidateProjectIds },
+          is_active: 1,                                  // not deleted
+          [Op.and]: [
+            // Only active post-production work: exclude completed/assets-delivered (4) and cancelled (5).
+            { [Op.or]: [{ status: { [Op.notIn]: [4, 5] } }, { status: { [Op.is]: null } }] },
+            { [Op.or]: [{ is_cancelled: 0 }, { is_cancelled: { [Op.is]: null } }] },
+            { [Op.or]: [{ is_completed: 0 }, { is_completed: { [Op.is]: null } }] }
+          ]
+        },
+        attributes: ['stream_project_booking_id'],
+        raw: true
+      });
+      openProjects.forEach((project) => openProjectIdSet.add(Number(project.stream_project_booking_id)));
+    }
+
+    const getOpenShootCount = (userId) => {
+      let count = 0;
+      (candidateProjectsByUser.get(Number(userId)) || new Set()).forEach((projectId) => {
+        if (openProjectIdSet.has(projectId)) count += 1;
+      });
+      return count;
+    };
+
     return res.status(200).json({
       success: true,
       data: availableUsers.map((user) => ({
@@ -12331,7 +12432,8 @@ exports.getPostProductionTeamOptions = async (req, res) => {
         name: user.name,
         email: user.email,
         role_name: roleNameById.get(Number(user.user_type)) || null,
-        is_active: user.is_active
+        is_active: user.is_active,
+        assigned_shoots_count: getOpenShootCount(user.id)
       }))
     });
   } catch (error) {
@@ -12358,8 +12460,9 @@ exports.setShootProducer = async (req, res) => {
     const project = await stream_project_booking.findOne({ where: { stream_project_booking_id: projectId, is_active: 1 } });
     if (!project) return res.status(404).json({ success: false, message: 'Shoot not found' });
 
+    let producer = null;
     if (producerId !== null) {
-      const producer = await users.findOne({
+      producer = await users.findOne({
         where: { id: producerId, is_active: 1 },
         attributes: ['id', 'name', 'email'],
         include: [{ model: db.user_type, as: 'userType', attributes: ['user_role'], required: true,
@@ -12374,8 +12477,57 @@ exports.setShootProducer = async (req, res) => {
         return res.status(409).json({ success: false, message: 'This person is already on the post production team' });
       }
     }
+    const previousProducerId = project.producer_user_id == null ? null : Number(project.producer_user_id);
     await project.update({ producer_user_id: producerId });
-    return res.status(200).json({ success: true, data: { producer_user_id: producerId } });
+
+    let emailNotification = null;
+    if (producerId !== null && previousProducerId !== producerId) {
+      try {
+        const [client, crewAssignments] = await Promise.all([
+          project.user_id
+            ? clients.findOne({ where: { user_id: project.user_id }, attributes: ['name'] })
+            : null,
+          assigned_crew.findAll({
+            where: { project_id: projectId, is_active: 1 },
+            include: [{ model: crew_members, as: 'crew_member', required: false }]
+          })
+        ]);
+        const dateValue = project.event_date ? String(project.event_date).slice(0, 10) : '';
+        const dateMatch = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        const shootDate = dateMatch
+          ? new Date(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]))
+              .toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+          : (project.event_date ? moment(project.event_date).format('MMMM D, YYYY') : 'TBD');
+        const cpNames = crewAssignments
+          .map((assignment) => assignment.crew_member)
+          .filter(Boolean)
+          .map((member) => `${member.first_name || ''} ${member.last_name || ''}`.trim() || member.name)
+          .filter(Boolean);
+        const baseFrontendUrl = String(process.env.FRONTEND_URL || 'https://beige.app').trim().replace(/\/+$/, '');
+        emailNotification = await sendProducerAssignedEmail({
+          to_email: producer.email,
+          producer_name: producer.name,
+          project_name: project.project_name,
+          booking_id: projectId,
+          shoot_date: shootDate,
+          start_time: formatShootEmailTime(project.start_time),
+          end_time: formatShootEmailTime(project.end_time),
+          location: project.event_location || 'TBD',
+          client_name: client?.name || 'TBD',
+          cp_name: cpNames.join(', ') || 'TBD',
+          shoot_details_url: `${baseFrontendUrl}/admin/shoots/${projectId}`
+        });
+      } catch (emailError) {
+        console.error('Producer assignment saved, but email notification preparation failed:', emailError);
+        emailNotification = { success: false, error: 'Failed to prepare producer assignment email' };
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: { producer_user_id: producerId },
+      ...(emailNotification ? { email_notification: emailNotification } : {})
+    });
   } catch (error) {
     console.error('Set shoot producer failed:', error);
     return res.status(500).json({ success: false, message: 'Failed to update shoot producer' });
@@ -15434,6 +15586,48 @@ exports.searchCrewForLead = async (req, res) => {
             limit: 200
         });
 
+        // Return assignment counts with each creative so the picker can show
+        // live workload instead of relying on the profile's historical count.
+        const availableCrewIds = availableCrew.map(crewMember => Number(crewMember.crew_member_id)).filter(Boolean);
+        const assignmentCountsByCrew = new Map();
+        if (availableCrewIds.length) {
+            const assignments = await assigned_crew.findAll({
+                where: {
+                    crew_member_id: { [Op.in]: availableCrewIds },
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    attributes: ['event_date', 'is_active', 'is_cancelled', 'is_completed'],
+                    required: true
+                }],
+                attributes: ['crew_member_id', 'project_id', 'crew_accept']
+            });
+
+            const today = moment().startOf('day');
+            assignments.forEach(assignment => {
+                const crewId = Number(assignment.crew_member_id);
+                const project = assignment.project;
+                if (!crewId || !project || Number(project.is_active) !== 1 || Number(project.is_cancelled) === 1) return;
+
+                const eventDate = moment(project.event_date);
+                if (!eventDate.isValid()) return;
+
+                const counts = assignmentCountsByCrew.get(crewId) || {
+                    activeProjectIds: new Set(),
+                    pastAcceptedProjectIds: new Set()
+                };
+                const projectId = Number(assignment.project_id);
+                if (eventDate.isSameOrAfter(today) && Number(project.is_completed) !== 1) {
+                    counts.activeProjectIds.add(projectId);
+                } else if (eventDate.isBefore(today) && Number(assignment.crew_accept) === 1) {
+                    counts.pastAcceptedProjectIds.add(projectId);
+                }
+                assignmentCountsByCrew.set(crewId, counts);
+            });
+        }
+
         const crewWithRoles = availableCrew.map(crewMember => {
             let matchedRoles = [];
             let rawRoles = [];
@@ -15473,9 +15667,13 @@ exports.searchCrewForLead = async (req, res) => {
             const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
                 ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
                 : null;
+            const assignmentCounts = assignmentCountsByCrew.get(Number(crewJson.crew_member_id));
 
             return {
                 ...crewJson,
+                assigned_shoots: assignmentCounts?.activeProjectIds.size || 0,
+                active_assigned_shoots: assignmentCounts?.activeProjectIds.size || 0,
+                past_accepted_shoots: assignmentCounts?.pastAcceptedProjectIds.size || 0,
                 profile_photo: profilePhoto,
                 first_name: formattedFirstName,
                 last_name: formattedLastName,
@@ -16681,6 +16879,13 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
       });
     }
 
+    const acceptedMatch = matchCrewToRequirements(booking, (booking.assigned_crews || [])
+      .filter(ac => Number(ac.crew_accept) === 1).map(ac => ac.crew_member || {}));
+    if (acceptedMatch.fits) {
+      Object.keys(fulfillment).forEach(role => {
+        fulfillment[role].accepted = acceptedMatch.roles.filter(matched => matched === role).length;
+      });
+    }
     const result = {};
     Object.keys(fulfillment).forEach(key => {
       result[key] = `${fulfillment[key].accepted}/${fulfillment[key].required}`;
@@ -16866,6 +17071,47 @@ exports.searchCrewForProject = async (req, res) => {
             limit: 200
         });
 
+        // Include current workload counts in the creative picker response.
+        const availableCrewIds = availableCrew.map(crewMember => Number(crewMember.crew_member_id)).filter(Boolean);
+        const assignmentCountsByCrew = new Map();
+        if (availableCrewIds.length) {
+            const assignments = await assigned_crew.findAll({
+                where: {
+                    crew_member_id: { [Op.in]: availableCrewIds },
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    attributes: ['event_date', 'is_active', 'is_cancelled', 'is_completed'],
+                    required: true
+                }],
+                attributes: ['crew_member_id', 'project_id', 'crew_accept']
+            });
+
+            const today = moment().startOf('day');
+            assignments.forEach(assignment => {
+                const crewId = Number(assignment.crew_member_id);
+                const project = assignment.project;
+                if (!crewId || !project || Number(project.is_active) !== 1 || Number(project.is_cancelled) === 1) return;
+
+                const eventDate = moment(project.event_date);
+                if (!eventDate.isValid()) return;
+
+                const counts = assignmentCountsByCrew.get(crewId) || {
+                    activeProjectIds: new Set(),
+                    pastAcceptedProjectIds: new Set()
+                };
+                const projectId = Number(assignment.project_id);
+                if (eventDate.isSameOrAfter(today) && Number(project.is_completed) !== 1) {
+                    counts.activeProjectIds.add(projectId);
+                } else if (eventDate.isBefore(today) && Number(assignment.crew_accept) === 1) {
+                    counts.pastAcceptedProjectIds.add(projectId);
+                }
+                assignmentCountsByCrew.set(crewId, counts);
+            });
+        }
+
         const crewWithRoles = availableCrew.map(crewMember => {
             let matchedRoles = [];
             let rawRoles = [];
@@ -16893,9 +17139,13 @@ exports.searchCrewForProject = async (req, res) => {
             const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
                 ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
                 : null;
+            const assignmentCounts = assignmentCountsByCrew.get(Number(crewJson.crew_member_id));
 
             return {
                 ...crewJson,
+                assigned_shoots: assignmentCounts?.activeProjectIds.size || 0,
+                active_assigned_shoots: assignmentCounts?.activeProjectIds.size || 0,
+                past_accepted_shoots: assignmentCounts?.pastAcceptedProjectIds.size || 0,
                 profile_photo: profilePhoto,
                 first_name: crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase(),
                 last_name: crewJson.last_name.charAt(0).toUpperCase(),
@@ -19172,6 +19422,7 @@ exports.getUsersWithRoles = async (req, res) => {
         'name',
         'email',
         'user_type',
+        'created_by_user_id',
         'created_at',
         'updated_at',
         'is_active'
@@ -19225,6 +19476,23 @@ exports.getUsersWithRoles = async (req, res) => {
       userTypeMap[type.user_type_id] = type.user_role;
     });
 
+    const creatorIds = [
+      ...new Set(
+        users
+          .map((user) => Number(user.created_by_user_id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      )
+    ];
+
+    const creators = creatorIds.length
+      ? await db.users.scope('all').findAll({
+          where: { id: { [Op.in]: creatorIds } },
+          attributes: ['id', 'name', 'email'],
+          raw: true
+        })
+      : [];
+    const creatorMap = new Map(creators.map((creator) => [Number(creator.id), creator]));
+
     const formattedUsers = users.map(user => {
       const archiveHistory = archiveHistoryMap.get(Number(user.id)) || [];
       const latestArchiveEvent = archiveHistory[0] || null;
@@ -19235,6 +19503,8 @@ exports.getUsersWithRoles = async (req, res) => {
         email: user.email,
         role_id: user.user_type,
         role_name: userTypeMap[user.user_type] || null,
+        user_created_by_name: creatorMap.get(Number(user.created_by_user_id))?.name ||
+          creatorMap.get(Number(user.created_by_user_id))?.email || null,
         created_at: user.created_at,
         updated_at: user.updated_at,
         is_active: user.is_active,
@@ -19359,6 +19629,7 @@ exports.getUserRoleDetails = async (req, res) => {
         'name',
         'email',
         'user_type',
+        'phone_number',
         'created_at',
         'updated_at',
         'is_active'
@@ -19410,6 +19681,7 @@ exports.getUserRoleDetails = async (req, res) => {
           user_id: user.id,
           name: user.name,
           email: user.email,
+          phone_number: user.phone_number || null,
           user_type: user.user_type,
           user_type_name: role ? role.user_role : null,
           is_internal_member: role ? Number(role.is_internal_member || 0) : 0,
@@ -19451,6 +19723,128 @@ exports.getUserRoleDetails = async (req, res) => {
         process.env.NODE_ENV === 'development'
           ? error.message
           : undefined
+    });
+  }
+};
+
+exports.updateInternalUserProfile = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+
+    const targetUserId = Number(req.params.user_id);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid user id is required' });
+    }
+
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const normalizedPhone = normalizePhoneNumber(req.body?.phone_number ?? req.body?.number);
+    const phone_number = normalizedPhone || null;
+
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Name is required' });
+    }
+    if (name.length < 2 || name.length > 100) {
+      return res.status(400).json({ success: false, message: 'Name must be between 2 and 100 characters' });
+    }
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required' });
+    }
+    if (email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: 'Enter a valid email address' });
+    }
+    if (phone_number && !/^\d{10}$/.test(phone_number)) {
+      return res.status(400).json({ success: false, message: 'Number must be a valid 10 digit mobile number' });
+    }
+
+    const targetUser = await users.scope('all').findOne({
+      where: { id: targetUserId, is_active: 1 },
+      include: [
+        {
+          model: db.user_type,
+          as: 'userType',
+          attributes: ['user_role', 'is_internal_member'],
+          required: false
+        }
+      ]
+    });
+
+    // Only internal users can be edited from Roles & Permissions.
+    if (!targetUser || Number(targetUser.userType?.is_internal_member || 0) !== 1) {
+      return res.status(404).json({ success: false, message: 'Internal user not found' });
+    }
+
+    // Only a super admin (or the user themself) may edit a super admin.
+    const targetIsSuperAdmin = isSuperAdminRoleName(targetUser.userType?.user_role || targetUser.role);
+    if (targetIsSuperAdmin && !isSuperAdminRequest(req) && Number(authUser.id) !== targetUserId) {
+      return res.status(403).json({ success: false, message: 'Only a super admin can edit a super admin profile' });
+    }
+
+    const emailChanged = email !== String(targetUser.email || '').trim().toLowerCase();
+    const phoneChanged = phone_number !== (normalizePhoneNumber(targetUser.phone_number) || null);
+    const conflictFields = [
+      ...(emailChanged ? [{ email }] : []),
+      ...(phoneChanged && phone_number ? [{ phone_number }] : [])
+    ];
+
+    if (conflictFields.length) {
+      const [matchingUsers, matchingClients] = await Promise.all([
+        users.scope('all').findAll({
+          where: { id: { [Op.ne]: targetUserId }, [Op.or]: conflictFields },
+          attributes: ['email', 'phone_number']
+        }),
+        clients.findAll({
+          where: {
+            [Op.and]: [
+              { [Op.or]: conflictFields },
+              { [Op.or]: [{ user_id: null }, { user_id: { [Op.ne]: targetUserId } }] }
+            ]
+          },
+          attributes: ['email', 'phone_number']
+        })
+      ]);
+      const conflict = describeSignupConflicts(
+        [...matchingUsers, ...matchingClients],
+        { email: emailChanged ? email : null, phone_number: phoneChanged ? phone_number : null }
+      );
+      if (conflict) {
+        return res.status(409).json(conflict);
+      }
+    }
+
+    await targetUser.update({
+      name,
+      ...(emailChanged ? { email } : {}),
+      ...(phoneChanged ? { phone_number } : {}),
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'User profile updated successfully',
+      data: {
+        user_id: targetUser.id,
+        name,
+        email: targetUser.email,
+        phone_number: targetUser.phone_number,
+        updated_at: targetUser.updated_at
+      }
+    });
+  } catch (error) {
+    console.error('Update Internal User Profile Error:', error);
+
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(409).json({
+        success: false,
+        message: 'Email or phone number already exists. Please check the details and try again.'
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating user profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -19674,7 +20068,13 @@ exports.getUserReassignments = async (req, res) => {
             'event_date',
             'status',
             'payment_id'
-          ]
+          ],
+          include: [{
+            model: db.quotes,
+            as: 'primary_quote',
+            required: false,
+            attributes: ['total', 'price_after_discount', 'subtotal']
+          }]
         }
       ],
 
@@ -19853,7 +20253,18 @@ exports.getUserReassignments = async (req, res) => {
         event_date: data.booking?.event_date || null,
         paid_amount: Number(payment?.paid_amount || 0),
         payment_status: paymentState.paymentStatus,
-        quote_total: Number(payment?.quote_total || 0),
+        // The payment summary can be absent or stale for leads that already
+        // have quote pricing. Use the booking's primary quote as the fallback
+        // so this amount agrees with the lead/booking detail pages.
+        quote_total: Number(
+          payment?.quote_total > 0
+            ? payment.quote_total
+            : data.booking?.primary_quote?.total ??
+              data.booking?.primary_quote?.price_after_discount ??
+              data.booking?.primary_quote?.subtotal ??
+              payment?.quote_total ??
+              0
+        ),
         due_amount: Number(payment?.due_amount || 0),
         created_at: data.created_at,
         updated_at: data.updated_at
