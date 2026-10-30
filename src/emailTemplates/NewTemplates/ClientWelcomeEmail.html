@@ -5,13 +5,211 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="x-apple-disable-message-reformatting">
-  <meta name="color-scheme" content="light">
-  <meta name="supported-color-schemes" content="light">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
+  <!-- Tells clients this email ships BOTH themes, so they apply our palettes instead of auto-inverting -->
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
   <title>Welcome to Beige</title>
-  <style>
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+  <![endif]-->
+
+  <!-- =====================================================================
+       RESPONSIVE BLOCK
+       Kept in its OWN <style> tag on purpose: Gmail discards an entire <style> block
+       if it dislikes any selector in it (e.g. the Outlook [data-ogsb] hooks below).
+       Isolating the media queries means the responsive rules survive even if the
+       theme block gets dropped.
+       ===================================================================== -->
+  <style type="text/css">
+    @media only screen and (max-width: 620px) {
+
+      /* ---- outer frame ---- */
+      .wrap-outer {
+        padding: 12px 8px !important;
+      }
+
+      .main-card {
+        width: 100% !important;
+      }
+
+      /* ---- hero ---- */
+      .hero {
+        padding-bottom: 56px !important;
+      }
+
+      .sec-logo {
+        padding: 20px 0 0 !important;
+      }
+
+      .logo-img {
+        width: 130px !important;
+        max-width: 130px !important;
+      }
+
+      .sec-logo-sep {
+        padding: 0 16px !important;
+      }
+
+      .sec-header {
+        padding: 18px 0 0 !important;
+      }
+
+      .gm-plate-pad {
+        padding: 6px 8px !important;
+      }
+
+      .hello {
+        margin-bottom: 4px !important;
+        font-size: 12px !important;
+        line-height: 18px !important;
+      }
+
+      .h1 {
+        font-size: 26px !important;
+        line-height: 32px !important;
+      }
+
+      .tagline {
+        margin-top: 4px !important;
+        font-size: 12px !important;
+        line-height: 18px !important;
+      }
+
+      .sec-desc {
+        padding: 14px 28px 0 !important;
+      }
+
+      .desc-pad {
+        padding: 12px 14px !important;
+      }
+
+      .desc-text {
+        font-size: 12px !important;
+        line-height: 18px !important;
+      }
+
+      /* ---- what sets beige apart ---- */
+      .apart-pad {
+        padding: 20px 12px 18px !important;
+      }
+
+      .apart-title {
+        margin-bottom: 8px !important;
+        font-size: 14px !important;
+        line-height: 20px !important;
+      }
+
+      .list-text {
+        font-size: 12px !important;
+        line-height: 20px !important;
+      }
+
+      /* ---- workspace / CTA ---- */
+      .sec-access {
+        padding: 18px 20px 18px !important;
+      }
+
+      .access-title {
+        font-size: 14px !important;
+        line-height: 20px !important;
+      }
+
+      .access-text {
+        margin: 4px 0 14px !important;
+        font-size: 12px !important;
+        line-height: 18px !important;
+      }
+
+      .cta-btn {
+        padding: 9px 20px !important;
+        font-size: 13px !important;
+        line-height: 20px !important;
+      }
+
+      .note-pad {
+        padding: 14px 24px 16px !important;
+      }
+
+      .note-text {
+        font-size: 10px !important;
+        line-height: 14px !important;
+      }
+
+      /* ---- help + footer ---- */
+      .sec-footer {
+        padding: 22px 16px 20px !important;
+      }
+
+      .help-title {
+        font-size: 12px !important;
+        line-height: 18px !important;
+      }
+
+      .help-link {
+        font-size: 16px !important;
+        line-height: 22px !important;
+        word-break: break-all !important;
+      }
+
+      .footer-logo {
+        padding: 14px 0 !important;
+      }
+
+      .footer-sep {
+        padding: 0 0 14px !important;
+      }
+
+      .footer-links {
+        font-size: 12px !important;
+        line-height: 18px !important;
+      }
+
+      .brand-name {
+        margin-top: 8px !important;
+        font-size: 16px !important;
+        line-height: 22px !important;
+      }
+    }
+
+    /* small phones (≤ 360px) */
+    @media only screen and (max-width: 360px) {
+      .h1 {
+        font-size: 22px !important;
+        line-height: 28px !important;
+      }
+
+      .sec-desc {
+        padding: 12px 16px 0 !important;
+      }
+
+      .cta-btn {
+        padding: 9px 16px !important;
+        font-size: 12px !important;
+      }
+
+      .footer-links {
+        font-size: 11px !important;
+      }
+    }
+  </style>
+
+  <!-- =====================================================================
+       GMAIL APP FIX (Android + iOS)
+       Gmail ignores prefers-color-scheme and force-inverts colours: it turns the
+       black hero text white but cannot recolour the light WelcomeBG.png image behind
+       it. The heading therefore sits on a backing plate whose fill is set INLINE
+       (Gmail iOS only inverts inline colours), so both Gmail apps darken the plate
+       together with the text. Clients that honour our dark palette (Apple Mail,
+       Samsung, Outlook) make the plate transparent in the THEME block below.
+       ===================================================================== -->
+
+  <!-- THEME / RESET BLOCK -->
+  <style type="text/css">
     :root {
-      color-scheme: light;
-      supported-color-schemes: light;
+      color-scheme: light dark;
+      supported-color-schemes: light dark;
     }
 
     html,
@@ -20,10 +218,8 @@
       padding: 0 !important;
       height: 100% !important;
       width: 100% !important;
-      background-color: #F7F7F7 !important;
     }
 
-    /* System Font Stack Balance */
     body,
     table,
     td,
@@ -54,248 +250,370 @@
       text-decoration: none;
     }
 
-    @media only screen and (max-width: 600px) {
-      .full-width {
-        width: 100% !important;
-        height: auto !important;
-      }
+    /* =====================================================================
+       THEMES
+       LIGHT = the inline styles in the markup.
+       DARK  = the palette below:
+         1. @media (prefers-color-scheme: dark) -> Apple Mail, iOS Mail, Outlook.com /
+            new Outlook, Samsung Mail, Thunderbird, Yahoo, most webmail
+         2. [data-ogsb] / [data-ogsc]           -> Outlook apps
+         Gmail iOS/Android ignore both and auto-invert solid colours; the CTA base is
+         #000010, not #000000 (Gmail iOS inverts pure black to white).
 
-      .container-padding {
-        padding: 24px 16px !important;
-      }
-    }
+       DARK PALETTE
+         page                #121212
+         card / footer       #1A1410 + warm overlay to #2B2517
+         hero                #1A1410 (wavy image swapped for solid)
+         white sections      #201D18
+         description card    #26241F
+         logo pills          #26241F
+         headings            #F5F1E8
+         body / list text    #D8D2C4
+         muted / small print #B5AEA0
+         CTA button          unchanged (#E8D1AB on #000010)
+       ===================================================================== */
 
-    /* Force Light Theme Controls for Dark Mode Email Clients */
+    /* 1 ---- standards-based dark mode ---- */
     @media (prefers-color-scheme: dark) {
 
+      html,
       body,
-      .body-bg-table {
-        background-color: #F7F7F7 !important;
+      .body-bg {
+        background-color: #121212 !important;
+        color: #D8D2C4 !important;
       }
 
       .main-card {
-        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+        background-color: #1A1410 !important;
+        border-color: #3A3527 !important;
       }
 
-      .white-bg-badge {
-        background-color: #FFFFFF !important;
+      .card-overlay {
+        background-image: linear-gradient(143deg, rgba(43, 37, 23, 0) 22.58%, rgba(43, 37, 23, 1) 188.59%) !important;
       }
 
-      .description-card {
-        background-color: #FFFFFF !important;
+      .hero {
+        background-image: none !important;
+        background-color: #1A1410 !important;
       }
 
-      h1,
-      h2,
-      h3,
-      p,
-      span,
-      td,
-      a {
-        color: #000000 !important;
+      .gm-plate,
+      .gm-plate-pad {
+        background-color: transparent !important;
+      }
+
+      .white-section {
+        background-color: #201D18 !important;
+      }
+
+      .description-card,
+      .desc-pad,
+      .logo-pill {
+        background-color: #26241F !important;
+      }
+
+      .dash-border {
+        border-top-color: #5A5444 !important;
+      }
+
+      .text-black {
+        color: #F5F1E8 !important;
+      }
+
+      .text-default {
+        color: #D8D2C4 !important;
       }
 
       .text-muted {
-        color: #00000099 !important;
+        color: #B5AEA0 !important;
       }
 
-      .text-footer-muted {
-        color: #3C3B3B !important;
+      .force-black-bg {
+        background-color: #000010 !important;
       }
 
-      .cta-btn {
-        background-color: #000000 !important;
+      .force-accent-text {
         color: #E8D1AB !important;
       }
+    }
+
+    /* 2 ---- Outlook (desktop + mobile + Outlook.com) ---- */
+    [data-ogsb] body,
+    [data-ogsb] .body-bg {
+      background-color: #121212 !important;
+    }
+
+    [data-ogsc] body,
+    [data-ogsc] .body-bg {
+      color: #D8D2C4 !important;
+    }
+
+    [data-ogsb] .main-card {
+      background-color: #1A1410 !important;
+    }
+
+    [data-ogsb] .card-overlay {
+      background-image: linear-gradient(143deg, rgba(43, 37, 23, 0) 22.58%, rgba(43, 37, 23, 1) 188.59%) !important;
+    }
+
+    [data-ogsb] .hero {
+      background-image: none !important;
+      background-color: #1A1410 !important;
+    }
+
+    [data-ogsb] .gm-plate,
+    [data-ogsb] .gm-plate-pad {
+      background-color: transparent !important;
+    }
+
+    [data-ogsb] .white-section {
+      background-color: #201D18 !important;
+    }
+
+    [data-ogsb] .description-card,
+    [data-ogsb] .desc-pad {
+      background-color: #26241F !important;
+    }
+
+    [data-ogsb] .dash-border {
+      border-top-color: #5A5444 !important;
+    }
+
+    [data-ogsc] .text-black {
+      color: #F5F1E8 !important;
+    }
+
+    [data-ogsc] .text-default {
+      color: #D8D2C4 !important;
+    }
+
+    [data-ogsc] .text-muted {
+      color: #B5AEA0 !important;
+    }
+
+    [data-ogsb] .force-black-bg {
+      background-color: #000010 !important;
+    }
+
+    [data-ogsc] .force-accent-text {
+      color: #E8D1AB !important;
     }
   </style>
 </head>
 
-<body style="margin: 0; padding: 0; background-color: #F7F7F7;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" class="body-bg-table"
+<body class="body-bg body" style="margin: 0; padding: 0; background-color: #F7F7F7;">
+  <table class="body-bg" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F7F7F7"
     style="background-color: #F7F7F7; table-layout: fixed;">
     <tr>
-      <td align="center" style="padding: 40px 10px;">
-        <table width="600" cellpadding="0" cellspacing="0" border="0" class="full-width main-card"
-          style="margin: 0 auto; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
-          <!-- Header and Hero Background Container -->
+      <td class="wrap-outer" align="center" style="padding: 40px 10px;">
+
+        <!-- Outlook (Windows) ignores max-width; this ghost table caps it at 600px -->
+        <!--[if mso]>
+        <table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td>
+        <![endif]-->
+
+        <!-- LAYER 1: solid card colour -->
+        <table class="main-card" role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+          bgcolor="#FFFCF6"
+          style="width: 100%; max-width: 600px; margin: 0 auto; background-color: #FFFCF6; border: 1px solid #F1E6D2; border-collapse: separate;">
           <tr>
-            <td background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/WavyBg.png"
-              bgcolor="#FFFCF6" width="600" height="774" valign="top"
-              style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/WavyBg.png'); background-repeat: no-repeat; background-position: center; background-size: cover; padding: 0;">
-              <div>
-                <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-                  <!-- Beige Logo -->
-                  <tr>
-                    <td align="center" style="padding: 40px 0 36px;">
-                      <div class="white-bg-badge"
-                        style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
-                        <img
-                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                          alt="Beige" width="110" style="display: block; border: 0;">
-                      </div>
-                      <div style="padding: 36px 40px 0;">
-                        <img
-                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                          alt="Line Separator" width="100%" style="display: block; border: 0;">
-                      </div>
-                    </td>
-                  </tr>
-                  <!-- Header -->
-                  <tr>
-                    <td style="padding: 0 40px; text-align: center;">
-                      <p style="margin: 0 0 16px; font-size: 30px; color: #000000; line-height: 1.3;">
-                        Hello, {{first_name}}
-                      </p>
-                      <h1 style="margin: 0; color: #000000; font-size: 54px; font-weight: 500;">Welcome to Beige</h1>
-                      <p style="margin: 16px 0 0; font-size: 28px;font-weight:500; color: #000000; line-height: 1.3;">
-                        The modern content engine
-                      </p>
-                    </td>
-                  </tr>
-                  <!-- Beige description -->
-                  <tr>
-                    <td class="container-padding" style="padding: 42px 40px; text-align: center;">
-                      <p class="description-card"
-                        style="margin: 0 0 16px; font-size: 18px; color: #00000099; line-height: 1.4; border-radius: 36px;background-color: #FFF;box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.20); padding: 38px 25px;">
-                        Beige is a unified platform for booking professional videography, photography, locations, and
-                        post-production, designed to remove friction from the content creation process.
-                      </p>
-                    </td>
-                  </tr>
-                </table>
-              </div>
-            </td>
-          </tr>
+            <!-- LAYER 2: the gradient, as a transparent->peach overlay -->
+            <td class="card-overlay"
+              style="padding: 0; background-image: linear-gradient(143deg, rgba(239,199,137,0) 22.58%, rgba(239,199,137,0.43) 188.59%);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
 
-          <!-- What Sets Beige Apart -->
-          <tr>
-            <td class="container-padding"
-              style="padding:0; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%);">
-              <div style="padding: 40px;">
-                <h3 style="margin: 0 0 20px; color: #434546; font-size: 35px; font-weight: 700;">
-                  What Sets Beige Apart:
-                </h3>
-                <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                  <tr>
-                    <td valign="top" style="padding-bottom: 15px;"><span
-                        style="color: #00000099;font-size: 25px; font-weight: bold;">&#10003;</span></td>
-                    <td
-                      style="padding-bottom: 15px; padding-left: 12px; color: #00000099; font-size: 25px; line-height: 1.4;">
-                      Curated, vetted creators across the US.</td>
-                  </tr>
-                  <tr>
-                    <td valign="top" style="padding-bottom: 15px;"><span
-                        style="color: #00000099; font-size: 25px; font-weight: bold;">&#10003;</span></td>
-                    <td
-                      style="padding-bottom: 15px; padding-left: 12px; color: #00000099; font-size: 25px; line-height: 1.4;">
-                      Transparent pricing and availability at the point of booking.</td>
-                  </tr>
-                  <tr>
-                    <td valign="top" style="padding-bottom: 15px;"><span
-                        style="color: #00000099; font-size: 25px; font-weight: bold;">&#10003;</span></td>
-                    <td
-                      style="padding-bottom: 15px; padding-left: 12px; color: #00000099; font-size: 25px; line-height: 1.4;">
-                      End-to-end production, from shoot to final delivery.</td>
-                  </tr>
-                  <tr>
-                    <td valign="top" style="padding-bottom: 15px;"><span
-                        style="color: #00000099; font-size: 25px; font-weight: bold;">&#10003;</span></td>
-                    <td
-                      style="padding-bottom: 15px; padding-left: 12px; color: #00000099; font-size: 25px; line-height: 1.4;">
-                      A streamlined experience built for speed, quality, and consistency.</td>
-                  </tr>
-                  <tr>
-                    <td valign="top" style="padding-bottom: 15px;"><span
-                        style="color: #00000099; font-size: 25px; font-weight: bold;">&#10003;</span></td>
-                    <td
-                      style="padding-bottom: 15px; padding-left: 12px; color: #00000099; font-size: 25px; line-height: 1.4;">
-                      Intelligent automation embedded throughout the platform to optimize matching, workflows, and
-                      delivery</td>
-                  </tr>
-                </table>
-              </div>
-              <div style="padding-bottom: 48px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-              <div style="padding: 0 10px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLaptopMockup.png"
-                  alt="Beige" width="100%" style="display: block; border: 0;" class="full-width" />
-              </div>
-            </td>
-          </tr>
+                <!-- ============ HERO (wavy background, bottom-anchored) ============ -->
+                <tr>
+                  <td class="hero"
+                    background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/WelcomeBG.png"
+                    bgcolor="#FFFCF6" valign="top"
+                    style="background-color: #FFFCF6; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/WelcomeBG.png'); background-repeat: no-repeat; background-position: center bottom; background-size: 100% auto; padding: 0 0 88px;">
+                    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                      <!-- Logo + separator -->
+                      <tr>
+                        <td class="sec-logo" align="center" style="padding: 32px 0 0;">
+                          <img class="logo-img"
+                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackBeigeIcon.svg"
+                            alt="Beige" width="200"
+                            style="display: block; width: 200px; max-width: 200px; margin: 0 auto;">
+                          <div class="sec-logo-sep" style="padding: 0 24px;">
+                            <img
+                              src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                              alt="" width="100%" style="display: block; width: 100%; max-width: 100%;">
+                          </div>
+                        </td>
+                      </tr>
 
+                      <!-- Greeting + title (on the Gmail backing plate) -->
+                      <tr>
+                        <td class="sec-header" align="center" style="padding: 24px 40px 0; text-align: center;">
+                          <table class="gm-plate" role="presentation" cellpadding="0" cellspacing="0" border="0"
+                            align="center" bgcolor="#FCF1DF"
+                            style="background-color: #FCF1DF; border-radius: 16px; border-collapse: separate;">
+                            <tr>
+                              <td class="gm-plate-pad" align="center" bgcolor="#FCF1DF"
+                                style="padding: 8px 16px; background-color: #FCF1DF; border-radius: 16px; text-align: center;">
+                                <p class="text-black hello"
+                                  style="margin: 0 0 6px; font-size: 16px; color: #000000; line-height: 26px;">
+                                  Hi, {{first_name}}
+                                </p>
+                                <h1 class="text-black h1"
+                                  style="margin: 0; color: #000000; font-size: 40px; font-weight: 700; line-height: 48px; letter-spacing: -0.5px;">
+                                  Welcome to Beige</h1>
+                                <p class="text-default tagline"
+                                  style="margin: 6px 0 0; font-size: 16px; font-weight: 400; color: #333231; line-height: 26px;">
+                                  The modern content engine
+                                </p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
 
-          <!-- Beige Access -->
-          <tr>
-            <td style="padding: 40px 40px;">
-              <!-- <h3
-                style="margin: 0 0 20px; font-size: 35px; font-style: normal; font-weight: 700; line-height: 42px; color: #000000; max-width: 350px;">
-                Your creative workspace is ready.</h3> -->
-              <div class="container-padding" style="margin-top: 30px; background-color: transparent;">
-                <p class="text-muted"
-                  style="margin: 0 0 40px; font-size: 20px; font-style: normal; font-weight: 400; line-height: 35px; color: #000000CC;">
-                  Whether you are producing content for a brand, event, or personal project, Beige simplifies execution
-                  so you can focus on the outcome.
-                </p>
-                <!-- <h3
-                style="margin: 20px 0 40px; font-size: 28px; font-style: italic; font-weight: 600; line-height: 36px; color: #000000; max-width: 350px;">
-                Book your shoot in minutes.<br /> Shift your vision to reality.</h3> -->
+                      <!-- Description card -->
+                      <tr>
+                        <td class="sec-desc" align="center" style="padding: 20px 56px 0; text-align: center;">
+                          <table class="description-card" role="presentation" width="100%" cellpadding="0"
+                            cellspacing="0" border="0" bgcolor="#FFFFFF"
+                            style="background-color: #FFFFFF; border-radius: 12px; box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.16); border-collapse: separate;">
+                            <tr>
+                              <td class="desc-pad" bgcolor="#FFFFFF"
+                                style="padding: 20px 28px; background-color: #FFFFFF; border-radius: 12px; text-align: center;">
+                                <p class="text-muted desc-text"
+                                  style="margin: 0; font-size: 16px; color: #666562; line-height: 24px;">
+                                  Beige is a unified platform for booking professional videography, photography,
+                                  locations, and post-production, designed to remove friction from the content
+                                  creation process.
+                                </p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
 
-                <a href="{{frontendUrl}}" class="cta-btn"
-                  style="background-color: #000000; color: #E8D1AB; padding: 18px 48px; border-radius: 100px; text-decoration: none; font-size: 18px; font-weight: 500; line-height: 31.421px; display: inline-block;">
-                  BOOK YOUR SHOOT IN MINUTES. SHIFT YOUR VISION TO REALITY. &rarr;
-                </a>
+                <!-- ============ WHITE SECTION ============ -->
+                <tr>
+                  <td class="white-section" bgcolor="#FFFFFF" style="padding: 0; background-color: #FFFFFF;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
 
-              </div>
-            </td>
-          </tr>
+                      <!-- What Sets Beige Apart (centred list) -->
+                      <tr>
+                        <td class="apart-pad" align="center" style="padding: 32px 24px 28px; text-align: center;">
+                          <p class="text-black apart-title"
+                            style="margin: 0 0 12px; color: #000000; font-size: 20px; font-style: italic; font-weight: 700; line-height: 30px; text-decoration: underline;">
+                            What Sets Beige Apart:
+                          </p>
+                          <p class="text-default list-text"
+                            style="margin: 0; color: #333231; font-size: 16px; line-height: 30px;">
+                            &#10003; Curated, vetted creators across the US.<br>
+                            &#10003; Transparent pricing and availability at the point of booking.<br>
+                            &#10003; End-to-end production, from shoot to final delivery.<br>
+                            &#10003; A streamlined experience built for speed, quality and consistency.
+                          </p>
+                        </td>
+                      </tr>
 
-          <!-- Help message  -->
-          <tr>
-            <td class="container-padding" align="center" style="padding: 20px 40px 0;">
-              <div style="padding-bottom: 48px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-              <p class="text-footer-muted"
-                style="margin: 0 0 20px; font-size: 16px; font-style: normal;font-weight: 400;line-height: normal; color: #3C3B3B;">
-                This is an automated email from BeigeAI. Please do not reply to this email.
-              </p>
-              <p style="margin: 0 0 10px; color: #000000; font-size: 26px;font-weight: 600;">Need Help?</p>
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0; color: #000000; font-size: 26px;font-weight: 600;">
-                sales@beigecorporation.io
-              </a>
-            </td>
-          </tr>
+                      <!-- Laptop mockup (edge to edge) -->
+                      <tr>
+                        <td style="padding: 0; line-height: 0; font-size: 0;">
+                          <img
+                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLaptopMockup.png"
+                            alt="Beige platform on a laptop" width="600"
+                            style="display: block; border: 0; width: 100%; max-width: 100%; height: auto;">
+                        </td>
+                      </tr>
 
-          <!-- Footer -->
-          <tr>
-            <td class="container-padding" align="center" style="padding: 20px 40px 60px;">
-              <div style="padding-bottom: 48px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-              <p class="text-footer-muted" style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
-                Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
-              </p>
-              <p style="margin: 0 0 60px; color: #000000; font-size: 26px;font-weight: 600;">
-                Beige AI
-              </p>
-              <div class="white-bg-badge"
-                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
-                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                  alt="Beige" width="110" style="display: block; border: 0;">
-              </div>
+                      <!-- Workspace + CTA -->
+                      <tr>
+                        <td class="sec-access" align="center" style="padding: 28px 48px; text-align: center;">
+                          <p class="text-black access-title"
+                            style="margin: 0; color: #000000; font-size: 20px; font-weight: 700; line-height: 28px;">
+                            Your creative workspace is ready.
+                          </p>
+                          <p class="text-default access-text"
+                            style="margin: 6px 0 22px; font-size: 16px; line-height: 24px; color: #555555;">
+                            Whether you are producing content for a brand, event, or personal project, Beige
+                            simplifies execution so you can focus on the outcome.
+                          </p>
+                          <table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center">
+                            <tr>
+                              <td class="force-black-bg" align="center" bgcolor="#000010"
+                                style="background-color: #000010; border-radius: 100px;">
+                                <a href="{{frontendUrl}}" target="_blank" class="force-accent-text cta-btn"
+                                  style="display: inline-block; padding: 14px 36px; font-size: 18px; font-weight: 600; line-height: 26px; color: #E8D1AB; text-decoration: none; white-space: nowrap;">
+                                  Book Your Shoot in Minutes &rarr;
+                                </a>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+
+                      <!-- Dashed rule + note -->
+                      <tr>
+                        <td style="padding: 0; line-height: 0; font-size: 0;">
+                          <img
+                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/DottedSeparator.png"
+                            alt="Beige platform on a laptop" width="600"
+                            style="display: block; border: 0; width: 100%; max-width: 100%; height: auto;">
+                        </td>
+                      </tr>
+                      <tr>
+                        <td class="dash-border note-pad" align="center"
+                          style="padding: 27px 48px; text-align: center;">
+                          <p class="text-muted note-text"
+                            style="margin: 0; font-size: 14px; font-style: italic; line-height: 19px; color: #777777;">
+                            If you need assistance selecting the right setup, simply reply<br>
+                            to this email and our team will support you.
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- ============ FOOTER ============ -->
+                <tr>
+                  <td class="sec-footer" align="center" style="padding: 32px 40px 28px; text-align: center;">
+                    <p class="text-default help-title"
+                      style="margin: 0; color: #333231; font-size: 16px; line-height: 24px;">Need help?</p>
+                    <a href="mailto:sales@beigecorporation.io" target="_blank" class="text-black help-link"
+                      style="display: inline-block; margin: 2px 0 0; color: #000000; font-size: 20px; font-weight: 600; line-height: 28px; text-decoration: underline;">sales@beigecorporation.io</a>
+
+                    <div class="footer-logo" style="padding: 20px 0;">
+                      <img class="logo-img"
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackBeigeIcon.svg"
+                        alt="Beige" width="200" style="display: block; width: 200px; max-width: 200px; margin: 0 auto;">
+                    </div>
+
+                    <div class="footer-sep" style="padding: 0 0 20px;">
+                      <img
+                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                        alt="" width="100%" style="display: block; border: 0; width: 100%; max-width: 100%;">
+                    </div>
+
+                    <p class="text-default footer-links"
+                      style="margin: 0; font-size: 15px; line-height: 22px; color: #333231;">
+                      Help Center &nbsp;&bull;&nbsp; Term of Services &nbsp;&bull;&nbsp; Privacy Policy
+                    </p>
+                    <p class="text-black brand-name"
+                      style="margin: 10px 0 0; color: #000000; font-size: 20px; font-weight: 600; line-height: 28px;">
+                      Beige AI
+                    </p>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
         </table>
+
+        <!--[if mso]>
+        </td></tr></table>
+        <![endif]-->
+
       </td>
     </tr>
   </table>
