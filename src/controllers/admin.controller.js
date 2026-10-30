@@ -5353,11 +5353,11 @@ const buildGlobalShootStatusFilter = (rawStatus) => {
   const curdate = Sequelize.fn('CURDATE');
   const notCancelled = {[Op.or]: [{is_cancelled: 0},{is_cancelled: {[Op.is]: null}}]};
   const notCompleted = {[Op.or]: [{is_completed: 0,},{is_completed: {[Op.is]: null}}]};
-  const normalStatus = {[Op.or]: [{status: {[Op.notIn]: [4, 5]}},{status: {[Op.is]: null}}]};
+  const normalStatus = {[Op.or]: [{status: {[Op.notIn]: [4, 5, 7]}},{status: {[Op.is]: null}}]};
 
   switch (status) {
     case 'cancelled':
-      return {[Op.or]: [{is_cancelled: 1},{status: 5}]};
+      return {[Op.or]: [{is_cancelled: 1},{status: 7}]};
 
     case 'completed':
       return {
@@ -5427,7 +5427,7 @@ exports.getGlobalShoots = async (req, res) => {
 
     const paidFilter = req.myProducerScope ? {} : await getPaidCalendarFilter(req);
 
-    let whereConditions = { ...paidFilter, is_active: 1};
+    let whereConditions = { ...paidFilter };
     if (req.myProducerScope) {
       const userId = Number(req.user?.userId);
       if (!Number.isInteger(userId) || userId <= 0) {
@@ -5454,6 +5454,14 @@ exports.getGlobalShoots = async (req, res) => {
         ],
       };
     };
+
+    appendAndCondition({
+      [Op.or]: [
+        { is_active: 1 },
+        { is_cancelled: 1 },
+        { status: 7 },
+      ],
+    });
 
     andConditions.forEach(
       appendAndCondition
