@@ -294,6 +294,11 @@ router.post('/dashboard-detail', authMiddleware, dashboardView, admin.getDashboa
 router.post('/verify-crew-member', authMiddleware, adminCreativePartnersEdit, admin.verifyCrewMember);
 router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
 router.get('/post-production-team-options', authMiddleware, shootsView, admin.getPostProductionTeamOptions);
+// Shoot editor assignment flow: options, assignment table, and lifecycle actions.
+router.get('/shoots/:bookingId/editor-options', authMiddleware, shootsView, admin.getShootEditorOptions);
+router.post('/shoots/:bookingId/assign-editor', authMiddleware, shootsEdit, admin.assignShootEditor);
+router.get('/shoots/:bookingId/editors', authMiddleware, shootsView, admin.getShootEditors);
+router.post('/shoots/:bookingId/remove-editor', authMiddleware, shootsEdit, admin.removeShootEditor);
 router.put('/shoots/:project_id/producer', authMiddleware, shootsEdit, admin.setShootProducer);
 router.get('/my-producer-shoots', authMiddleware, projectListView, admin.getMyProducerShoots);
 router.get('/get-post-production-members', admin.getPostProductionMembers);

@@ -3,7 +3,14 @@ const db = require('../models');
 const emailService = require('../utils/emailService');
 const externalFileManager = require('./external-file-manager.controller');
 
-const { stream_project_booking, users, crew_members, assigned_crew } = db;
+const {
+  stream_project_booking,
+  users,
+  crew_members,
+  assigned_crew,
+  assigned_post_production_member,
+  post_production_members,
+} = db;
 
 const getPlain = (value) => (typeof value?.get === 'function' ? value.get({ plain: true }) : value);
 const normalizeId = (value) => String(value || '').trim();
@@ -51,7 +58,20 @@ const bookingInclude = [
       model: crew_members,
       as: 'crew_member',
       required: false,
-      attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'primary_role'],
+      attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'primary_role', 'is_beige_member'],
+    }],
+  },
+  {
+    model: assigned_post_production_member,
+    as: 'assigned_post_production_members',
+    required: false,
+    where: { is_active: 1 },
+    attributes: ['id', 'post_production_member_id', 'assigned_date'],
+    include: [{
+      model: post_production_members,
+      as: 'post_production_member',
+      required: false,
+      attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'],
     }],
   },
 ];
@@ -67,16 +87,16 @@ const getBooking = async (bookingId) => {
   return getPlain(booking);
 };
 
-const getEditorType = (workflowEditorType, crew) => {
+const getEditorType = (workflowEditorType, crew, fallback = null) => {
   const normalizedWorkflowEditorType = String(workflowEditorType || '').trim().toLowerCase();
   if (['internal', 'external'].includes(normalizedWorkflowEditorType)) return normalizedWorkflowEditorType;
-  if (!crew) return null;
+  if (!crew) return fallback;
   return Number(crew.is_beige_member) === 1 ? 'internal' : 'external';
 };
 
 const getEditors = (booking, workflowEditorType, requestUserId) => {
   const editors = (booking?.assigned_crews || [])
-    .filter((item) => isEditorCrewMember(item?.crew_member))
+    .filter((item) => Number(item?.crew_accept) === 1 && isEditorCrewMember(item?.crew_member))
     .map((assignment) => {
       const crew = assignment.crew_member;
       return {
@@ -86,6 +106,17 @@ const getEditors = (booking, workflowEditorType, requestUserId) => {
         editorType: getEditorType(workflowEditorType, crew),
       };
     });
+
+  (booking?.assigned_post_production_members || []).forEach((assignment) => {
+    const member = assignment.post_production_member;
+    if (!member) return;
+    editors.push({
+      id: member.post_production_member_id || assignment.post_production_member_id || null,
+      name: fullName(member) || member.email || null,
+      email: member.email || null,
+      editorType: getEditorType(workflowEditorType, null, 'internal'),
+    });
+  });
 
   if (!requestUserId) return editors;
   return editors.sort((left, right) => {
@@ -129,10 +160,16 @@ const getBookingEnrichment = (booking, workflow = {}, requestUserId = null) => {
   };
 };
 
-const getCurrentCrewMember = async (req) => {
+const getRequestUser = async (req) => {
   const userId = getRequestUserId(req);
   if (!userId) return null;
-  const user = await users.findByPk(userId, { attributes: ['id', 'email'] });
+  return users.findByPk(userId, { attributes: ['id', 'email'] });
+};
+
+const getCurrentCrewMember = async (req, requestUser = null) => {
+  const userId = getRequestUserId(req);
+  if (!userId) return null;
+  const user = requestUser || await getRequestUser(req);
   return crew_members.findOne({
     where: {
       [Op.or]: [
@@ -145,14 +182,52 @@ const getCurrentCrewMember = async (req) => {
   });
 };
 
-const getActiveAssignedBookingIds = async (crewMemberId) => {
-  if (!crewMemberId) return [];
-  const assignments = await assigned_crew.findAll({
-    where: { crew_member_id: crewMemberId, is_active: 1 },
-    attributes: ['project_id'],
-    raw: true,
-  });
-  return [...new Set(assignments.map((assignment) => Number(assignment.project_id)).filter(Boolean))];
+// Resolves the only two editor assignment sources used by File Manager. Keeping
+// this in one place prevents list, overview, and action routes from drifting on
+// pending-agreement and internal-team access rules.
+const getVisibleEditorAccess = async (req, bookingId = null) => {
+  const requestUser = getPlain(await getRequestUser(req));
+  const crew = getPlain(await getCurrentCrewMember(req, requestUser));
+  const email = String(requestUser?.email || '').trim();
+  const externalWhere = {
+    is_active: 1,
+    crew_accept: 1,
+    ...(crew?.crew_member_id ? { crew_member_id: crew.crew_member_id } : { crew_member_id: null }),
+    ...(bookingId ? { project_id: Number(bookingId) } : {}),
+  };
+  const internalWhere = {
+    is_active: 1,
+    ...(bookingId ? { project_id: Number(bookingId) } : {}),
+  };
+
+  const [externalAssignments, internalAssignments] = await Promise.all([
+    crew?.crew_member_id && isEditorCrewMember(crew)
+      ? assigned_crew.findAll({ where: externalWhere, attributes: ['id', 'project_id', 'crew_member_id'] })
+      : [],
+    email
+      ? assigned_post_production_member.findAll({
+        where: internalWhere,
+        attributes: ['id', 'project_id', 'post_production_member_id'],
+        include: [{
+          model: post_production_members,
+          as: 'post_production_member',
+          required: true,
+          where: { email: { [Op.like]: email } },
+          attributes: ['post_production_member_id', 'email'],
+        }],
+      })
+      : [],
+  ]);
+
+  const externalBookingIds = new Set(externalAssignments.map((row) => Number(row.project_id)));
+  const internalBookingIds = new Set(internalAssignments.map((row) => Number(row.project_id)));
+  return {
+    externalBookingIds,
+    internalBookingIds,
+    visibleBookingIds: new Set([...externalBookingIds, ...internalBookingIds]),
+    hasExternalEditorAccess: bookingId ? externalBookingIds.has(Number(bookingId)) : false,
+    hasInternalEditorAccess: bookingId ? internalBookingIds.has(Number(bookingId)) : false,
+  };
 };
 
 const ensureBookingAccess = async (req, booking) => {
@@ -160,25 +235,18 @@ const ensureBookingAccess = async (req, booking) => {
   if (externalFileManager.isAdminRole(req)) return;
   if (String(booking.user_id || '') === String(getRequestUserId(req) || '')) return;
 
-  const crew = getPlain(await getCurrentCrewMember(req));
-  if (!crew) throw workflowError('You do not have access to this workflow', 403);
-  const assignedBookingIds = await getActiveAssignedBookingIds(crew.crew_member_id);
-  if (!assignedBookingIds.includes(Number(booking.stream_project_booking_id))) {
+  const access = await getVisibleEditorAccess(req, booking.stream_project_booking_id);
+  if (!access.visibleBookingIds.has(Number(booking.stream_project_booking_id))) {
     throw workflowError('You do not have access to this workflow', 403);
   }
 };
 
 const ensureEditorAccess = async (req, booking) => {
   await ensureBookingAccess(req, booking);
-  const crew = getPlain(await getCurrentCrewMember(req));
-  if (!crew || !isEditorCrewMember(crew)) {
+  const access = await getVisibleEditorAccess(req, booking.stream_project_booking_id);
+  if (!access.hasExternalEditorAccess && !access.hasInternalEditorAccess) {
     throw workflowError('Only the assigned editor can perform this workflow action', 403);
   }
-  const assignment = await assigned_crew.findOne({
-    where: { project_id: booking.stream_project_booking_id, crew_member_id: crew.crew_member_id, is_active: 1 },
-    attributes: ['id'],
-  });
-  if (!assignment) throw workflowError('Only the assigned editor can perform this workflow action', 403);
 };
 
 const ensureProducerOrAdmin = async (req, booking) => {
@@ -290,13 +358,8 @@ exports.listWorkflows = async (req, res) => {
     const userId = getRequestUserId(req);
     const where = { is_active: 1 };
     if (!externalFileManager.isAdminRole(req)) {
-      const crew = getPlain(await getCurrentCrewMember(req));
-      if (crew) {
-        const assignedBookingIds = await getActiveAssignedBookingIds(crew.crew_member_id);
-        where[Op.or] = [{ user_id: userId }, { stream_project_booking_id: assignedBookingIds }];
-      } else {
-        where.user_id = userId;
-      }
+      const access = await getVisibleEditorAccess(req);
+      where[Op.or] = [{ user_id: userId }, { stream_project_booking_id: [...access.visibleBookingIds] }];
     }
     const bookings = (await stream_project_booking.findAll({ where, include: bookingInclude })).map(getPlain);
     const visibleOrderIds = bookings.map((booking) => String(booking.stream_project_booking_id));

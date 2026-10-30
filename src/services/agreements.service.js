@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const db = require('../models');
 const businessNotifications = require('./business-notification.service');
 const cpCompensation = require('./cp-compensation.service');
+const workflowEditorSync = require('./workflow-editor-sync.service');
 const { validateAgreementSignature } = require('../utils/agreement-signature');
 const { Op } = db.Sequelize;
 
@@ -568,6 +569,7 @@ async function respondToAgreement(id, creatorId, action, payload = {}, request =
     return document;
   });
   if (respondedDocument.agreement_type === SHOOT) {
+    await workflowEditorSync.syncEditor(respondedDocument.booking_id);
     const ownerId = await businessNotifications.bookingOwner(respondedDocument.booking_id)
       .catch((lookupError) => { console.error('[AgreementNotification] Owner lookup failed:', lookupError); return null; });
     await businessNotifications.notify({
@@ -617,6 +619,20 @@ async function cancelAgreement(id, actor) {
   });
 }
 
+async function cancelAssignmentAgreements(assignmentId, actor = {}, transaction) {
+  const documents = await db.agreement_documents.findAll({
+    where: { assignment_id: Number(assignmentId), is_current: 1, status: { [Op.ne]: 'cancelled' } },
+    transaction,
+    lock: transaction?.LOCK.UPDATE,
+  });
+  const now = new Date();
+  for (const document of documents) {
+    await document.update({ status: 'cancelled', is_current: 0, cancelled_at: now }, { transaction });
+    await event(document.agreement_document_id, 'agreement_cancelled', actor, { assignment_id: Number(assignmentId) }, transaction);
+  }
+  return documents.length;
+}
+
 async function listDocuments(filters = {}, creatorId = null) {
   const where = {};
   if (filters.type) where.agreement_type = filters.type;
@@ -643,4 +659,4 @@ async function getDocumentDetail(id, creatorId = null) {
 }
 
 module.exports = { createGeneralTemplate, listGeneralTemplates, templateById, updateGeneralTemplate, deleteGeneralTemplate, publishGeneralTemplate, getCurrentGeneralAgreement,
-  createShootAgreement, assignCompensateAndSend, updateShootDraft, sendShootAgreement, reviseShootAgreement, respondToAgreement, cancelAgreement, listDocuments, getDocumentDetail };
+  createShootAgreement, assignCompensateAndSend, updateShootDraft, sendShootAgreement, reviseShootAgreement, respondToAgreement, cancelAgreement, cancelAssignmentAgreements, listDocuments, getDocumentDetail };

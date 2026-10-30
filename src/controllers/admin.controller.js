@@ -56,6 +56,8 @@ const userExportService = require('../services/user-export.service');
 const detailsPendingCpService = require('../services/details-pending-cp.service');
 const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 const passwordExpiryService = require('../services/internal-password-expiry.service');
+const agreementsService = require('../services/agreements.service');
+const workflowEditorSync = require('../services/workflow-editor-sync.service');
 const { describeSignupConflicts } = require('../utils/signup-conflicts');
 const { ipType, deviceDetails, sessionDetails } = require('../utils/login-session-details');
 // const NodeGeocoder = require('node-geocoder');
@@ -65,6 +67,48 @@ const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beig
 
 const getFrontendBaseUrl = () =>
   String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+const EDITOR_USER_TYPE_ROLE_NAME = 'Editor';
+
+const isEditorRole = (value) => {
+  let roles = value;
+  if (typeof roles === 'string') {
+    try { roles = JSON.parse(roles); } catch (_) { roles = roles.split(','); }
+  }
+  return (Array.isArray(roles) ? roles : [roles])
+    .some((role) => ['3', 'editor'].includes(String(role || '').trim().toLowerCase()));
+};
+
+const editorName = (member) => [member?.first_name, member?.last_name].filter(Boolean).join(' ').trim() || member?.name || member?.email || null;
+
+const editorAssignmentCounts = async () => {
+  const [rows] = await db.sequelize.query(`
+    SELECT source, member_id, COUNT(*) AS active_shoots FROM (
+      SELECT 'external' AS source, ac.crew_member_id AS member_id
+      FROM assigned_crew ac
+      INNER JOIN stream_project_booking b ON b.stream_project_booking_id = ac.project_id
+      WHERE ac.is_active = 1 AND COALESCE(b.is_completed, 0) = 0 AND COALESCE(b.is_cancelled, 0) = 0
+      UNION ALL
+      SELECT 'internal' AS source, apm.post_production_member_id AS member_id
+      FROM assigned_post_production_member apm
+      INNER JOIN stream_project_booking b ON b.stream_project_booking_id = apm.project_id
+      WHERE apm.is_active = 1 AND COALESCE(b.is_completed, 0) = 0 AND COALESCE(b.is_cancelled, 0) = 0
+    ) assignments GROUP BY source, member_id
+  `);
+  return new Map(rows.map((row) => [`${row.source}:${row.member_id}`, Number(row.active_shoots)]));
+};
+
+const isPaidCompensation = async (earnings, transaction) => {
+  if (earnings.some((earning) => earning.status === 'paid')) return true;
+  const earningIds = earnings.map((earning) => earning.creator_earning_id);
+  if (!earningIds.length) return false;
+  const processedAdvance = await db.creator_earning_advances.findOne({ where: { creator_earning_id: { [Op.in]: earningIds }, status: 'processed' }, transaction });
+  if (processedAdvance) return true;
+  const payouts = await db.creator_payout_requests.findAll({ where: { status: 'paid' }, transaction });
+  return payouts.some((payout) => {
+    try { const metadata = JSON.parse(payout.metadata_json || '{}'); return metadata.source === 'cp_compensation' && earningIds.includes(Number(metadata.creator_earning_id)); } catch (_) { return false; }
+  });
+};
 
 const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
 const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
@@ -12348,6 +12392,147 @@ exports.getMyProducerShoots = (req, res) => {
   return exports.getGlobalShoots(req, res);
 };
 
+exports.getShootEditorOptions = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const type = String(req.query.type || 'all').toLowerCase();
+    const search = String(req.query.search || '').trim();
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    if (!Number.isInteger(bookingId) || bookingId <= 0 || !['all', 'internal', 'external'].includes(type)) return res.status(400).json({ success: false, message: 'Valid bookingId and type are required' });
+    const booking = await stream_project_booking.findOne({ where: { stream_project_booking_id: bookingId, is_active: 1 }, attributes: ['stream_project_booking_id', 'event_date'] });
+    if (!booking) return res.status(404).json({ success: false, message: 'Shoot not found' });
+    const [editorType, assignedInternal, assignedExternal, postMembers, counts, busyRows] = await Promise.all([
+      db.user_type.findOne({ where: { user_role: EDITOR_USER_TYPE_ROLE_NAME, is_active: 1 }, attributes: ['user_type_id'], raw: true }),
+      assigned_post_production_member.findAll({ where: { project_id: bookingId, is_active: 1 }, attributes: ['post_production_member_id'], raw: true }),
+      assigned_crew.findAll({ where: { project_id: bookingId, is_active: 1 }, attributes: ['crew_member_id'], raw: true }),
+      post_production_members.findAll({ where: { is_active: 1 }, attributes: ['post_production_member_id', 'email'], raw: true }),
+      editorAssignmentCounts(),
+      booking.event_date ? assigned_crew.findAll({ where: { is_active: 1, crew_accept: 1 }, attributes: ['crew_member_id'], include: [{ model: stream_project_booking, as: 'project', required: true, where: { event_date: booking.event_date }, attributes: [] }], raw: true }) : [],
+    ]);
+    const assignedInternalIds = new Set(assignedInternal.map((row) => Number(row.post_production_member_id)));
+    const assignedExternalIds = new Set(assignedExternal.map((row) => Number(row.crew_member_id)));
+    const busyExternalIds = new Set(busyRows.map((row) => Number(row.crew_member_id)));
+    const postByEmail = new Map(postMembers.map((row) => [String(row.email).toLowerCase(), row]));
+    const matches = (row) => !search || `${editorName(row)} ${row.email || ''}`.toLowerCase().includes(search.toLowerCase());
+    const internal = editorType ? (await users.findAll({ where: { is_active: 1, user_type: editorType.user_type_id }, attributes: ['id', 'name', 'email', 'profile_image'], raw: true }))
+      .filter((row) => !assignedInternalIds.has(Number(postByEmail.get(String(row.email || '').toLowerCase())?.post_production_member_id)))
+      .filter(matches).map((row) => ({ id: row.id, name: row.name, email: row.email, avatar: row.profile_image || null, editorType: 'internal', specialty: 'Editor', isAvailable: true, activeShoots: counts.get(`internal:${postByEmail.get(String(row.email || '').toLowerCase())?.post_production_member_id}`) || 0 })) : [];
+    const external = (await crew_members.findAll({ where: { is_active: 1, is_crew_verified: 1 }, attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role', 'is_available'], include: [{ model: crew_member_files, as: 'crew_member_files', required: false, where: { is_active: 1, file_type: 'profile_photo' }, attributes: ['file_path'] }] }))
+      .map((row) => row.get({ plain: true })).filter((row) => isEditorRole(row.primary_role) && !assignedExternalIds.has(Number(row.crew_member_id)) && matches(row))
+      .map((row) => ({ id: row.crew_member_id, name: editorName(row), email: row.email, avatar: row.crew_member_files?.[0]?.file_path || null, editorType: 'external', specialty: 'Editor', isAvailable: Boolean(row.is_available) && !busyExternalIds.has(Number(row.crew_member_id)), activeShoots: counts.get(`external:${row.crew_member_id}`) || 0 }));
+    const all = [...internal, ...external].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    const items = (type === 'internal' ? internal : type === 'external' ? external : all).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    return res.status(200).json({ success: true, data: { items: items.slice((page - 1) * limit, page * limit), counts: { all: all.length, internal: internal.length, external: external.length }, pagination: { page, limit, total: items.length } } });
+  } catch (error) { console.error('Get shoot editor options failed:', error); return res.status(500).json({ success: false, message: 'Failed to fetch editor options' }); }
+};
+
+exports.assignShootEditor = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId); const editorId = Number(req.body?.editorId); const editorType = String(req.body?.editorType || '').toLowerCase();
+    if (!Number.isInteger(bookingId) || !Number.isInteger(editorId) || !['internal', 'external'].includes(editorType)) return res.status(400).json({ success: false, message: 'Valid editorType and editorId are required' });
+    const booking = await stream_project_booking.findOne({ where: { stream_project_booking_id: bookingId, is_active: 1 } });
+    if (!booking) return res.status(404).json({ success: false, message: 'Shoot not found' });
+    if (editorType === 'external') {
+      const crew = await crew_members.findOne({ where: { crew_member_id: editorId, is_active: 1, is_crew_verified: 1 } });
+      if (!crew || !isEditorRole(crew.primary_role)) return res.status(400).json({ success: false, message: 'Selected member is not an active verified editor' });
+      const existingExternalAssignment = await assigned_crew.findOne({ where: { project_id: bookingId, crew_member_id: editorId, is_active: 1 }, attributes: ['crew_accept'] });
+      if (existingExternalAssignment) return res.status(400).json({ success: false, message: Number(existingExternalAssignment.crew_accept) === 0 ? 'Editor already has a pending agreement for this shoot' : 'Editor is already assigned to this shoot' });
+      const actor = await getRequestActor(req);
+      await writeShootHistory({ projectId: bookingId, action: 'editor_assigned', actor, reason: 'External editor selected for compensation and agreement', metadata: { editorType: 'external', editor_id: editorId, editor_name: editorName(crew), assignment_pending: true } });
+      try { await workflowEditorSync.syncEditor(bookingId); } catch (syncError) { console.error('Workflow editor sync failed:', syncError.message || syncError); }
+      return res.status(200).json({ success: true, data: { status: 'compensation_required', crewMemberId: editorId } });
+    }
+    const editorTypeRecord = await db.user_type.findOne({ where: { user_role: EDITOR_USER_TYPE_ROLE_NAME, is_active: 1 }, attributes: ['user_type_id'] });
+    const selectedUser = editorTypeRecord && await users.findOne({ where: { id: editorId, is_active: 1, user_type: editorTypeRecord.user_type_id } });
+    if (!selectedUser) return res.status(400).json({ success: false, message: 'Selected internal user is not an active Editor' });
+    let member = await post_production_members.findOne({ where: { email: selectedUser.email, is_active: 1 } });
+    if (!member) { const parts = String(selectedUser.name || '').trim().split(/\s+/); member = await post_production_members.create({ first_name: parts.shift() || selectedUser.email, last_name: parts.join(' '), email: selectedUser.email, is_active: 1 }); }
+    if (await assigned_post_production_member.findOne({ where: { project_id: bookingId, post_production_member_id: member.post_production_member_id, is_active: 1 } })) return res.status(400).json({ success: false, message: 'Editor is already assigned to this shoot' });
+    await assigned_post_production_member.create({ project_id: bookingId, post_production_member_id: member.post_production_member_id, assigned_date: new Date(), status: 'assigned', is_active: 1 });
+    const actor = await getRequestActor(req);
+    await writeShootHistory({ projectId: bookingId, action: 'editor_assigned', actor, reason: 'Internal editor assigned', metadata: { editorType: 'internal', editor_id: selectedUser.id, editor_name: selectedUser.name || member.email } });
+    try { await sendPostProductionAssignmentEmail({ to_email: member.email, member_name: selectedUser.name, first_name: member.first_name, booking_id: bookingId, project_id: bookingId, shoot_type: booking.shoot_type || booking.event_type, date: booking.event_date, start_time: booking.start_time, end_time: booking.end_time, location: booking.event_location }); } catch (mailError) { console.error('Editor assignment email failed:', mailError.message); }
+    try { await workflowEditorSync.syncEditor(bookingId); } catch (syncError) { console.error('Workflow editor sync failed:', syncError.message || syncError); }
+    return res.status(201).json({ success: true, data: { status: 'assigned' } });
+  } catch (error) { console.error('Assign shoot editor failed:', error); return res.status(500).json({ success: false, message: 'Failed to assign editor' }); }
+};
+
+exports.getShootEditors = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    if (!Number.isInteger(bookingId) || bookingId <= 0) return res.status(400).json({ success: false, message: 'Valid bookingId is required' });
+    const [internal, external] = await Promise.all([
+      assigned_post_production_member.findAll({ where: { project_id: bookingId, is_active: 1 }, include: [{ model: post_production_members, as: 'post_production_member', required: true }] }),
+      assigned_crew.findAll({ where: { project_id: bookingId, is_active: 1 }, include: [{ model: crew_members, as: 'crew_member', required: true, include: [{ model: crew_member_files, as: 'crew_member_files', required: false, where: { is_active: 1, file_type: 'profile_photo' }, attributes: ['file_path'] }] }] }),
+    ]);
+    const editorExternal = external.filter((row) => isEditorRole(row.crew_member?.primary_role));
+    const assignmentIds = editorExternal.map((row) => row.id);
+    const creatorIds = editorExternal.map((row) => row.crew_member_id);
+    const [documents, earnings] = await Promise.all([
+      assignmentIds.length ? db.agreement_documents.findAll({ where: { assignment_id: { [Op.in]: assignmentIds }, is_current: 1 }, raw: true }) : [],
+      creatorIds.length ? db.creator_earnings.findAll({ where: { booking_id: bookingId, creator_id: { [Op.in]: creatorIds } }, order: [['updated_at', 'DESC']], raw: true }) : [],
+    ]);
+    const documentByAssignment = new Map(documents.map((row) => [Number(row.assignment_id), row]));
+    const earningsByCreator = new Map(); earnings.forEach((row) => { if (!earningsByCreator.has(Number(row.creator_id))) earningsByCreator.set(Number(row.creator_id), row); });
+    const rows = [
+      ...internal.map((row) => ({ id: row.post_production_member_id, name: editorName(row.post_production_member), avatar: null, editorType: 'internal', role: 'Editor', specialty: 'Editor', agreementType: null, agreementVersion: null, compensation: null, agreementStatus: 'not_required', assignedAt: row.assigned_date })),
+      ...editorExternal.map((row) => { const document = documentByAssignment.get(Number(row.id)); const earning = earningsByCreator.get(Number(row.crew_member_id)); const agreementStatus = document?.status === 'accepted' ? 'confirmed' : document?.status || (Number(row.crew_accept) === 1 ? 'confirmed' : Number(row.crew_accept) === 2 ? 'rejected' : 'pending_acceptance'); return { id: row.crew_member_id, name: editorName(row.crew_member), avatar: row.crew_member?.crew_member_files?.[0]?.file_path || null, editorType: 'external', role: 'Editor', specialty: 'Editor', agreementType: document ? 'individual' : null, agreementVersion: document?.display_version || null, compensation: earning ? Number(earning.net_earning_amount) : null, agreementStatus, assignedAt: row.assigned_date }; }),
+    ];
+    return res.status(200).json({ success: true, data: rows });
+  } catch (error) { console.error('Get shoot editors failed:', error); return res.status(500).json({ success: false, message: 'Failed to fetch assigned editors' }); }
+};
+
+exports.removeShootEditor = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId); const editorId = Number(req.body?.editorId); const editorType = String(req.body?.editorType || '').toLowerCase();
+    if (!Number.isInteger(bookingId) || !Number.isInteger(editorId) || !['internal', 'external'].includes(editorType)) return res.status(400).json({ success: false, message: 'Valid editorType and editorId are required' });
+    if (editorType === 'internal') {
+      const editorIdType = String(req.body?.editorIdType || 'user').toLowerCase();
+      if (!['member', 'user'].includes(editorIdType)) return res.status(400).json({ success: false, message: 'editorIdType must be member or user' });
+      let member;
+      if (editorIdType === 'member') {
+        member = await post_production_members.findOne({ where: { post_production_member_id: editorId, is_active: 1 } });
+      } else {
+        const user = await users.findByPk(editorId, { attributes: ['email'] });
+        member = user?.email ? await post_production_members.findOne({ where: { email: user.email, is_active: 1 } }) : null;
+      }
+      const assignment = member && await assigned_post_production_member.findOne({ where: { project_id: bookingId, post_production_member_id: member.post_production_member_id, is_active: 1 } });
+      if (!assignment) return res.status(404).json({ success: false, message: 'Editor is not assigned to this shoot' });
+      await assignment.update({ is_active: 0 });
+      const actor = await getRequestActor(req);
+      await writeShootHistory({ projectId: bookingId, action: 'editor_removed', actor, reason: 'Internal editor removed', metadata: { editorType: 'internal', editor_id: editorId, editor_id_type: editorIdType, editor_name: editorName(member) } });
+      try { await workflowEditorSync.syncEditor(bookingId); } catch (syncError) { console.error('Workflow editor sync failed:', syncError.message || syncError); }
+      return res.status(200).json({ success: true, data: { removed: true, agreementCancelled: false, compensationCancelled: false, compensationPaid: false } });
+    }
+    const assignment = await assigned_crew.findOne({ where: { project_id: bookingId, crew_member_id: editorId, is_active: 1 }, include: [{ model: crew_members, as: 'crew_member', required: true }] });
+    if (!assignment || !isEditorRole(assignment.crew_member.primary_role)) return res.status(404).json({ success: false, message: 'Editor is not assigned to this shoot' });
+    const wasAccepted = Number(assignment.crew_accept) === 1;
+    const result = await db.sequelize.transaction(async (transaction) => {
+      const lockedAssignment = await assigned_crew.findOne({ where: { id: assignment.id, is_active: 1 }, transaction, lock: transaction.LOCK.UPDATE });
+      if (!lockedAssignment) throw Object.assign(new Error('Editor is not assigned to this shoot'), { statusCode: 404 });
+      const earnings = await db.creator_earnings.findAll({ where: { booking_id: bookingId, creator_id: editorId }, transaction, lock: transaction.LOCK.UPDATE });
+      const compensationPaid = await isPaidCompensation(earnings, transaction);
+      const agreementCancelled = await agreementsService.cancelAssignmentAgreements(lockedAssignment.id, { userId: req.user?.userId || req.userId || null }, transaction);
+      await lockedAssignment.update({ is_active: 0 }, { transaction });
+      if (!compensationPaid && earnings.length) {
+        const earningIds = earnings.map((earning) => earning.creator_earning_id);
+        await db.creator_earning_compensation_items.update({ is_active: 0, updated_at: new Date() }, { where: { creator_earning_id: { [Op.in]: earningIds } }, transaction });
+        await db.creator_earning_advances.update({ status: 'failed', updated_at: new Date() }, { where: { creator_earning_id: { [Op.in]: earningIds }, status: 'pending' }, transaction });
+        await db.creator_earnings.update({ status: 'cancelled', updated_at: new Date() }, { where: { creator_earning_id: { [Op.in]: earningIds } }, transaction });
+      }
+      return { agreementCancelled: agreementCancelled > 0, compensationCancelled: !compensationPaid && earnings.length > 0, compensationPaid };
+    });
+    if (wasAccepted) {
+      await businessNotifications.notifyCreator(editorId, { title: 'Shoot assignment changed', message: `You are no longer assigned to shoot ${bookingId}. Please review your shoot requests.`, topic: 'shoots', category: 'shoots', type: 'shoot_creator_removed', referenceType: 'booking', referenceId: String(bookingId), payload: { booking_id: String(bookingId) }, priority: 'high' });
+    }
+    const actor = await getRequestActor(req);
+    await writeShootHistory({ projectId: bookingId, action: 'editor_removed', actor, reason: 'External editor removed', metadata: { editorType: 'external', editor_id: editorId, editor_name: editorName(assignment.crew_member), compensation_paid: result.compensationPaid } });
+    try { await workflowEditorSync.syncEditor(bookingId); } catch (syncError) { console.error('Workflow editor sync failed:', syncError.message || syncError); }
+    return res.status(200).json({ success: true, ...(result.compensationPaid ? { message: 'Editor removed; paid compensation was retained for review.' } : {}), data: { removed: true, ...result } });
+  } catch (error) { console.error('Remove shoot editor failed:', error); return res.status(error.statusCode || 500).json({ success: false, message: error.message || 'Failed to remove editor' }); }
+};
+
 exports.setShootProducer = async (req, res) => {
   try {
     const projectId = Number(req.params.project_id);
@@ -14125,6 +14310,8 @@ exports.getProjectHistory = async (req, res) => {
             'restored',
             'crew_assigned',
             'crew_removed',
+            'editor_assigned',
+            'editor_removed',
             'post_production_member_assigned',
             'post_production_member_removed',
             'project_name_updated',
