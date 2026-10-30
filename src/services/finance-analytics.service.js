@@ -9,6 +9,24 @@ const REFUND_TRANSACTION_STATUSES = new Set(['paid', 'refunded', 'completed', 's
 // Draft earnings are generated while a shoot is being prepared. They are not
 // compensation commitments and must never affect finance analytics.
 const ACTIVE_CP_APPROVAL_STATUSES = new Set(['pending_approval', 'approved']);
+
+// Payout timeline: each unpaid earning has exactly one urgency segment (by days
+// until due). Each bucket is cumulative: it shows every segment due within its window.
+const INCLUDE_OVERDUE_IN_FORWARD_BUCKETS = false;
+const BUCKET_SEGMENTS = {
+  this_week: ['upcoming', ...(INCLUDE_OVERDUE_IN_FORWARD_BUCKETS ? ['overdue'] : [])],
+  next_week: ['upcoming', 'dueSoon', ...(INCLUDE_OVERDUE_IN_FORWARD_BUCKETS ? ['overdue'] : [])],
+  '2_4_weeks': ['upcoming', 'dueSoon', 'later', ...(INCLUDE_OVERDUE_IN_FORWARD_BUCKETS ? ['overdue'] : [])],
+  overdue: ['overdue']
+};
+
+function payoutSegmentForDays(days) {
+  if (days < 0) return 'overdue';
+  if (days <= 6) return 'upcoming';
+  if (days <= 13) return 'dueSoon';
+  if (days <= 27) return 'later';
+  return null; // more than 4 weeks away: not shown on the timeline
+}
 const CREATOR_ROLE_LABELS = {
   1: 'Videographer', 2: 'Photographer', 3: 'Editor', 4: 'Producer', 5: 'Director',
   9: 'Videographer', 10: 'Photographer', 11: 'Editor'
