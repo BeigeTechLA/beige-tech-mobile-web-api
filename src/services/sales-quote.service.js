@@ -867,6 +867,17 @@ function applyQuoteStatusFilter(where, rawStatus) {
 }
 
 function applyQuoteSalesRepFilter(where, assignedSalesRepId, user) {
+  if (String(user?.role || '').trim().toLowerCase() === 'sales_rep') {
+    const salesRepId = Number(user?.userId);
+    const safeSalesRepId = Number.isInteger(salesRepId) && salesRepId > 0 ? salesRepId : -1;
+    return appendAndCondition(where, {
+      [Op.or]: [
+        { assigned_sales_rep_id: safeSalesRepId },
+        { created_by_user_id: safeSalesRepId }
+      ]
+    });
+  }
+
   if (!assignedSalesRepId) {
     return where;
   }
@@ -2181,6 +2192,9 @@ function buildQuoteAccessWhere(user, options = {}) {
 }
 
 function buildQuoteReadAccessWhere(user) {
+  if (String(user?.role || '').trim().toLowerCase() === 'sales_rep') {
+    return buildQuoteAccessWhere(user);
+  }
   if (isClientRole(user?.role)) {
     return buildQuoteAccessWhere(user);
   }

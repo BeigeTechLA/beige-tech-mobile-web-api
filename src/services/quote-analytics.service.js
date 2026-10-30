@@ -32,6 +32,15 @@ function badRequest(message) {
   return error;
 }
 
+function isSalesRepUser(user) {
+  return String(user?.role || '').trim().toLowerCase() === 'sales_rep';
+}
+
+function applyUserSalesRepScope(query = {}, user) {
+  if (!isSalesRepUser(user)) return query;
+  return { ...query, sales_rep_id: String(Number(user?.userId) || -1) };
+}
+
 function toPlain(value) {
   return value && typeof value.toJSON === 'function' ? value.toJSON() : value;
 }
@@ -420,8 +429,11 @@ function buildPerformanceChart(records, nowValue = new Date()) {
   return buckets.map((bucket) => ({ date: bucket.date, ...summarizeCohort(bucket.records) }));
 }
 
-function buildRepPerformance(segmentedRecords, cohortRecords, nowValue = new Date(), range = null) {
-  const repIds = Array.from(new Set(segmentedRecords.map((record) => record.repId).filter(Boolean)));
+function buildRepPerformance(segmentedRecords, cohortRecords, nowValue = new Date(), range = null, extraReps = []) {
+  const repIds = Array.from(new Set([
+    ...segmentedRecords.map((record) => record.repId).filter(Boolean),
+    ...extraReps.map((rep) => Number(rep.id)).filter((id) => Number.isInteger(id) && id > 0)
+  ]));
   return repIds.map((repId) => {
     const allForRep = segmentedRecords.filter((record) => record.repId === repId);
     const cohortForRep = cohortRecords.filter((record) => record.repId === repId);
@@ -436,7 +448,7 @@ function buildRepPerformance(segmentedRecords, cohortRecords, nowValue = new Dat
       ].filter(Boolean).sort((left, right) => new Date(right) - new Date(left))[0];
       return !range || isInRange(lifecycleAt, range);
     });
-    const rep = allForRep.find((record) => record.salesRep)?.salesRep || { id: repId, name: 'Unassigned', email: null };
+    const rep = allForRep.find((record) => record.salesRep)?.salesRep || extraReps.find((item) => Number(item.id) === repId) || { id: repId, name: `Rep ${repId}`, email: null };
     return {
       rep_id: repId,
       rep_name: rep.name || rep.email || `Rep ${repId}`,
@@ -464,7 +476,13 @@ function getDefinitions() {
 
 function buildAccessWhere(user) {
   const role = String(user?.role || '').trim().toLowerCase().replace(/\s+/g, '_');
-  return role === 'client' ? { client_user_id: user.userId } : {};
+  if (role === 'client') return { client_user_id: user.userId };
+  if (role === 'sales_rep') {
+    const salesRepId = Number(user?.userId);
+    const safeSalesRepId = Number.isInteger(salesRepId) && salesRepId > 0 ? salesRepId : -1;
+    return { [Op.or]: [{ assigned_sales_rep_id: safeSalesRepId }, { created_by_user_id: safeSalesRepId }] };
+  }
+  return {};
 }
 
 async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
@@ -616,7 +634,7 @@ async function loadAnalyticsRecords(user = {}, nowValue = new Date()) {
   });
 }
 
-function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
+function buildAnalyticsData(records, query = {}, nowValue = new Date(), extraReps = []) {
   const range = resolveDateRange(query, nowValue);
   const filters = normalizeFilterQuery(query);
   const segmentedRecords = applyFilters(records, filters);
@@ -651,7 +669,7 @@ function buildAnalyticsData(records, query = {}, nowValue = new Date()) {
       ...currentState
     },
     performance_chart: buildPerformanceChart(cohortRecords, nowValue),
-    rep_performance: buildRepPerformance(segmentedRecords, cohortRecords, nowValue, range),
+    rep_performance: buildRepPerformance(segmentedRecords, cohortRecords, nowValue, range, extraReps),
     definitions: getDefinitions()
   };
 }
@@ -660,7 +678,13 @@ async function getAnalytics(query, user) {
   await expireQuotesPastValidUntil();
   const nowValue = new Date();
   const records = await loadAnalyticsRecords(user, nowValue);
-  return buildAnalyticsData(records, query, nowValue);
+  const scopedQuery = applyUserSalesRepScope(query, user);
+  let extraReps = [];
+  if (isSalesRepUser(user) && Number(user?.userId) > 0) {
+    const rep = await db.users.unscoped().findByPk(Number(user.userId), { attributes: ['id', 'name', 'email'] });
+    if (rep) extraReps = [toPlain(rep)];
+  }
+  return buildAnalyticsData(records, scopedQuery, nowValue, extraReps);
 }
 
 async function getInactivePipelineRecords({ inactivityHours = 72, nowValue = new Date() } = {}) {
@@ -687,11 +711,14 @@ function uniqueOptions(records, key, labelKey = key) {
 async function getAnalyticsFilters(user) {
   await expireQuotesPastValidUntil();
   const isClient = String(user?.role || '').trim().toLowerCase().replace(/\s+/g, '_') === 'client';
+  const isSalesRep = isSalesRepUser(user);
   const [records, activeSalesReps, activeServiceItems] = await Promise.all([
     loadAnalyticsRecords(user),
     isClient
       ? Promise.resolve([])
-      : leadAssignmentService.getActiveSalesReps({ attributes: ['id', 'name', 'email'] }),
+      : isSalesRep && Number(user?.userId) > 0
+        ? db.users.unscoped().findAll({ where: { id: Number(user.userId) }, attributes: ['id', 'name', 'email'] })
+        : leadAssignmentService.getActiveSalesReps({ attributes: ['id', 'name', 'email'] }),
     db.quote_catalog_items.findAll({
       where: { is_active: 1, section_type: 'service' },
       attributes: ['catalog_item_id', 'name'],
@@ -739,6 +766,11 @@ function buildQueryString(query, overrides = {}) {
 async function getRepAnalytics(salesRepId, query, user) {
   const repId = Number(salesRepId);
   if (!Number.isInteger(repId) || repId <= 0) throw badRequest('salesRepId must be a positive numeric ID');
+  if (isSalesRepUser(user) && repId !== Number(user?.userId)) {
+    const error = new Error('Sales representatives may only view their own analytics');
+    error.statusCode = 403;
+    throw error;
+  }
   const rep = await db.users.unscoped().findByPk(repId, { attributes: ['id', 'name', 'email'] });
   if (!rep) {
     const error = new Error('Sales representative not found');
@@ -819,8 +851,9 @@ async function listAnalyticsQuotes(query, user) {
   }
   const nowValue = new Date();
   const records = await loadAnalyticsRecords(user, nowValue);
-  const range = resolveDateRange(query, nowValue);
-  const filters = normalizeFilterQuery(query);
+  const scopedQuery = applyUserSalesRepScope(query, user);
+  const range = resolveDateRange(scopedQuery, nowValue);
+  const filters = normalizeFilterQuery(scopedQuery);
   let matching = applyFilters(records, filters)
     .filter((record) => {
       if (bucket !== 'overdue_follow_ups') return isInRange(record.sentAt, range);
@@ -839,8 +872,8 @@ async function listAnalyticsQuotes(query, user) {
     matching = matching.filter((record) => record.fullPaid);
   } else if (bucket === 'open_pipeline') {
     matching = matching.filter(isOpenPipeline);
-    if (query.status) {
-      const statuses = parseCsv(query.status);
+      if (scopedQuery.status) {
+      const statuses = parseCsv(scopedQuery.status);
       const validStatuses = ['sent', 'accepted', 'partially_paid'];
       if (statuses.some((status) => !validStatuses.includes(status))) {
         throw badRequest(`status must be one of: ${validStatuses.join(', ')}`);
