@@ -62,6 +62,7 @@ router.get('/admin/analytics/reconciliation/export', authenticate, adminFinanceA
 router.get('/admin/analytics/cp-payout-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminCpPayoutHistory);
 router.get('/admin/analytics/cp-overdue-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminCpOverdueHistory);
 router.get('/admin/analytics/payout-schedule-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminPayoutScheduleHistory);
+router.patch('/admin/analytics/payout-schedule/:earningId', authenticate, adminFinanceCpCompensationEdit, financeController.updateAdminPayoutSchedule);
 router.get('/admin/analytics/shoot-history', authenticate, adminFinanceAnalyticsView, financeController.getAdminShootHistory);
 router.get('/transactions', authenticate, adminFinanceTransactionsView, financeController.listTransactions);
 router.get('/shoots', authenticate, adminFinanceTransactionsView, financeController.listShootBreakdowns);
