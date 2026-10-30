@@ -982,7 +982,10 @@ exports.updateGuestBooking = async (req, res) => {
     // Changes to a paid/confirmed shoot must use an authenticated workflow;
     // otherwise anyone who knows a booking ID could alter it and trigger push.
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({ bookingId: id });
-    if (booking.payment_id || booking.payment_completed_at || paymentState.isPaid ||
+    // Without a persisted summary, the resolver's zero-total fallback reports
+    // no_payment_due. That is not evidence that this guest draft was confirmed.
+    const hasConfirmedPaymentSummary = paymentState.hasSummary && paymentState.isPaid;
+    if (booking.payment_id || booking.payment_completed_at || hasConfirmedPaymentSummary ||
       Number(paymentState.paidAmount || 0) > 0 || Number(paymentState.creditUsedAmount || 0) > 0) {
       return res.status(constants.FORBIDDEN.code).json({
         success: false,

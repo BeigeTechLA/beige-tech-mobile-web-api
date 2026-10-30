@@ -15586,6 +15586,48 @@ exports.searchCrewForLead = async (req, res) => {
             limit: 200
         });
 
+        // Return assignment counts with each creative so the picker can show
+        // live workload instead of relying on the profile's historical count.
+        const availableCrewIds = availableCrew.map(crewMember => Number(crewMember.crew_member_id)).filter(Boolean);
+        const assignmentCountsByCrew = new Map();
+        if (availableCrewIds.length) {
+            const assignments = await assigned_crew.findAll({
+                where: {
+                    crew_member_id: { [Op.in]: availableCrewIds },
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    attributes: ['event_date', 'is_active', 'is_cancelled', 'is_completed'],
+                    required: true
+                }],
+                attributes: ['crew_member_id', 'project_id', 'crew_accept']
+            });
+
+            const today = moment().startOf('day');
+            assignments.forEach(assignment => {
+                const crewId = Number(assignment.crew_member_id);
+                const project = assignment.project;
+                if (!crewId || !project || Number(project.is_active) !== 1 || Number(project.is_cancelled) === 1) return;
+
+                const eventDate = moment(project.event_date);
+                if (!eventDate.isValid()) return;
+
+                const counts = assignmentCountsByCrew.get(crewId) || {
+                    activeProjectIds: new Set(),
+                    pastAcceptedProjectIds: new Set()
+                };
+                const projectId = Number(assignment.project_id);
+                if (eventDate.isSameOrAfter(today) && Number(project.is_completed) !== 1) {
+                    counts.activeProjectIds.add(projectId);
+                } else if (eventDate.isBefore(today) && Number(assignment.crew_accept) === 1) {
+                    counts.pastAcceptedProjectIds.add(projectId);
+                }
+                assignmentCountsByCrew.set(crewId, counts);
+            });
+        }
+
         const crewWithRoles = availableCrew.map(crewMember => {
             let matchedRoles = [];
             let rawRoles = [];
@@ -15625,9 +15667,13 @@ exports.searchCrewForLead = async (req, res) => {
             const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
                 ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
                 : null;
+            const assignmentCounts = assignmentCountsByCrew.get(Number(crewJson.crew_member_id));
 
             return {
                 ...crewJson,
+                assigned_shoots: assignmentCounts?.activeProjectIds.size || 0,
+                active_assigned_shoots: assignmentCounts?.activeProjectIds.size || 0,
+                past_accepted_shoots: assignmentCounts?.pastAcceptedProjectIds.size || 0,
                 profile_photo: profilePhoto,
                 first_name: formattedFirstName,
                 last_name: formattedLastName,
@@ -17025,6 +17071,47 @@ exports.searchCrewForProject = async (req, res) => {
             limit: 200
         });
 
+        // Include current workload counts in the creative picker response.
+        const availableCrewIds = availableCrew.map(crewMember => Number(crewMember.crew_member_id)).filter(Boolean);
+        const assignmentCountsByCrew = new Map();
+        if (availableCrewIds.length) {
+            const assignments = await assigned_crew.findAll({
+                where: {
+                    crew_member_id: { [Op.in]: availableCrewIds },
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    attributes: ['event_date', 'is_active', 'is_cancelled', 'is_completed'],
+                    required: true
+                }],
+                attributes: ['crew_member_id', 'project_id', 'crew_accept']
+            });
+
+            const today = moment().startOf('day');
+            assignments.forEach(assignment => {
+                const crewId = Number(assignment.crew_member_id);
+                const project = assignment.project;
+                if (!crewId || !project || Number(project.is_active) !== 1 || Number(project.is_cancelled) === 1) return;
+
+                const eventDate = moment(project.event_date);
+                if (!eventDate.isValid()) return;
+
+                const counts = assignmentCountsByCrew.get(crewId) || {
+                    activeProjectIds: new Set(),
+                    pastAcceptedProjectIds: new Set()
+                };
+                const projectId = Number(assignment.project_id);
+                if (eventDate.isSameOrAfter(today) && Number(project.is_completed) !== 1) {
+                    counts.activeProjectIds.add(projectId);
+                } else if (eventDate.isBefore(today) && Number(assignment.crew_accept) === 1) {
+                    counts.pastAcceptedProjectIds.add(projectId);
+                }
+                assignmentCountsByCrew.set(crewId, counts);
+            });
+        }
+
         const crewWithRoles = availableCrew.map(crewMember => {
             let matchedRoles = [];
             let rawRoles = [];
@@ -17052,9 +17139,13 @@ exports.searchCrewForProject = async (req, res) => {
             const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
                 ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
                 : null;
+            const assignmentCounts = assignmentCountsByCrew.get(Number(crewJson.crew_member_id));
 
             return {
                 ...crewJson,
+                assigned_shoots: assignmentCounts?.activeProjectIds.size || 0,
+                active_assigned_shoots: assignmentCounts?.activeProjectIds.size || 0,
+                past_accepted_shoots: assignmentCounts?.pastAcceptedProjectIds.size || 0,
                 profile_photo: profilePhoto,
                 first_name: crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase(),
                 last_name: crewJson.last_name.charAt(0).toUpperCase(),
