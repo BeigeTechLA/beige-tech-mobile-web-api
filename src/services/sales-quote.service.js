@@ -920,6 +920,10 @@ function buildQuoteCreatedAtCondition(range = 'all', dateOn = null) {
     };
   }
 
+  if (normalizedRange === 'all_time') {
+    return null;
+  }
+
   if (normalizedRange === 'all') {
     return {
       [Op.gte]: startOfMonth(addMonths(now, -5)),
@@ -1017,6 +1021,17 @@ function getDateRange(range = 'all', dateOn = null) {
     };
   }
 
+  if (normalizedRange === 'all_time') {
+    return {
+      normalizedRange,
+      currentStart: new Date(0),
+      currentEnd: addDays(todayStart, 1),
+      previousStart: null,
+      previousEnd: null,
+      compareLabel: 'Recent 6 months vs prior 6 months'
+    };
+  }
+
   const currentStart = startOfMonth(addMonths(now, -5));
   const previousEnd = currentStart;
   const previousStart = startOfMonth(addMonths(currentStart, -6));
@@ -1036,7 +1051,7 @@ function isWithinRange(dateValue, start, end) {
   return date >= start && date < end;
 }
 
-function buildDashboardChartBuckets(range = 'all', dateOn = null) {
+function buildDashboardChartBuckets(range = 'all', dateOn = null, earliestQuoteDate = null) {
   const { normalizedRange, currentStart } = getDateRange(range, dateOn);
   const buckets = [];
   const now = new Date();
@@ -1067,8 +1082,11 @@ function buildDashboardChartBuckets(range = 'all', dateOn = null) {
     return buckets;
   }
 
-  for (let index = 0; index < 6; index += 1) {
-    const date = startOfMonth(addMonths(currentStart, index));
+  const chartStart = normalizedRange === 'all_time'
+    ? startOfMonth(new Date(earliestQuoteDate || now))
+    : currentStart;
+  const chartEnd = startOfMonth(now);
+  for (let date = startOfMonth(chartStart); date <= chartEnd; date = startOfMonth(addMonths(date, 1))) {
     buckets.push({
       key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
       label: date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
@@ -6941,12 +6959,41 @@ async function getQuoteDashboard(query, user) {
   } = getDateRange(query.range || 'all', query.date_on || null);
 
   const currentPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, currentStart, currentEnd));
-  const previousPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, previousStart, previousEnd));
+  const previousPeriodQuotes = normalizedRange === 'all_time'
+    ? []
+    : quotes.filter((item) => isWithinRange(item.created_at, previousStart, previousEnd));
+  const comparisonRange = normalizedRange === 'all_time' ? getDateRange('all') : null;
+  const comparisonCurrentQuotes = comparisonRange
+    ? quotes.filter((item) => isWithinRange(item.created_at, comparisonRange.currentStart, comparisonRange.currentEnd))
+    : currentPeriodQuotes;
+  const comparisonPreviousQuotes = comparisonRange
+    ? quotes.filter((item) => isWithinRange(item.created_at, comparisonRange.previousStart, comparisonRange.previousEnd))
+    : previousPeriodQuotes;
 
   const countByStatus = (items, statuses) => items.filter((item) => statuses.includes(item.status)).length;
   const sumTotals = (items) => roundCurrency(items.reduce((sum, item) => sum + Number(item.total || 0), 0));
 
   const currentMetrics = {
+    total_quotes: comparisonCurrentQuotes.length,
+    accepted_quotes: countByStatus(comparisonCurrentQuotes, ['accepted', 'paid']),
+    pending_quotes: countByStatus(comparisonCurrentQuotes, ['pending']),
+    draft_quotes: countByStatus(comparisonCurrentQuotes, ['draft']),
+    rejected_quotes: countByStatus(comparisonCurrentQuotes, ['rejected']),
+    expired_quotes: countByStatus(comparisonCurrentQuotes, ['expired']),
+    total_amount: sumTotals(comparisonCurrentQuotes)
+  };
+
+  const previousMetrics = {
+    total_quotes: comparisonPreviousQuotes.length,
+    accepted_quotes: countByStatus(comparisonPreviousQuotes, ['accepted', 'paid']),
+    pending_quotes: countByStatus(comparisonPreviousQuotes, ['pending']),
+    draft_quotes: countByStatus(comparisonPreviousQuotes, ['draft']),
+    rejected_quotes: countByStatus(comparisonPreviousQuotes, ['rejected']),
+    expired_quotes: countByStatus(comparisonPreviousQuotes, ['expired']),
+    total_amount: sumTotals(comparisonPreviousQuotes)
+  };
+
+  const overview = {
     total_quotes: currentPeriodQuotes.length,
     accepted_quotes: countByStatus(currentPeriodQuotes, ['accepted', 'paid']),
     pending_quotes: countByStatus(currentPeriodQuotes, ['pending']),
@@ -6956,19 +7003,10 @@ async function getQuoteDashboard(query, user) {
     total_amount: sumTotals(currentPeriodQuotes)
   };
 
-  const previousMetrics = {
-    total_quotes: previousPeriodQuotes.length,
-    accepted_quotes: countByStatus(previousPeriodQuotes, ['accepted', 'paid']),
-    pending_quotes: countByStatus(previousPeriodQuotes, ['pending']),
-    draft_quotes: countByStatus(previousPeriodQuotes, ['draft']),
-    rejected_quotes: countByStatus(previousPeriodQuotes, ['rejected']),
-    expired_quotes: countByStatus(previousPeriodQuotes, ['expired']),
-    total_amount: sumTotals(previousPeriodQuotes)
-  };
-
-  const overview = currentMetrics;
-
-  const chartBuckets = buildDashboardChartBuckets(normalizedRange, query.date_on || null);
+  const earliestQuoteDate = quotes.reduce((earliest, item) => (
+    !earliest || new Date(item.created_at) < new Date(earliest) ? item.created_at : earliest
+  ), null);
+  const chartBuckets = buildDashboardChartBuckets(normalizedRange, query.date_on || null, earliestQuoteDate);
   const chartMap = new Map(
     chartBuckets.map((bucket) => [
       bucket.key,
