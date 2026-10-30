@@ -6,6 +6,9 @@ const db = require('../models');
 const GOOGLE_PROVIDER = 'google';
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar';
 const BULK_SYNC_DELAY_MS = Math.max(100, Number(process.env.FINANCE_GOOGLE_CALENDAR_SYNC_DELAY_MS || 250));
+const FINANCE_CALENDAR_TIMEZONE = String(process.env.FINANCE_GOOGLE_CALENDAR_TIMEZONE || 'America/Los_Angeles').trim();
+const CP_PAYMENT_REMINDER_TIME = '10:00:00';
+const CP_PAYMENT_EVENT_END_TIME = '10:15:00';
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -281,6 +284,8 @@ function buildEventBody({ earning, remainingBalance, dueDate }) {
   const frontendBase = getFrontendBaseUrl();
   const dashboardLink = `${frontendBase}/admin/finances/cpCompensation?booking_id=${encodeURIComponent(earning.booking_id)}`;
   const status = overdue ? 'OVERDUE' : (earning.status === 'paid' ? 'Paid' : 'Approved');
+  const eventStart = `${dueDate}T${CP_PAYMENT_REMINDER_TIME}`;
+  const eventEnd = `${dueDate}T${CP_PAYMENT_EVENT_END_TIME}`;
   return {
     summary: `${overdue ? 'OVERDUE — ' : ''}CP Payment Due — ${booking.project_name || `Booking #${earning.booking_id}`}`,
     description: [
@@ -291,8 +296,14 @@ function buildEventBody({ earning, remainingBalance, dueDate }) {
       `Due Date: ${dueDate}`,
       `Open in Beige: ${dashboardLink}`
     ].join('\n'),
-    start: { date: dueDate },
-    end: { date: addDays(dueDate, 1) },
+    // A timed event is required for an exact Google Calendar push reminder.
+    // `popup` is delivered by the connected Google Calendar account.
+    start: { dateTime: eventStart, timeZone: FINANCE_CALENDAR_TIMEZONE },
+    end: { dateTime: eventEnd, timeZone: FINANCE_CALENDAR_TIMEZONE },
+    reminders: {
+      useDefault: false,
+      overrides: [{ method: 'popup', minutes: 0 }]
+    },
     colorId: overdue ? '11' : '5',
     extendedProperties: {
       private: {
