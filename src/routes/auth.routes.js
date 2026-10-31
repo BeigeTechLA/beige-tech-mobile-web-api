@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth.controller');
+const accountDeletionController = require('../controllers/account-deletion.controller');
 const { authenticate } = require('../middleware/auth');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
@@ -67,5 +68,9 @@ router.post('/change-password-crew', authenticate, authController.changePassword
 router.post('/password-expiry/request-otp', authenticate, authController.requestPasswordExpiryOtp);
 router.post('/password-expiry/verify-otp', authenticate, authController.verifyPasswordExpiryOtp);
 router.post('/password-expiry/change', authenticate, authController.changeExpiredPassword);
+router.post('/account-deletion/request-otp', authenticate, authController.requestAccountDeletionOtp);
+router.post('/account-deletion/verify-otp', authenticate, accountDeletionController.verifyOtp);
+router.get('/account-deletion/requests/me', authenticate, accountDeletionController.getMyRequest);
+router.patch('/account-deletion/requests/me/cancel', authenticate, accountDeletionController.cancelMyRequest);
 
 module.exports = router;

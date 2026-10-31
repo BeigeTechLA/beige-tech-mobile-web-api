@@ -6,6 +6,7 @@ const config = require('./config/config');
 const models = require('./models'); // Load all models
 const { startScheduledEmailJobs } = require('./services/scheduledEmails.service');
 const { startShootChatCpExpirationJob } = require('./services/shoot-chat-cp-expiration.service');
+const { startAccountDeletionExpirationJob } = require('./services/account-deletion-expiration.service');
 
 async function start() {
   try {
@@ -28,6 +29,7 @@ async function start() {
       console.log(`Base API path: /api`);
       startScheduledEmailJobs();
       startShootChatCpExpirationJob();
+      startAccountDeletionExpirationJob();
     });
   } catch (err) {
     console.error('Failed to start server:', err);

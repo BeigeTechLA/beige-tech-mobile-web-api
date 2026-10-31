@@ -904,6 +904,19 @@ const sendPasswordExpiryOTP = async (userData, otp) => sendRenderedTemplateEmail
   text: `Your Beige password change code is ${otp}. It expires in 10 minutes. Never share this code with anyone. If you did not request a password change, please contact your administrator if you suspect someone is using your account.`
 });
 
+const sendAccountDeletionOTP = async (userData, otp) => sendRenderedTemplateEmail({
+  to: userData?.email,
+  subject: 'Your Beige account deletion verification code',
+  templateName: 'OTPVerificationFileShare.html',
+  values: {
+    otp,
+    expiry_minutes: 10,
+    verification_message: 'To verify your identity and continue with your Beige account deletion request, enter the verification code below.',
+    unsolicited_message: "If you didn't request an account deletion, do not share this code and contact Beige Support. Your account will not be scheduled for deletion until you complete the remaining steps."
+  },
+  text: `Your Beige account deletion verification code is ${otp}. It expires in 10 minutes. Never share this code. If you did not request this code, contact Beige Support. Your account will not be scheduled for deletion until you complete the remaining steps.`
+});
+
 /**
  * Send file share access OTP
  * @param {Object} userData - Recipient details
@@ -4594,6 +4607,7 @@ module.exports = {
   sendTaskAssignmentEmail,
   sendVerificationOTP,
   sendPasswordExpiryOTP,
+  sendAccountDeletionOTP,
   sendFileShareVerificationOTP,
   sendPasswordResetEmail,
   // sendPaymentLinkEmail,

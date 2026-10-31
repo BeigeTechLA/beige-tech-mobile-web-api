@@ -2,11 +2,15 @@ const bcrypt = require('bcrypt');
 const crypto = require('node:crypto');
 
 const OTP_MS = 10 * 60 * 1000;
-const BLOCK_MS = 15 * 60 * 1000;
 const RESEND_MS = 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
+const OTP_LOCKOUT_MS = 15 * 60 * 1000;
 const hashProof = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const millis = (value) => value ? new Date(value).getTime() : 0;
 const failure = (status, message, extra = {}) => ({ status, success: false, message, ...extra });
+const blockedFailure = (retryAfterSeconds) => failure(429,
+  'Too many failed OTP attempts. Please try again after the countdown.',
+  { code: 'OTP_BLOCKED', retry_after_seconds: retryAfterSeconds });
 
 // Inject dependencies to test without connecting to a database or sending email.
 module.exports = function createPasswordResetService({ db, emailService, passwordExpiryService, now = Date.now }) {
@@ -17,13 +21,6 @@ module.exports = function createPasswordResetService({ db, emailService, passwor
     });
   }
 
-  function blocked(user) {
-    const remaining = millis(user.password_reset_blocked_until) - now();
-    return remaining > 0 ? failure(429, 'Too many failed OTP attempts. Please try again after the countdown.', {
-      code: 'OTP_BLOCKED', retry_after_seconds: Math.ceil(remaining / 1000)
-    }) : null;
-  }
-
   async function request(identity, purpose) {
     return db.sequelize.transaction(async (transaction) => {
       const user = await lockedUser(identity, transaction);
@@ -31,18 +28,21 @@ module.exports = function createPasswordResetService({ db, emailService, passwor
         ? 'If an active account exists for this email, a verification code has been sent.'
         : 'A verification code has been sent to your registered email.' };
       if (!user) return purpose === 'forgot' ? response : failure(403, 'Password expiry verification is not available for this account.');
+      const lockRemaining = millis(user.password_reset_blocked_until) - now();
+      if (lockRemaining > 0) return blockedFailure(Math.ceil(lockRemaining / 1000));
       if (purpose === 'expiry') {
         const status = await passwordExpiryService.getExpiryStatus(user, Number(user.userType?.is_internal_member) === 1);
         if (!status.expired) return failure(403, 'Password expiry verification is not available for this account.');
       }
-      const lockout = blocked(user);
-      if (lockout) return lockout;
       const remaining = millis(user.password_reset_sent_at) + RESEND_MS - now();
       if (remaining > 0) return failure(429, 'Please wait before requesting another verification code.', {
         code: 'OTP_COOLDOWN', retry_after_seconds: Math.ceil(remaining / 1000)
       });
       const otp = String(crypto.randomInt(100000, 1000000));
-      const sent = await emailService.sendPasswordExpiryOTP({ name: user.name, email: user.email }, otp);
+      const sendOtpEmail = purpose === 'deletion'
+        ? emailService.sendAccountDeletionOTP
+        : emailService.sendPasswordExpiryOTP;
+      const sent = await sendOtpEmail({ name: user.name, email: user.email }, otp);
       if (!sent.success) return failure(503, 'We could not send a verification code. Please try again later.');
       await user.update({
         password_expiry_otp_hash: await bcrypt.hash(otp, 10),
@@ -62,8 +62,11 @@ module.exports = function createPasswordResetService({ db, emailService, passwor
     return db.sequelize.transaction(async (transaction) => {
       const user = await lockedUser(identity, transaction);
       if (!user) return failure(400, 'Invalid or expired verification code.');
-      const lockout = blocked(user);
-      if (lockout) return lockout;
+      const lockRemaining = millis(user.password_reset_blocked_until) - now();
+      if (lockRemaining > 0) return blockedFailure(Math.ceil(lockRemaining / 1000));
+      if (user.password_reset_blocked_until) {
+        await user.update({ password_expiry_otp_attempts: 0, password_reset_blocked_until: null }, { transaction });
+      }
       if (user.password_reset_purpose !== purpose || !user.password_expiry_otp_hash ||
           Number(user.password_reset_version) !== Number(user.permissions_version) ||
           millis(user.password_expiry_otp_expires_at) <= now()) {
@@ -71,16 +74,18 @@ module.exports = function createPasswordResetService({ db, emailService, passwor
       }
       if (typeof otp !== 'string' || !/^\d{6}$/.test(otp) || !await bcrypt.compare(otp, user.password_expiry_otp_hash)) {
         const attempts = Number(user.password_expiry_otp_attempts || 0) + 1;
-        await user.update({
-          password_expiry_otp_attempts: attempts,
-          ...(attempts >= 5 ? { password_reset_blocked_until: new Date(now() + BLOCK_MS),
-            password_expiry_otp_hash: null, password_reset_proof_hash: null } : {})
-        }, { transaction });
-        return attempts >= 5 ? blocked(user) : failure(400, 'Incorrect verification code. Please try again.', { attempts_remaining: 5 - attempts });
+        const isBlocked = attempts >= MAX_OTP_ATTEMPTS;
+        const blockedUntil = isBlocked ? new Date(now() + OTP_LOCKOUT_MS) : null;
+        await user.update({ password_expiry_otp_attempts: attempts, password_reset_blocked_until: blockedUntil }, { transaction });
+        if (isBlocked) return blockedFailure(Math.ceil(OTP_LOCKOUT_MS / 1000));
+        return failure(400, 'Incorrect verification code. Please try again.', {
+          attempts_remaining: Math.max(0, MAX_OTP_ATTEMPTS - attempts)
+        });
       }
       const resetProof = crypto.randomBytes(32).toString('hex');
       await user.update({ password_expiry_otp_verified_at: new Date(now()),
-        password_expiry_otp_hash: null, password_reset_proof_hash: hashProof(resetProof)
+        password_expiry_otp_hash: null, password_reset_proof_hash: hashProof(resetProof),
+        password_expiry_otp_attempts: 0, password_reset_blocked_until: null
       }, { transaction });
       return { success: true, resetProof, message: 'Email verified. You can now set a new password.' };
     });

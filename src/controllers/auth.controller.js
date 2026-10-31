@@ -2272,7 +2272,7 @@ const passwordResetHandler = (purpose, action) => async (req, res) => {
     if (purpose === 'forgot' && (!email || email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
       return res.status(400).json({ success: false, message: 'Enter a valid email address.' });
     }
-    const identity = purpose === 'expiry' ? { id: req.user.userId } : { email };
+    const identity = purpose === 'expiry' || purpose === 'deletion' ? { id: req.user.userId } : { email };
     let result;
     if (action === 'request') result = await passwordResetService.request(identity, purpose);
     else if (action === 'verify') result = await passwordResetService.verify(identity, purpose, req.body?.otp);
@@ -2294,6 +2294,8 @@ exports.changeExpiredPassword = passwordResetHandler('expiry', 'complete');
 exports.requestForgotPasswordOtp = passwordResetHandler('forgot', 'request');
 exports.verifyForgotPasswordOtp = passwordResetHandler('forgot', 'verify');
 exports.resetForgottenPassword = passwordResetHandler('forgot', 'complete');
+exports.requestAccountDeletionOtp = passwordResetHandler('deletion', 'request');
+exports.verifyAccountDeletionOtp = passwordResetHandler('deletion', 'verify');
 
 /**
  * Admin Action: Generates a manual reset link to be copied

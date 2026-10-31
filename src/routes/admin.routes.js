@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
+const accountDeletionController = require('../controllers/account-deletion.controller');
 const { authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const shiftManagementRoutes = require('./shifts.routes');
@@ -343,6 +344,9 @@ router.post('/users/multi-action', authMiddleware, multiUserActionPermission, ad
 router.put('/roles/update', authMiddleware, rolesPermissionsEdit, admin.updateRole);
 router.delete('/roles/delete/:role_id', authMiddleware, rolesPermissionsDelete, admin.deleteRole);
 router.get('/users/export', authMiddleware, adminUsersView, admin.exportUsersExcel);
+router.get('/users/deletion-requests', authMiddleware, adminUsersView, accountDeletionController.listRequests);
+router.patch('/users/deletion-requests/:requestCode/accept', authMiddleware, adminUsersEdit, accountDeletionController.acceptByAdmin);
+router.patch('/users/deletion-requests/:requestCode/cancel', authMiddleware, adminUsersEdit, accountDeletionController.cancelByAdmin);
 router.get('/roles/:role_id/users/export', authMiddleware, adminUsersView, admin.exportRoleUsersExcel);
 router.get('/roles/:role_id', authMiddleware, rolesPermissionsView, admin.getRoleById);
 router.get('/users/roles', authMiddleware, rolesPermissionsView, admin.getUsersWithRoles);
